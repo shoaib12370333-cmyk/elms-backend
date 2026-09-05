@@ -1,6 +1,7 @@
 const User = require('./schemas/User');
 const { encrypt, decrypt } = require('../services/cryptoService');
 const { hashPassword, verifyPassword } = require('../services/passwordService');
+const { getSettings } = require('./settingsModel');
 
 /**
  * Finds an existing user by their Google ID, or creates a new one.
@@ -21,13 +22,16 @@ async function findOrCreateUser({ googleId, email, name, picture }) {
     user = await User.findOne({ email });
 
     if (user) {
-      // Link this Google identity to the existing account.
+      // Link this Google identity to the existing account - this is NOT a
+      // new account, so no welcome bonus here.
       user.googleId = googleId;
       user.name = user.name || name;
       user.picture = user.picture || picture;
       await user.save();
     } else {
-      user = await User.create({ googleId, email, name, picture });
+      // A genuinely brand-new account - apply the welcome bonus if enabled.
+      const creditBalance = await getWelcomeBonusAmount();
+      user = await User.create({ googleId, email, name, picture, creditBalance });
     }
   } else {
     // Keep the profile info fresh (name/picture can change on Google's side).
@@ -38,6 +42,15 @@ async function findOrCreateUser({ googleId, email, name, picture }) {
   }
 
   return serialize(user);
+}
+
+/**
+ * Returns the welcome bonus credit amount to apply to a new account, or 0
+ * if the welcome bonus is currently disabled.
+ */
+async function getWelcomeBonusAmount() {
+  const settings = await getSettings();
+  return settings.welcomeBonusEnabled ? settings.welcomeBonusCredits : 0;
 }
 
 /**
@@ -66,12 +79,15 @@ async function registerWithPassword({ username, email, password }) {
       err.statusCode = 409;
       throw err;
     }
-    // This email exists from a Google login - add password/username to link them.
+    // This email exists from a Google login - adding a password to it is
+    // NOT a new account, so no welcome bonus here.
     user.username = username;
     user.passwordHash = passwordHash;
     await user.save();
   } else {
-    user = await User.create({ username, email, passwordHash, name: username });
+    // A genuinely brand-new account - apply the welcome bonus if enabled.
+    const creditBalance = await getWelcomeBonusAmount();
+    user = await User.create({ username, email, passwordHash, name: username, creditBalance });
   }
 
   return serialize(user);
