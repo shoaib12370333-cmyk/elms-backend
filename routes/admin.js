@@ -9,6 +9,7 @@ const {
 } = require('../models/usersModel');
 const { listAllTickets, resolveTicket } = require('../models/supportTicketsModel');
 const { createPlan, updatePlan, deletePlan, listAllPlans } = require('../models/plansModel');
+const { getSettings, updateWelcomeBonusSettings } = require('../models/settingsModel');
 
 // Every route in this file requires the user to be signed in AND an admin.
 router.use(requireAuth, requireAdmin);
@@ -149,6 +150,37 @@ router.delete('/plans/:id', async (req, res) => {
     return res.status(404).json({ success: false, error: 'Plan not found.' });
   }
   res.json({ success: true });
+});
+
+/**
+ * GET /api/admin/settings
+ * Returns the current global app settings (welcome bonus, etc).
+ */
+router.get('/settings', async (req, res) => {
+  const settings = await getSettings();
+  res.json({ success: true, settings });
+});
+
+/**
+ * PUT /api/admin/settings/welcome-bonus
+ * Body: { welcomeBonusEnabled?: boolean, welcomeBonusCredits?: number }
+ *
+ * Updates the welcome bonus: how many credits (if any) a brand-new user
+ * receives automatically when they create their account.
+ */
+router.put('/settings/welcome-bonus', async (req, res) => {
+  const { welcomeBonusEnabled, welcomeBonusCredits } = req.body;
+
+  if (welcomeBonusCredits !== undefined && (Number.isNaN(Number(welcomeBonusCredits)) || Number(welcomeBonusCredits) < 0)) {
+    return res.status(400).json({ success: false, error: 'welcomeBonusCredits must be a non-negative number.' });
+  }
+
+  const settings = await updateWelcomeBonusSettings({
+    welcomeBonusEnabled: welcomeBonusEnabled !== undefined ? Boolean(welcomeBonusEnabled) : undefined,
+    welcomeBonusCredits: welcomeBonusCredits !== undefined ? Number(welcomeBonusCredits) : undefined,
+  });
+
+  res.json({ success: true, settings });
 });
 
 module.exports = router;
