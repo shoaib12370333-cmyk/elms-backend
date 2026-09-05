@@ -48,7 +48,7 @@ async function createTransaction({ paddlePriceId, userId, userEmail }) {
  * @param {Buffer|string} rawBody - the raw (unparsed) request body
  * @param {string} signatureHeader - the "paddle-signature" request header
  */
-function verifyAndParseWebhook(rawBody, signatureHeader) {
+async function verifyAndParseWebhook(rawBody, signatureHeader) {
   const paddle = getPaddleClient();
   const webhookSecret = process.env.PADDLE_WEBHOOK_SECRET;
 
@@ -56,7 +56,12 @@ function verifyAndParseWebhook(rawBody, signatureHeader) {
     throw new Error('PADDLE_WEBHOOK_SECRET is not set in the .env file.');
   }
 
-  return paddle.webhooks.unmarshal(rawBody.toString(), webhookSecret, signatureHeader);
+  // IMPORTANT: unmarshal() is async - it must be awaited here so that a
+  // rejected promise (e.g. an invalid signature) is turned into a normal
+  // thrown error that the caller's try/catch can handle. Without this
+  // await, the rejection becomes an unhandled promise rejection, which
+  // crashes the entire Node.js process instead of just failing this request.
+  return await paddle.webhooks.unmarshal(rawBody.toString(), webhookSecret, signatureHeader);
 }
 
 module.exports = { createTransaction, verifyAndParseWebhook, EventName };
