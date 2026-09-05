@@ -23,7 +23,7 @@ router.post('/', async (req, res) => {
 
   let event;
   try {
-    event = verifyAndParseWebhook(req.body, signature);
+    event = await verifyAndParseWebhook(req.body, signature);
   } catch (err) {
     console.error('paddle webhook signature verification failed:', err.message);
     return res.status(401).json({ success: false, error: 'Invalid webhook signature.' });
