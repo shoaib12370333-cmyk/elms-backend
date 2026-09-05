@@ -20,6 +20,7 @@ const supportTicketsRoute = require('./routes/supportTickets');
 const seedAdminRoute = require('./routes/seedAdmin');
 const paymentsRoute = require('./routes/payments');
 const paddleWebhookRoute = require('./routes/paddleWebhook');
+const ebayAccountDeletionRoute = require('./routes/ebayAccountDeletion');
 const { startStockMonitor } = require('./jobs/stockMonitor');
 const { startScheduledPublisher } = require('./jobs/scheduledPublisher');
 const { startOrderSync } = require('./jobs/orderSync');
@@ -85,6 +86,11 @@ app.use('/api/seed-admin', seedAdminRoute);
 // Credit purchases: list plans, checkout, purchase history (the webhook
 // above is separate since it needs raw body parsing)
 app.use('/api/payments', paymentsRoute);
+
+// eBay Marketplace Account Deletion notification endpoint (required by
+// eBay's Developer Program - see routes/ebayAccountDeletion.js for the
+// challenge-response verification and notification handling)
+app.use('/api/ebay/account-deletion', ebayAccountDeletionRoute);
 
 async function start() {
   try {
