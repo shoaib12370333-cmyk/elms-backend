@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "ELMS Amazon Importer",
+  "version": "2.1.0",
+  "description": "Full Amazon-to-ELMS browser import agent with clean specifications, product information, categories, images, A+ content and variation detection.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "background": {"service_worker": "background.js"},
+  "host_permissions": [
+    "https://www.amazon.com/*",
+    "https://amazon.com/*",
+    "https://www.amazon.co.uk/*",
+    "https://amazon.co.uk/*",
+    "https://www.amazon.ca/*",
+    "https://amazon.ca/*",
+    "https://www.amazon.de/*",
+    "https://amazon.de/*",
+    "https://www.amazon.fr/*",
+    "https://amazon.fr/*",
+    "https://www.amazon.it/*",
+    "https://amazon.it/*",
+    "https://www.amazon.es/*",
+    "https://amazon.es/*",
+    "https://www.amazon.in/*",
+    "https://amazon.in/*",
+    "https://www.amazon.com.au/*",
+    "https://amazon.com.au/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://elms-frontend.vercel.app/*"
+  ],
+  "web_accessible_resources": [{"resources":["logo.png"],"matches":["https://www.amazon.com/*","https://amazon.com/*","https://www.amazon.co.uk/*","https://amazon.co.uk/*","https://www.amazon.ca/*","https://amazon.ca/*","https://www.amazon.de/*","https://amazon.de/*","https://www.amazon.fr/*","https://amazon.fr/*","https://www.amazon.it/*","https://amazon.it/*","https://www.amazon.es/*","https://amazon.es/*","https://www.amazon.in/*","https://amazon.in/*","https://www.amazon.com.au/*","https://amazon.com.au/*"]}],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.amazon.com/*",
+        "https://amazon.com/*",
+        "https://www.amazon.co.uk/*",
+        "https://amazon.co.uk/*",
+        "https://www.amazon.ca/*",
+        "https://amazon.ca/*",
+        "https://www.amazon.de/*",
+        "https://amazon.de/*",
+        "https://www.amazon.fr/*",
+        "https://amazon.fr/*",
+        "https://www.amazon.it/*",
+        "https://amazon.it/*",
+        "https://www.amazon.es/*",
+        "https://amazon.es/*",
+        "https://www.amazon.in/*",
+        "https://amazon.in/*",
+        "https://www.amazon.com.au/*",
+        "https://amazon.com.au/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
