@@ -72,7 +72,8 @@ router.get('/queue', requireAuth, async (req, res) => {
 
     const listings = await listListingsByStatuses(
       req.userId,
-      statuses
+      statuses,
+      req.query.accountId || null
     );
 
     res.json({
@@ -103,28 +104,11 @@ router.get('/counts', requireAuth, async (req, res) => {
       error,
       publishing,
       published,
-    ] = await Promise.all([
-      countListingsByStatus(
-        req.userId,
-        'draft'
-      ),
-      countListingsByStatus(
-        req.userId,
-        'scheduled'
-      ),
-      countListingsByStatus(
-        req.userId,
-        'error'
-      ),
-      countListingsByStatus(
-        req.userId,
-        'publishing'
-      ),
-      countListingsByStatus(
-        req.userId,
-        'published'
-      ),
-    ]);
+    ] = await Promise.all(
+      ['draft', 'scheduled', 'error', 'publishing', 'published'].map((status) =>
+        countListingsByStatus(req.userId, status, req.query.accountId || null)
+      )
+    );
 
     res.json({
       success: true,
@@ -159,8 +143,8 @@ router.get('/', requireAuth, async (req, res) => {
     const allowed = new Set(['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended']);
     const cleanStatuses = statuses.filter((s) => allowed.has(s));
     const listings = cleanStatuses.length > 1
-      ? await listListingsByStatuses(req.userId, cleanStatuses)
-      : await listListings(req.userId, cleanStatuses[0] || null);
+      ? await listListingsByStatuses(req.userId, cleanStatuses, req.query.accountId || null)
+      : await listListings(req.userId, cleanStatuses[0] || null, req.query.accountId || null);
 
     res.json({
       success: true,
@@ -889,6 +873,14 @@ router.post(
  * and live listings alike; it never touches title, price or eBay itself.
  */
 router.patch('/:id/settings', requireAuth, async (req, res) => {
+  if (req.body?.postalCode && req.body?.countryLocation) {
+    const { resolveLocation } = require('../services/postalGeneratorService');
+    const loc = await resolveLocation(req.body.countryLocation, req.body.postalCode).catch(() => null);
+    if (loc && !loc.complete) {
+      return res.status(400).json({ success: false, error: `"${req.body.postalCode}" is not a full postal code for ${req.body.countryLocation}. Use the full code or press Generate.` });
+    }
+    if (loc?.postalCode) req.body.postalCode = loc.postalCode;
+  }
   const listing = await updateListingSettings(req.userId, req.params.id, {
     tags: req.body?.tags,
     shippingMethod: req.body?.shippingMethod,

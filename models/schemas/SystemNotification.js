@@ -7,6 +7,7 @@ const systemNotificationSchema = new mongoose.Schema(
     level: { type: String, enum: ['info', 'success', 'warning', 'error'], default: 'info' },
     title: { type: String, required: true },
     message: { type: String, required: true },
+    ebayAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'EbayAccount', default: null, index: true },
     listingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Listing', default: null },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
     isRead: { type: Boolean, default: false, index: true },

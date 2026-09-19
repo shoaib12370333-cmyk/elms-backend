@@ -8,9 +8,10 @@ const Import = require('./schemas/Import');
  * @param {string} amazonUrl - original URL the user pasted (may be null for variant fetches)
  * @returns {object} the created import document
  */
-async function createImport(userId, product, suggestedPrice, amazonUrl) {
+async function createImport(userId, product, suggestedPrice, amazonUrl, ebayAccountId = null) {
   const doc = await Import.create({
     userId,
+    ebayAccountId: ebayAccountId || null,
     asin: product.asin || null,
     title: product.title || null,
     amazonUrl: amazonUrl || null,
@@ -77,8 +78,15 @@ async function updateImportPrice(userId, id, amazonPrice) {
   return doc ? serialize(doc) : null;
 }
 
-async function listImports(userId, limit = 50) {
-  const docs = await Import.find({ userId }).sort({ createdAt: -1 }).limit(limit);
+async function listImports(userId, limit = 50, accountId = null) {
+  const query = { userId };
+  if (accountId) {
+    // Imports made before they were tied to a store are matched through the listing that came from them.
+    const Listing = require('./schemas/Listing');
+    const ids = (await Listing.find({ userId, ebayAccountId: accountId, importId: { $ne: null } }, { importId: 1 }).lean()).map((l) => l.importId);
+    query.$or = [{ ebayAccountId: accountId }, { _id: { $in: ids } }];
+  }
+  const docs = await Import.find(query).sort({ createdAt: -1 }).limit(limit);
   return docs.map(serialize);
 }
 

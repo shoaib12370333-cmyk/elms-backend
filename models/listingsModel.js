@@ -57,7 +57,12 @@ async function createListing(userId, { importId, ebayAccountId, marketplaceId, s
  */
 async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount }) {
   const normalizedSku = requireAsinSku(sku, 'draft');
-  const existing = await Listing.findOne({ userId, sku: normalizedSku });
+  // The same Amazon product can live as a separate draft in each connected store,
+  // so a listing is identified by (user, store, sku). A legacy listing with no
+  // store is adopted by the first store that fetches the product again.
+  const accountKey = ebayAccountId || null;
+  const existing = (await Listing.findOne({ userId, sku: normalizedSku, ebayAccountId: accountKey }))
+    || (accountKey ? await Listing.findOne({ userId, sku: normalizedSku, ebayAccountId: null }) : null);
 
   if (existing && existing.status !== 'draft') {
     // Don't silently touch a listing that's already live/errored/ended -
@@ -96,7 +101,7 @@ async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku
     }
 
   const doc = await Listing.findOneAndUpdate(
-    { userId, sku: normalizedSku },
+    existing ? { _id: existing._id } : { userId, sku: normalizedSku, ebayAccountId: accountKey },
     update,
     { new: true, upsert: true }
   );
@@ -136,9 +141,11 @@ async function getListingBySku(userId, sku) {
   return doc ? serialize(doc) : null;
 }
 
-async function listListingsByStatuses(userId, statuses = []) {
+async function listListingsByStatuses(userId, statuses = [], accountId = null) {
   const cleanStatuses = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
+  await claimUnassignedListings(userId, accountId);
   const query = cleanStatuses.length ? { userId, status: { $in: cleanStatuses } } : { userId };
+  if (accountId) query.ebayAccountId = accountId;
   const docs = await Listing.find(query)
     .populate('importId')
     .populate('ebayAccountId')
@@ -168,8 +175,42 @@ function supplierCountryFromUrl(url) {
   if (host.includes('amazon.com')) return 'US';
   return null;
 }
-async function countListingsByStatus(userId, status) {
-  return Listing.countDocuments({ userId, status });
+async function countListingsByStatus(userId, status, accountId = null) {
+  const query = { userId, status };
+  if (accountId) query.ebayAccountId = accountId;
+  return Listing.countDocuments(query);
+}
+
+/**
+ * Listings saved before drafts were tied to an eBay account have no account.
+ * When one store is being viewed, give those listings a home once: the store
+ * whose marketplace matches the listing (or the Amazon supplier country), and
+ * otherwise the user's oldest connected store. After that every store only ever
+ * sees its own listings.
+ */
+async function claimUnassignedListings(userId, accountId) {
+  if (!accountId) return 0;
+  try {
+    const orphans = await Listing.find({ userId, ebayAccountId: null }).populate('importId').lean();
+    if (!orphans.length) return 0;
+    const EbayAccount = require('./schemas/EbayAccount');
+    const accounts = await EbayAccount.find({ userId }).sort({ createdAt: 1 }).lean();
+    if (!accounts.length) return 0;
+    const byMarket = new Map();
+    for (const a of accounts) if (!byMarket.has(a.marketplaceId || 'EBAY_US')) byMarket.set(a.marketplaceId || 'EBAY_US', a);
+    const SUPPLIER_MARKET = { UK: 'EBAY_GB', US: 'EBAY_US', AU: 'EBAY_AU', CA: 'EBAY_CA', DE: 'EBAY_DE', FR: 'EBAY_FR', IT: 'EBAY_IT', ES: 'EBAY_ES' };
+    let moved = 0;
+    for (const l of orphans) {
+      const market = l.marketplaceId || SUPPLIER_MARKET[supplierCountryFromUrl(l.importId?.amazonUrl)] || null;
+      const target = (market && byMarket.get(market)) || accounts[0];
+      await Listing.updateOne({ _id: l._id, ebayAccountId: null }, { $set: { ebayAccountId: target._id, marketplaceId: l.marketplaceId || target.marketplaceId || null } });
+      moved += 1;
+    }
+    return moved;
+  } catch (err) {
+    console.warn('claimUnassignedListings failed:', err.message);
+    return 0;
+  }
 }
 
 /** Units sold per listing, from the synced eBay orders. */
@@ -187,8 +228,10 @@ async function getSoldByListing(userId) {
   }
 }
 
-async function listListings(userId, status) {
+async function listListings(userId, status, accountId = null) {
+  await claimUnassignedListings(userId, accountId);
   const query = status ? { userId, status } : { userId };
+  if (accountId) query.ebayAccountId = accountId;
   const docs = await Listing.find(query).populate('importId').populate('ebayAccountId').sort({ updatedAt: -1 });
   const soldByListing = await getSoldByListing(userId);
   return docs.map((doc) => {

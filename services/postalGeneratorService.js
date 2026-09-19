@@ -229,4 +229,49 @@ async function generatePostalCode(country, city, state) {
   return value;
 }
 
-module.exports = { generatePostalCode, cleanPostalCode, normalizeCountry, COUNTRIES };
+/**
+ * Turns whatever postal code is saved for a location into what eBay's Inventory
+ * API needs: the country's canonical full code plus a city / state, because
+ * eBay rejects incomplete inventory locations (for example a UK "SW1A" that is
+ * only the outward half of a postcode). A UK outward code is completed to a real
+ * full postcode. Lookups are best-effort - the code itself is never dropped.
+ */
+async function resolveLocation(country, postalCode) {
+  const cc = normalizeCountry(country);
+  const raw = String(postalCode || '').trim().toUpperCase();
+  const out = { country: cc, postalCode: raw, city: null, state: null, complete: true };
+  if (cc === 'GB') {
+    const compact = raw.replace(/s+/g, '');
+    if (/^[A-Z]{1,2}[0-9][A-Z0-9]?$/.test(compact)) {
+      // Outward code only - find a real postcode inside that exact area.
+      try {
+        const found = await axios.get('https://api.postcodes.io/postcodes', { params: { q: compact, limit: 1 }, timeout: 8000 });
+        const hit = found.data?.result?.[0];
+        if (hit?.postcode) return { country: cc, postalCode: hit.postcode, city: hit.admin_district || hit.parish || null, state: hit.region || hit.country || null, complete: true, completedFrom: raw };
+      } catch (_) { /* fall through */ }
+      out.complete = false;
+      return out;
+    }
+    const code = cleanPostalCode('GB', raw);
+    if (!code) { out.complete = false; return out; }
+    out.postalCode = code;
+    try {
+      const r = await axios.get('https://api.postcodes.io/postcodes/' + encodeURIComponent(code.replace(/s+/g, '')), { timeout: 8000 });
+      const d = r.data?.result;
+      if (d) { out.city = d.admin_district || d.parish || null; out.state = d.region || d.country || null; }
+    } catch (_) { /* keep code as-is */ }
+    return out;
+  }
+  const clean = cleanPostalCode(cc, raw);
+  if (clean) out.postalCode = clean;
+  const key = VERIFY_KEY[cc];
+  if (key) {
+    try {
+      const found = await lookupPostalCode(cc, key(out.postalCode));
+      if (found) { out.city = found.placeName || null; out.state = found.state || null; }
+    } catch (_) { /* best effort */ }
+  }
+  return out;
+}
+
+module.exports = { generatePostalCode, cleanPostalCode, normalizeCountry, resolveLocation, COUNTRIES };
