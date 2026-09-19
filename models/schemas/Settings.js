@@ -31,6 +31,13 @@ const settingsSchema = new mongoose.Schema(
     // defaults (e.g. { AMAZON_IMPORT: 2 }). Only keys present here override
     // their matching default - anything not overridden keeps using the
     // code default. See models/settingsModel.js for how these are applied.
+    // AI features (title + description). Admin-controlled from the Admin Panel.
+    aiTitleEnabled: { type: Boolean, default: true },
+    aiDescriptionEnabled: { type: Boolean, default: true },
+    aiModel: { type: String, default: null, trim: true },
+    aiDescriptionLength: { type: String, enum: ['short', 'standard', 'detailed'], default: 'standard' },
+    aiCustomInstructions: { type: String, default: '', trim: true, maxlength: 600 },
+
     actionCosts: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }

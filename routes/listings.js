@@ -958,7 +958,7 @@ router.post('/stats/sync', requireAuth, async (req, res) => {
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  res.json({ success: true, synced: listings.length, failed, skipped: all.length - targets.length, error: firstError, listings });
+  res.json({ success: true, synced: listings.length, failed, skipped: all.length - targets.length, error: firstError, listings, syncedAt: new Date().toISOString() });
 });
 
 module.exports = router;

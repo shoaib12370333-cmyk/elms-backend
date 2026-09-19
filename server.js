@@ -36,6 +36,7 @@ const { startStockMonitor } = require('./jobs/stockMonitor');
 const { startScheduledPublisher } = require('./jobs/scheduledPublisher');
 const { startOrderSync } = require('./jobs/orderSync');
 const { startConversationSync } = require('./jobs/conversationSync');
+const { startStatsSync } = require('./jobs/statsSync');
 const { startPublishQueue, runPublishQueue } = require('./jobs/publishQueue');
 
 const app = express();
@@ -225,6 +226,7 @@ app.listen(PORT, () => {
     startScheduledPublisher();
     startOrderSync();
     startConversationSync();
+    startStatsSync();
     startPublishQueue();
     runPublishQueue().catch((err) => console.error('[publish-queue] initial run failed:', err.message));
   });

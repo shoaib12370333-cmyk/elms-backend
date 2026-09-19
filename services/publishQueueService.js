@@ -7,6 +7,8 @@ const {
 } = require('../models/listingsModel');
 
 const { getImportById } = require('../models/importsModel');
+const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
+const { convertAmount } = require('./currencyService');
 
 const {
   getEbayAccountById,
@@ -452,6 +454,26 @@ async function processOneQueuedListing(listing) {
     );
 
 
+    // eBay needs at least one picture.
+    if (!Array.isArray(product.images) || !product.images.some((u) => String(u || '').toLowerCase().startsWith('https://'))) {
+      throw new Error('This listing has no usable image. Add at least one image (https) in the editor and publish again.');
+    }
+
+    // The offer is always priced in the store's marketplace currency. A draft priced in another
+    // currency (e.g. USD from Amazon US, published to a UK store) is converted first, so the
+    // number that goes live means what the seller saw.
+    let publishPrice = listing.sell_price;
+    const storeCurrency = getMarketplaceConfig(sellerSettings.marketplaceId)?.currency;
+    if (storeCurrency && listing.currency && String(listing.currency).toUpperCase() !== storeCurrency) {
+      try {
+        const fx = await convertAmount(listing.sell_price, listing.currency, storeCurrency);
+        publishPrice = fx.amount;
+        debug('PRICE CONVERTED', { from: listing.currency, to: storeCurrency, rate: fx.rate, price: publishPrice });
+      } catch (fxErr) {
+        throw new Error('This draft is priced in ' + String(listing.currency).toUpperCase() + ' but the store sells in ' + storeCurrency + ', and the exchange rate could not be loaded (' + fxErr.message + '). Try again in a minute.');
+      }
+    }
+
     const result =
       await publishListing({
         refreshToken,
@@ -459,7 +481,7 @@ async function processOneQueuedListing(listing) {
         product,
 
         sellPrice:
-          listing.sell_price,
+          publishPrice,
 
         quantity:
           listing.quantity,

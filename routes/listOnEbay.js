@@ -97,26 +97,61 @@ router.get('/suggest-category', requireAuth, async (req, res) => {
  * or "error" depending on the outcome, so it shows up in Live Listings either way.
  */
 /**
+ * Shared wrapper for the two AI endpoints: checks the admin switch, charges the
+ * admin-set credit cost up front, refunds it if the AI call fails, and logs usage.
+ */
+async function runAiAction(req, res, { kind, costKey, enabledKey, run }) {
+  const { getAiSettings } = require('../models/settingsModel');
+  const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
+  const { ACTION_COSTS } = require('../config/actionCosts');
+  const AiUsage = require('../models/schemas/AiUsage');
+  const settings = await getAiSettings();
+  if (!settings[enabledKey]) return res.status(403).json({ success: false, error: 'This AI feature is turned off by the administrator.' });
+  const cost = Number(ACTION_COSTS[costKey] || 0);
+  if (!(await hasCredits(req.userId, cost))) return res.status(402).json({ success: false, error: `You need ${cost} credit${cost === 1 ? '' : 's'} for this. Buy credits to continue.` });
+  const charged = await spendCredit(req.userId, cost);
+  if (!charged) return res.status(402).json({ success: false, error: `You need ${cost} credit${cost === 1 ? '' : 's'} for this. Buy credits to continue.` });
+  try {
+    const out = await run(settings);
+    AiUsage.create({ userId: req.userId, kind, ok: true, credits: cost, model: out.usage?.model, inputTokens: out.usage?.inputTokens, outputTokens: out.usage?.outputTokens }).catch(() => {});
+    return res.json({ success: true, text: out.text, title: kind === 'title' ? out.text : undefined, description: kind === 'description' ? out.text : undefined, creditsUsed: cost });
+  } catch (err) {
+    await refundCredit(req.userId, cost);
+    AiUsage.create({ userId: req.userId, kind, ok: false, credits: 0 }).catch(() => {});
+    console.error(`[ai-${kind}]`, err.message);
+    return res.status(err.statusCode || 500).json({ success: false, error: err.message || 'The AI request failed.' });
+  }
+}
+
+/**
  * POST /api/list-on-ebay/optimize-title
- * Body: { title, categoryName?, description? }
- * Returns an eBay-friendly title (max 80 characters) written by Claude.
- * Needs ANTHROPIC_API_KEY on the server; without it the endpoint answers 503.
+ * Body: { title, categoryName?, description? } -> { title } (max 80 characters).
  */
 router.post('/optimize-title', requireAuth, async (req, res) => {
   const title = String(req.body?.title || '').trim();
   if (title.length < 3) return res.status(400).json({ success: false, error: 'Enter a title first.' });
-  try {
-    const { optimizeEbayTitle } = require('../services/titleOptimizerService');
-    const optimized = await optimizeEbayTitle({
-      title,
-      categoryName: String(req.body?.categoryName || '').slice(0, 120),
-      description: String(req.body?.description || '').slice(0, 1500),
-    });
-    res.json({ success: true, title: optimized });
-  } catch (err) {
-    console.error('[optimize-title]', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not optimize the title.' });
-  }
+  const { optimizeEbayTitle } = require('../services/titleOptimizerService');
+  return runAiAction(req, res, {
+    kind: 'title', costKey: 'AI_TITLE', enabledKey: 'aiTitleEnabled',
+    run: () => optimizeEbayTitle({ title, categoryName: String(req.body?.categoryName || '').slice(0, 120), description: String(req.body?.description || '').slice(0, 1500) }),
+  });
+});
+
+/**
+ * POST /api/list-on-ebay/optimize-description
+ * Body: { title, description?, bulletPoints?, specifications?, categoryName? } -> { description }
+ */
+router.post('/optimize-description', requireAuth, async (req, res) => {
+  const title = String(req.body?.title || '').trim();
+  if (title.length < 3) return res.status(400).json({ success: false, error: 'Enter a title first.' });
+  const { generateEbayDescription } = require('../services/descriptionGeneratorService');
+  return runAiAction(req, res, {
+    kind: 'description', costKey: 'AI_DESCRIPTION', enabledKey: 'aiDescriptionEnabled',
+    run: () => generateEbayDescription({
+      title, categoryName: String(req.body?.categoryName || '').slice(0, 120),
+      description: req.body?.description, bulletPoints: req.body?.bulletPoints, specifications: req.body?.specifications,
+    }),
+  });
 });
 
 router.post('/:id/images/upload', requireAuth, async (req, res) => {

@@ -18,6 +18,8 @@ const {
   updateExtensionBackendUrl,
   getActionCostSettings,
   updateActionCosts,
+  getAiSettings,
+  updateAiSettings,
 } = require('../models/settingsModel');
 
 // Every route in this file requires the user to be signed in AND an admin.
@@ -292,6 +294,104 @@ router.put('/settings/action-costs', async (req, res) => {
   } catch (err) {
     res.status(400).json({ success: false, error: err.message || 'Could not save these credit costs.' });
   }
+});
+
+/**
+ * GET /api/admin/settings/ai
+ * AI switches, model, tone settings, the live credit cost of each AI action, key status and 30-day usage.
+ */
+router.get('/settings/ai', async (req, res) => {
+  const AiUsage = require('../models/schemas/AiUsage');
+  const { ACTION_COSTS } = require('../config/actionCosts');
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [settings, usage] = await Promise.all([
+    getAiSettings(),
+    AiUsage.aggregate([
+      { $match: { createdAt: { $gte: since } } },
+      { $group: { _id: { kind: '$kind', ok: '$ok' }, calls: { $sum: 1 }, credits: { $sum: '$credits' }, input: { $sum: '$inputTokens' }, output: { $sum: '$outputTokens' } } },
+    ]),
+  ]);
+  const summary = { title: { calls: 0, failed: 0, credits: 0 }, description: { calls: 0, failed: 0, credits: 0 }, inputTokens: 0, outputTokens: 0 };
+  for (const row of usage) {
+    const bucket = summary[row._id.kind];
+    if (!bucket) continue;
+    if (row._id.ok) { bucket.calls += row.calls; bucket.credits += row.credits; } else bucket.failed += row.calls;
+    summary.inputTokens += row.input; summary.outputTokens += row.output;
+  }
+  res.json({ success: true, settings, apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY, costs: { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION }, usage: summary });
+});
+
+/**
+ * PUT /api/admin/settings/ai
+ * Body: any of { aiTitleEnabled, aiDescriptionEnabled, aiModel, aiDescriptionLength, aiCustomInstructions, costs: { AI_TITLE, AI_DESCRIPTION } }
+ */
+router.put('/settings/ai', async (req, res) => {
+  try {
+    const { costs, ...rest } = req.body || {};
+    const settings = await updateAiSettings(rest);
+    let savedCosts = null;
+    if (costs && typeof costs === 'object') {
+      const pick = {};
+      for (const k of ['AI_TITLE', 'AI_DESCRIPTION']) if (costs[k] !== undefined) pick[k] = costs[k];
+      if (Object.keys(pick).length) await updateActionCosts(pick);
+    }
+    const { ACTION_COSTS } = require('../config/actionCosts');
+    savedCosts = { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION };
+    res.json({ success: true, settings, costs: savedCosts });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message || 'Could not save the AI settings.' });
+  }
+});
+
+/**
+ * GET /api/admin/overview
+ * Headline numbers for the Admin Panel's Overview tab plus service health.
+ */
+router.get('/overview', async (req, res) => {
+  const User = require('../models/schemas/User');
+  const Listing = require('../models/schemas/Listing');
+  const Order = require('../models/schemas/Order');
+  const Purchase = require('../models/schemas/Purchase');
+  const EbayAccount = require('../models/schemas/EbayAccount');
+  const SupportTicket = require('../models/schemas/SupportTicket');
+  const AiUsage = require('../models/schemas/AiUsage');
+  const day = 24 * 60 * 60 * 1000;
+  const d7 = new Date(Date.now() - 7 * day);
+  const d30 = new Date(Date.now() - 30 * day);
+  const [users, newUsers, creditAgg, stores, listingAgg, orders, openTickets, revenueAgg, revenue30Agg, aiCalls30, recentUsers, recentPurchases] = await Promise.all([
+    User.countDocuments(),
+    User.countDocuments({ createdAt: { $gte: d7 } }),
+    User.aggregate([{ $match: { role: { $ne: 'admin' } } }, { $group: { _id: null, credits: { $sum: '$creditBalance' } } }]),
+    EbayAccount.countDocuments(),
+    Listing.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+    Order.countDocuments(),
+    SupportTicket.countDocuments({ status: 'open' }),
+    Purchase.aggregate([{ $match: { status: 'completed' } }, { $group: { _id: null, usd: { $sum: '$priceUsd' }, credits: { $sum: '$creditsGranted' }, n: { $sum: 1 } } }]),
+    Purchase.aggregate([{ $match: { status: 'completed', createdAt: { $gte: d30 } } }, { $group: { _id: null, usd: { $sum: '$priceUsd' }, n: { $sum: 1 } } }]),
+    AiUsage.countDocuments({ createdAt: { $gte: d30 }, ok: true }),
+    User.find().sort({ createdAt: -1 }).limit(5).select('email name createdAt creditBalance').lean(),
+    Purchase.find().sort({ createdAt: -1 }).limit(5).populate('userId', 'email').lean(),
+  ]);
+  const byStatus = Object.fromEntries(listingAgg.map((r) => [r._id, r.n]));
+  res.json({
+    success: true,
+    totals: {
+      users, newUsers7d: newUsers, storesConnected: stores, orders, openTickets,
+      creditsOutstanding: creditAgg[0]?.credits || 0,
+      revenueUsd: revenueAgg[0]?.usd || 0, revenue30dUsd: revenue30Agg[0]?.usd || 0, purchases: revenueAgg[0]?.n || 0, purchases30d: revenue30Agg[0]?.n || 0,
+      creditsSold: revenueAgg[0]?.credits || 0, aiCalls30d: aiCalls30,
+    },
+    listings: { draft: byStatus.draft || 0, publishing: byStatus.publishing || 0, published: byStatus.published || 0, error: byStatus.error || 0, scheduled: byStatus.scheduled || 0 },
+    health: {
+      anthropic: !!process.env.ANTHROPIC_API_KEY,
+      canopy: !!process.env.CANOPY_API_KEY,
+      paddle: !!(process.env.PADDLE_API_KEY || process.env.PADDLE_WEBHOOK_SECRET),
+      ebay: !!((process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET)),
+      email: !!((process.env.SMTP_HOST && process.env.SMTP_USER)),
+    },
+    recentUsers: recentUsers.map((u) => ({ id: String(u._id), email: u.email, name: u.name || null, createdAt: u.createdAt, creditBalance: u.creditBalance })),
+    recentPurchases: recentPurchases.map((p) => ({ id: String(p._id), email: p.userId?.email || null, priceUsd: p.priceUsd, credits: p.creditsGranted, createdAt: p.createdAt })),
+  });
 });
 
 module.exports = router;

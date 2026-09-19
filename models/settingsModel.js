@@ -75,9 +75,50 @@ async function updateExtensionRegistrationUrl(url) {
   return serialize(doc);
 }
 
+const AI_DEFAULT_MODEL = process.env.TITLE_OPTIMIZER_MODEL || 'claude-haiku-4-5-20251001';
+let aiCache = null;
+
+function serializeAi(obj) {
+  return {
+    aiTitleEnabled: obj.aiTitleEnabled !== false,
+    aiDescriptionEnabled: obj.aiDescriptionEnabled !== false,
+    aiModel: obj.aiModel || AI_DEFAULT_MODEL,
+    aiDescriptionLength: obj.aiDescriptionLength || 'standard',
+    aiCustomInstructions: obj.aiCustomInstructions || '',
+  };
+}
+
+/** AI settings, cached for 20 seconds so every AI call does not hit the database. */
+async function getAiSettings() {
+  if (aiCache && Date.now() - aiCache.at < 20000) return aiCache.value;
+  const doc = await Settings.findOne({ key: 'global' }).lean();
+  aiCache = { at: Date.now(), value: serializeAi(doc || {}) };
+  return aiCache.value;
+}
+
+async function updateAiSettings(input = {}) {
+  const update = {};
+  if (input.aiTitleEnabled !== undefined) update.aiTitleEnabled = !!input.aiTitleEnabled;
+  if (input.aiDescriptionEnabled !== undefined) update.aiDescriptionEnabled = !!input.aiDescriptionEnabled;
+  if (input.aiModel !== undefined) {
+    const model = String(input.aiModel || '').trim();
+    if (model && !/^[a-zA-Z0-9._:-]{3,80}$/.test(model)) throw new Error('That does not look like a valid model name.');
+    update.aiModel = model || null;
+  }
+  if (input.aiDescriptionLength !== undefined) {
+    if (!['short', 'standard', 'detailed'].includes(input.aiDescriptionLength)) throw new Error('Description length must be short, standard or detailed.');
+    update.aiDescriptionLength = input.aiDescriptionLength;
+  }
+  if (input.aiCustomInstructions !== undefined) update.aiCustomInstructions = String(input.aiCustomInstructions || '').slice(0, 600);
+  const doc = await Settings.findOneAndUpdate({ key: 'global' }, update, { new: true, upsert: true });
+  aiCache = null;
+  return serializeAi(doc.toObject());
+}
+
 function serialize(doc) {
   const obj = doc.toObject();
   return {
+    ...serializeAi(obj),
     welcomeBonusEnabled: obj.welcomeBonusEnabled,
     welcomeBonusCredits: obj.welcomeBonusCredits,
     chromeExtensionId: obj.chromeExtensionId || null,
@@ -193,4 +234,6 @@ module.exports = {
   getActionCostSettings,
   updateActionCosts,
   applyActionCostOverridesOnStartup,
+  getAiSettings,
+  updateAiSettings,
 };
