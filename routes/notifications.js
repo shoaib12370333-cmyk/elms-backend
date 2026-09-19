@@ -20,6 +20,56 @@ const Listing = require('../models/schemas/Listing');
 const { syncConversationsForUser } = require('../jobs/conversationSync');
 
 /**
+ * GET/PUT /api/notifications/ai-reply/settings
+ * The Messages page toggle: mode is 'off', 'draft' (AI writes a draft for you to review) or 'auto'
+ * (AI also sends replies to simple, low-risk messages). Only buyer messages received after switching on are handled.
+ */
+router.get('/ai-reply/settings', requireAuth, async (req, res) => {
+  const User = require('../models/schemas/User');
+  const { getAiSettings } = require('../models/settingsModel');
+  const { ACTION_COSTS } = require('../config/actionCosts');
+  const [user, ai] = await Promise.all([User.findById(req.userId, { aiReplyMode: 1 }).lean(), getAiSettings()]);
+  res.json({ success: true, mode: user?.aiReplyMode || 'off', available: !!ai.aiReplyEnabled, cost: Number(ACTION_COSTS.AI_REPLY || 0) });
+});
+
+router.put('/ai-reply/settings', requireAuth, async (req, res) => {
+  const User = require('../models/schemas/User');
+  const mode = String(req.body?.mode || '');
+  if (!['off', 'draft', 'auto'].includes(mode)) return res.status(400).json({ success: false, error: 'Mode must be off, draft or auto.' });
+  const before = await User.findById(req.userId, { aiReplyMode: 1 }).lean();
+  const update = { aiReplyMode: mode };
+  // Only messages that arrive after switching on are answered, never the old inbox.
+  if ((before?.aiReplyMode || 'off') === 'off' && mode !== 'off') update.aiReplyEnabledAt = new Date();
+  await User.updateOne({ _id: req.userId }, { $set: update });
+  res.json({ success: true, mode });
+});
+
+/**
+ * POST /api/notifications/:id/ai-reply/generate  - "Draft with AI" for one conversation.
+ * POST /api/notifications/:id/ai-reply/discard   - throw the stored draft away.
+ */
+router.post('/:id/ai-reply/generate', requireAuth, async (req, res) => {
+  const { listMessages } = require('../models/messagesModel');
+  const { draftForConversation } = require('../services/replyAssistantService');
+  const conversation = await getConversationById(req.userId, req.params.id);
+  if (!conversation) return res.status(404).json({ success: false, error: 'Conversation not found.' });
+  try {
+    const messages = await listMessages(req.userId, req.params.id);
+    if (!messages.length) return res.status(400).json({ success: false, error: 'There is no message to answer yet. Press Sync first.' });
+    const out = await draftForConversation({ userId: req.userId, conversationId: req.params.id, messages, account: null });
+    res.json({ success: true, text: out.text, creditsUsed: out.creditsUsed });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not write a draft.' });
+  }
+});
+
+router.post('/:id/ai-reply/discard', requireAuth, async (req, res) => {
+  const Conversation = require('../models/schemas/Conversation');
+  await Conversation.updateOne({ _id: req.params.id, userId: req.userId, 'aiDraft.status': 'ready' }, { $set: { 'aiDraft.status': 'discarded' } });
+  res.json({ success: true });
+});
+
+/**
  * GET /api/notifications/unread-count
  * Requires a valid session token.
  * Returns how many of the user's conversations (across all eBay accounts)
@@ -144,6 +194,7 @@ router.post('/:id/reply', requireAuth, async (req, res) => {
       const last = (live.messages || []).slice(-1)[0];
       if (last) await updateConversationState(req.userId, req.params.id, { isRead: true });
     } catch (_) {}
+    try { await require('../models/schemas/Conversation').updateOne({ _id: req.params.id, userId: req.userId, 'aiDraft.status': 'ready' }, { $set: { 'aiDraft.status': 'sent' } }); } catch (_) {}
     res.json({ success: true, message: sent || null });
   } catch (err) {
     console.error('notification-reply error:', err.message);

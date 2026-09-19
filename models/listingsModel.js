@@ -159,8 +159,19 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null) {
     serialized.asin = doc.importId?.asin || null;
     serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
     serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
-    return serialized;
+    return withImportFallback(serialized, doc);
   });
+}
+
+/** Drafts made before description/bullets/specs were copied onto the listing read them from the linked import. */
+function withImportFallback(serialized, doc) {
+  const p = doc.importId?.product;
+  if (!p) return serialized;
+  if (!serialized.description) serialized.description = String(p.description || '');
+  if (!Array.isArray(serialized.bullet_points) || !serialized.bullet_points.length) serialized.bullet_points = Array.isArray(p.bulletPoints) ? p.bulletPoints : [];
+  if (!Array.isArray(serialized.specifications) || !serialized.specifications.length) serialized.specifications = Array.isArray(p.specifications) ? p.specifications : [];
+  if (!serialized.ebay_aspects || !Object.keys(serialized.ebay_aspects).length) serialized.ebay_aspects = p.ebayAspects && typeof p.ebayAspects === 'object' ? p.ebayAspects : {};
+  return serialized;
 }
 
 function supplierCountryFromUrl(url) {
@@ -242,7 +253,7 @@ async function listListings(userId, status, accountId = null) {
     serialized.asin = doc.importId?.asin || null;
     serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
     serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
-    return serialized;
+    return withImportFallback(serialized, doc);
   });
 }
 

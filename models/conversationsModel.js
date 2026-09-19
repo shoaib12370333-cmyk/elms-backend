@@ -126,6 +126,7 @@ function serialize(doc) {
     is_read: obj.isRead,
     last_message_from_self: !!obj.lastMessageFromSelf,
     trashed_at: obj.trashedAt || null,
+    ai_draft: obj.aiDraft && obj.aiDraft.forMessageId ? { text: obj.aiDraft.text || '', status: obj.aiDraft.status, for_message_id: obj.aiDraft.forMessageId, created_at: obj.aiDraft.createdAt || null } : null,
     conversation_status: obj.conversationStatus || 'ACTIVE',
     other_party_username: obj.otherPartyUsername || obj.fromUsername || null,
     reference_id: obj.referenceId || obj.itemId || null,

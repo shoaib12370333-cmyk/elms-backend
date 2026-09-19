@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const aiUsageSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    kind: { type: String, enum: ['title', 'description'], required: true },
+    kind: { type: String, enum: ['title', 'description', 'aspects', 'reply'], required: true },
     ok: { type: Boolean, default: true },
     credits: { type: Number, default: 0 },
     model: { type: String, default: null },
