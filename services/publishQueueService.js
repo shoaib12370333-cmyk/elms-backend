@@ -303,6 +303,23 @@ async function processOneQueuedListing(listing) {
 
 
     // =========================================================
+    // PER-PRODUCT OVERRIDES (set in the listing editor)
+    // =========================================================
+    // Policies: when "Use Dynamic Policies" is off, any policy chosen for this
+    // product replaces the eBay account default; blank ones keep the default.
+    if (!listing.use_dynamic_policies) {
+      if (listing.payment_policy_id) sellerSettings.paymentPolicyId = listing.payment_policy_id;
+      if (listing.shipping_policy_id) sellerSettings.fulfillmentPolicyId = listing.shipping_policy_id;
+      if (listing.return_policy_id) sellerSettings.returnPolicyId = listing.return_policy_id;
+    }
+    // Item location: a country + postal code saved on the product wins over the account location.
+    if (listing.country_location && listing.postal_code) {
+      sellerSettings.productLocationMode = 'custom';
+      sellerSettings.customCountryCode = listing.country_location;
+      sellerSettings.customPostalCode = listing.postal_code;
+    }
+
+    // =========================================================
     // CUSTOM LOCATION
     // =========================================================
 

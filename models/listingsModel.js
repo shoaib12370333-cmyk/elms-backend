@@ -143,27 +143,62 @@ async function listListingsByStatuses(userId, statuses = []) {
     .populate('importId')
     .populate('ebayAccountId')
     .sort({ updatedAt: -1 });
+  const soldByListing = await getSoldByListing(userId);
   return docs.map((doc) => {
     const serialized = serialize(doc);
     serialized.amazon_url = doc.importId?.amazonUrl || null;
     serialized.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);
     serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
+    serialized.asin = doc.importId?.asin || null;
+    serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+    serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
     return serialized;
   });
 }
 
+function supplierCountryFromUrl(url) {
+  const host = String(url || '').toLowerCase();
+  if (host.includes('amazon.co.uk')) return 'UK';
+  if (host.includes('amazon.com.au')) return 'AU';
+  if (host.includes('amazon.ca')) return 'CA';
+  if (host.includes('amazon.de')) return 'DE';
+  if (host.includes('amazon.fr')) return 'FR';
+  if (host.includes('amazon.it')) return 'IT';
+  if (host.includes('amazon.es')) return 'ES';
+  if (host.includes('amazon.com')) return 'US';
+  return null;
+}
 async function countListingsByStatus(userId, status) {
   return Listing.countDocuments({ userId, status });
+}
+
+/** Units sold per listing, from the synced eBay orders. */
+async function getSoldByListing(userId) {
+  try {
+    const Order = require('./schemas/Order');
+    const mongoose = require('mongoose');
+    const rows = await Order.aggregate([
+      { $match: { userId: new mongoose.Types.ObjectId(String(userId)), listingId: { $ne: null } } },
+      { $group: { _id: '$listingId', sold: { $sum: { $ifNull: ['$quantity', 1] } } } },
+    ]);
+    return new Map(rows.map((r) => [String(r._id), r.sold]));
+  } catch (_) {
+    return new Map();
+  }
 }
 
 async function listListings(userId, status) {
   const query = status ? { userId, status } : { userId };
   const docs = await Listing.find(query).populate('importId').populate('ebayAccountId').sort({ updatedAt: -1 });
+  const soldByListing = await getSoldByListing(userId);
   return docs.map((doc) => {
     const serialized = serialize(doc);
     serialized.amazon_url = doc.importId?.amazonUrl || null;
     serialized.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);
     serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
+    serialized.asin = doc.importId?.asin || null;
+    serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+    serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
     return serialized;
   });
 }
@@ -214,8 +249,70 @@ async function updateListing(userId, id, fields) {
   if (fields.categoryId !== undefined) update.categoryId = fields.categoryId;
   if (fields.ebayAccountId !== undefined) update.ebayAccountId = fields.ebayAccountId || null;
   if (fields.marketplaceId !== undefined) update.marketplaceId = fields.marketplaceId || null;
+  Object.assign(update, buildSettingsUpdate(fields));
   if (fields.markDraftCustomized !== false) update.draftCustomized = true;
 
+  const doc = await Listing.findOneAndUpdate({ _id: id, userId }, update, { new: true });
+  return doc ? serialize(doc) : null;
+}
+
+const COUNTRY_CODE = /^[A-Za-z]{2}$/;
+const POSTAL_CODE = /^[A-Za-z0-9][A-Za-z0-9 -]{1,11}$/;
+const POLICY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Validates and converts the per-product settings (tags, policies, location,
+ * monitoring) from the request body into a Mongoose update object. Unknown or
+ * invalid values are ignored rather than stored.
+ */
+function buildSettingsUpdate(fields = {}) {
+  const update = {};
+  const text = (v, max) => (v === null || v === '' ? null : String(v).trim().slice(0, max));
+  if (fields.tags !== undefined) {
+    const list = Array.isArray(fields.tags) ? fields.tags : String(fields.tags || '').split(',');
+    update.tags = Array.from(new Set(list.map((t) => String(t || '').trim().slice(0, 40)).filter(Boolean))).slice(0, 30);
+  }
+  if (fields.shippingMethod !== undefined) update.shippingMethod = text(fields.shippingMethod, 60);
+  if (fields.useDynamicPolicies !== undefined) update.useDynamicPolicies = fields.useDynamicPolicies === true;
+  for (const [key, column] of [['paymentPolicyId', 'paymentPolicyId'], ['fulfillmentPolicyId', 'fulfillmentPolicyId'], ['returnPolicyId', 'returnPolicyId']]) {
+    if (fields[key] === undefined) continue;
+    const v = text(fields[key], 64);
+    if (v === null || POLICY_ID.test(v)) update[column] = v;
+  }
+  if (fields.countryLocation !== undefined) {
+    const v = text(fields.countryLocation, 2);
+    if (v === null) update.countryLocation = null;
+    else if (COUNTRY_CODE.test(v)) update.countryLocation = (v.toUpperCase() === 'UK' ? 'GB' : v.toUpperCase());
+  }
+  if (fields.locationCity !== undefined) update.locationCity = text(fields.locationCity, 80);
+  if (fields.postalCode !== undefined) {
+    const v = text(fields.postalCode, 12);
+    if (v === null) update.postalCode = null;
+    else if (POSTAL_CODE.test(v)) update.postalCode = v.toUpperCase();
+  }
+  if (fields.stockMonitoring !== undefined) update.stockMonitoring = fields.stockMonitoring !== false;
+  if (fields.priceMonitoring !== undefined) update.priceMonitoring = fields.priceMonitoring !== false;
+  return update;
+}
+
+/**
+ * Saves ONLY the per-product settings (no title/price/images). Safe to call on
+ * listings in any status, including published ones.
+ */
+async function updateListingSettings(userId, id, fields) {
+  const update = buildSettingsUpdate(fields);
+  if (!Object.keys(update).length) return getListingById(userId, id);
+  const doc = await Listing.findOneAndUpdate({ _id: id, userId }, update, { new: true });
+  return doc ? serialize(doc) : null;
+}
+
+/**
+ * Stores eBay traffic numbers (views / watchers) for one listing.
+ */
+async function updateListingStats(userId, id, { views, watchers }) {
+  const update = { statsSyncedAt: new Date() };
+  if (Number.isFinite(Number(views))) update.views = Math.max(0, Math.trunc(Number(views)));
+  if (Number.isFinite(Number(watchers))) update.watchers = Math.max(0, Math.trunc(Number(watchers)));
   const doc = await Listing.findOneAndUpdate({ _id: id, userId }, update, { new: true });
   return doc ? serialize(doc) : null;
 }
@@ -365,6 +462,20 @@ function serialize(doc) {
     publish_response: obj.publishResponse || null,
     ebay_image_urls: Array.isArray(obj.ebayImageUrls) ? obj.ebayImageUrls : [],
     publish_error_details: obj.publishErrorDetails || null,
+    tags: Array.isArray(obj.tags) ? obj.tags : [],
+    shipping_method: obj.shippingMethod || null,
+    use_dynamic_policies: !!obj.useDynamicPolicies,
+    payment_policy_id: obj.paymentPolicyId || null,
+    shipping_policy_id: obj.fulfillmentPolicyId || null,
+    return_policy_id: obj.returnPolicyId || null,
+    country_location: obj.countryLocation || null,
+    location_city: obj.locationCity || null,
+    postal_code: obj.postalCode || null,
+    stock_monitoring: obj.stockMonitoring !== false,
+    price_monitoring: obj.priceMonitoring !== false,
+    views: Number.isFinite(Number(obj.views)) && obj.views !== null ? Number(obj.views) : null,
+    watchers: Number.isFinite(Number(obj.watchers)) && obj.watchers !== null ? Number(obj.watchers) : null,
+    stats_synced_at: obj.statsSyncedAt || null,
     is_error: obj.status === 'error',
     created_at: obj.createdAt,
     updated_at: obj.updatedAt,
@@ -471,6 +582,9 @@ module.exports = {
   resetErrorToDraft,
   markEnded,
   listPublishedListings,
+  updateListingSettings,
+  updateListingStats,
+  buildSettingsUpdate,
   deleteListing,
   scheduleListing,
   unscheduleListing,

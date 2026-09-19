@@ -96,6 +96,29 @@ router.get('/suggest-category', requireAuth, async (req, res) => {
  * A listing row is created first as a draft, then updated to "published"
  * or "error" depending on the outcome, so it shows up in Live Listings either way.
  */
+/**
+ * POST /api/list-on-ebay/optimize-title
+ * Body: { title, categoryName?, description? }
+ * Returns an eBay-friendly title (max 80 characters) written by Claude.
+ * Needs ANTHROPIC_API_KEY on the server; without it the endpoint answers 503.
+ */
+router.post('/optimize-title', requireAuth, async (req, res) => {
+  const title = String(req.body?.title || '').trim();
+  if (title.length < 3) return res.status(400).json({ success: false, error: 'Enter a title first.' });
+  try {
+    const { optimizeEbayTitle } = require('../services/titleOptimizerService');
+    const optimized = await optimizeEbayTitle({
+      title,
+      categoryName: String(req.body?.categoryName || '').slice(0, 120),
+      description: String(req.body?.description || '').slice(0, 1500),
+    });
+    res.json({ success: true, title: optimized });
+  } catch (err) {
+    console.error('[optimize-title]', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not optimize the title.' });
+  }
+});
+
 router.post('/:id/images/upload', requireAuth, async (req, res) => {
   const imageData = String(req.body?.imageData || '').trim();
   const imageUrl = String(req.body?.imageUrl || '').trim();
@@ -283,9 +306,21 @@ router.put('/:id', requireAuth, async (req, res) => {
     categoryId,
     ebayAccountId: destinationAccountId,
     marketplaceId: destinationMarketplaceId,
-    description: productToSave?.description,
+    description: productToSave?.description ?? req.body.description,
     bulletPoints: productToSave?.bulletPoints,
-    specifications: productToSave?.specifications,
+    specifications: productToSave?.specifications ?? req.body.specifications,
+    // Per-product settings from the listing editor (validated in listingsModel.buildSettingsUpdate).
+    tags: req.body.tags,
+    shippingMethod: req.body.shippingMethod,
+    useDynamicPolicies: req.body.useDynamicPolicies,
+    paymentPolicyId: req.body.paymentPolicyId,
+    fulfillmentPolicyId: req.body.fulfillmentPolicyId,
+    returnPolicyId: req.body.returnPolicyId,
+    countryLocation: req.body.countryLocation,
+    locationCity: req.body.locationCity,
+    postalCode: req.body.postalCode,
+    stockMonitoring: req.body.stockMonitoring,
+    priceMonitoring: req.body.priceMonitoring,
     ebayAspects: productToSave?.ebayAspects,
     amazonPrice: productToSave?.price,
     marginAmount: productToSave?.price != null && sellPrice != null ? Number((Number(sellPrice) - Number(productToSave.price)).toFixed(2)) : undefined,

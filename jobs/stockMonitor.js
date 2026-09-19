@@ -31,6 +31,8 @@ async function runStockCheckForUser(user) {
   console.log(`[stock-monitor] ${user.email}: checking stock for ${publishedListings.length} listing(s)...`);
 
   for (const listing of publishedListings) {
+    // Both monitors switched off for this product in the listing editor: skip it (and save the credit).
+    if (listing.stock_monitoring === false && listing.price_monitoring === false) continue;
     if (!listing.asin) {
       console.warn(`[stock-monitor] Listing ${listing.id} (SKU ${listing.sku}) has no ASIN, skipping.`);
       continue;
@@ -45,7 +47,7 @@ async function runStockCheckForUser(user) {
       const availability = await checkAvailabilityByAsin(listing.asin);
       await spendCredit(user.id, ACTION_COSTS.STOCK_MONITORING);
 
-      if (!availability.inStock) {
+      if (!availability.inStock && listing.stock_monitoring !== false) {
         console.log(`[stock-monitor] ${listing.sku} is out of stock on Amazon (${availability.availabilityText}). Ending eBay listing...`);
 
         if (!listing.ebay_offer_id) {
@@ -93,13 +95,13 @@ async function runStockCheckForUser(user) {
       // not an exact supplier quantity. This avoids inventing a supplier
       // quantity and reduces overselling risk. Once an exact quantity source
       // is available, this can be replaced with the real quantity.
-      await syncStockQuantity(user, listing, availability);
+      if (listing.stock_monitoring !== false) await syncStockQuantity(user, listing, availability);
 
       // Still in stock - check whether Amazon's price moved, and keep the
       // eBay price in sync (see syncPriceIfChanged below). This reuses the
       // availability response above, so it's not a second Canopy call and
       // not a second credit charge (ACTION_COSTS.PRICE_MONITORING is 0).
-      await syncPriceIfChanged(user, listing, availability);
+      if (listing.price_monitoring !== false) await syncPriceIfChanged(user, listing, availability);
     } catch (err) {
       // A failed check (rate limit, network issue, etc.) should not end the
       // listing - we just log it and try again on the next scheduled run.
