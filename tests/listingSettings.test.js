@@ -27,3 +27,14 @@ assert.strictEqual(cleanPostalCode('DE', '1011'), null);
 assert.strictEqual(normalizeCountry('uk'), 'GB');
 assert.throws(() => normalizeCountry('ZZ'));
 console.log('listing settings + postal code tests passed');
+
+// eBay traffic XML parsing (regression: backslashes were lost, so watchers were always 0)
+{
+  const assert = require('assert');
+  const { pickNumber } = require('../services/ebayStatsService');
+  const xml = '<Item><HitCount>120</HitCount><WatchCount> 7 </WatchCount></Item>';
+  assert.strictEqual(pickNumber(xml, 'WatchCount'), 7);
+  assert.strictEqual(pickNumber(xml, 'HitCount'), 120);
+  assert.strictEqual(pickNumber('<Item/>', 'HitCount'), null);
+  console.log('traffic parsing tests passed');
+}

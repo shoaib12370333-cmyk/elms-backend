@@ -10,7 +10,8 @@ const SITE_IDS = Object.freeze({
 });
 
 function pickNumber(xml, tag) {
-  const m = xml.match(new RegExp(`<${tag}>\s*(\d+)\s*</${tag}>`));
+  // String.raw keeps the backslashes; a plain template literal would turn \s and \d into "s" and "d".
+  const m = String(xml).match(new RegExp(String.raw`<${tag}>\s*(\d+)\s*</${tag}>`));
   return m ? Number(m[1]) : null;
 }
 
@@ -62,4 +63,4 @@ async function fetchItemTraffic(refreshToken, itemId, marketplaceId) {
   return { watchers: pickNumber(xml, 'WatchCount') ?? 0, views: pickNumber(xml, 'HitCount') };
 }
 
-module.exports = { fetchItemTraffic };
+module.exports = { fetchItemTraffic, pickNumber };
