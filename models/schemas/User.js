@@ -29,6 +29,11 @@ const userSchema = new mongoose.Schema(
     // Assigned manually by an admin - see routes/admin.js.
     creditBalance: { type: Number, default: 0 },
 
+    // Messages page: how ELMS answers new buyer messages. off = never, draft = AI writes a draft for you
+    // to review, auto = AI also sends it (only for simple, low-risk messages).
+    aiReplyMode: { type: String, enum: ['off', 'draft', 'auto'], default: 'off' },
+    aiReplyEnabledAt: { type: Date, default: null },
+
     // How often (in days) this user's published listings should be checked
     // for Amazon stock. Set manually by an admin per user. The stock check
     // job only runs for a user once this many days have passed since their

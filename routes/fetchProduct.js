@@ -50,6 +50,10 @@ async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
       currency: product.currency,
       quantity: 1,
       categoryId: null,
+      description: product.description || '',
+      bulletPoints: product.bulletPoints || [],
+      specifications: product.specifications || [],
+      ebayAspects: product.ebayAspects || {},
       amazonPrice: product.price,
       marginAmount: suggestedPrice != null && product.price != null ? Number((suggestedPrice - product.price).toFixed(2)) : null,
     });

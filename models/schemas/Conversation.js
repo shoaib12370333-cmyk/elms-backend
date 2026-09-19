@@ -24,6 +24,13 @@ const conversationSchema = new mongoose.Schema(
     isRead: { type: Boolean, default: false },
     lastMessageFromSelf: { type: Boolean, default: false },
     trashedAt: { type: Date, default: null },
+    // Latest AI reply for this conversation. status: ready (waiting for you), sent (you sent it), auto_sent, discarded.
+    aiDraft: {
+      text: { type: String, default: '' },
+      status: { type: String, enum: ['ready', 'sent', 'auto_sent', 'discarded'], default: 'ready' },
+      forMessageId: { type: String, default: null },
+      createdAt: { type: Date, default: null },
+    },
     internalNotes: [{
       text: { type: String, required: true, maxlength: 2000 },
       createdAt: { type: Date, default: Date.now },

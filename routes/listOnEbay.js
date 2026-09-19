@@ -114,7 +114,7 @@ async function runAiAction(req, res, { kind, costKey, enabledKey, run }) {
   try {
     const out = await run(settings);
     AiUsage.create({ userId: req.userId, kind, ok: true, credits: cost, model: out.usage?.model, inputTokens: out.usage?.inputTokens, outputTokens: out.usage?.outputTokens }).catch(() => {});
-    return res.json({ success: true, text: out.text, title: kind === 'title' ? out.text : undefined, description: kind === 'description' ? out.text : undefined, creditsUsed: cost });
+    return res.json({ success: true, text: out.text, data: out.data, title: kind === 'title' ? out.text : undefined, description: kind === 'description' ? out.text : undefined, creditsUsed: cost });
   } catch (err) {
     await refundCredit(req.userId, cost);
     AiUsage.create({ userId: req.userId, kind, ok: false, credits: 0 }).catch(() => {});
@@ -150,6 +150,26 @@ router.post('/optimize-description', requireAuth, async (req, res) => {
     run: () => generateEbayDescription({
       title, categoryName: String(req.body?.categoryName || '').slice(0, 120),
       description: req.body?.description, bulletPoints: req.body?.bulletPoints, specifications: req.body?.specifications,
+    }),
+  });
+});
+
+/**
+ * POST /api/list-on-ebay/fill-aspects
+ * Body: { title, description?, bulletPoints?, specifications?, categoryName?, aspects: [...], existing?: {name: [values]} }
+ * -> { values: { "Aspect name": ["value"] }, filled }
+ */
+router.post('/fill-aspects', requireAuth, async (req, res) => {
+  const title = String(req.body?.title || '').trim();
+  const aspects = Array.isArray(req.body?.aspects) ? req.body.aspects : [];
+  if (title.length < 3) return res.status(400).json({ success: false, error: 'Enter a title first.' });
+  if (!aspects.length) return res.status(400).json({ success: false, error: 'Choose an eBay category first so its item specifics can load.' });
+  const { fillItemSpecifics } = require('../services/aspectFillerService');
+  return runAiAction(req, res, {
+    kind: 'aspects', costKey: 'AI_ASPECTS', enabledKey: 'aiAspectsEnabled',
+    run: () => fillItemSpecifics({
+      title, categoryName: String(req.body?.categoryName || '').slice(0, 160), description: req.body?.description,
+      bulletPoints: req.body?.bulletPoints, specifications: req.body?.specifications, aspects, existing: req.body?.existing || {},
     }),
   });
 });

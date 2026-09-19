@@ -311,14 +311,14 @@ router.get('/settings/ai', async (req, res) => {
       { $group: { _id: { kind: '$kind', ok: '$ok' }, calls: { $sum: 1 }, credits: { $sum: '$credits' }, input: { $sum: '$inputTokens' }, output: { $sum: '$outputTokens' } } },
     ]),
   ]);
-  const summary = { title: { calls: 0, failed: 0, credits: 0 }, description: { calls: 0, failed: 0, credits: 0 }, inputTokens: 0, outputTokens: 0 };
+  const summary = { title: { calls: 0, failed: 0, credits: 0 }, description: { calls: 0, failed: 0, credits: 0 }, aspects: { calls: 0, failed: 0, credits: 0 }, reply: { calls: 0, failed: 0, credits: 0 }, inputTokens: 0, outputTokens: 0 };
   for (const row of usage) {
     const bucket = summary[row._id.kind];
     if (!bucket) continue;
     if (row._id.ok) { bucket.calls += row.calls; bucket.credits += row.credits; } else bucket.failed += row.calls;
     summary.inputTokens += row.input; summary.outputTokens += row.output;
   }
-  res.json({ success: true, settings, apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY, costs: { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION }, usage: summary });
+  res.json({ success: true, settings, apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY, costs: { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION, AI_ASPECTS: ACTION_COSTS.AI_ASPECTS, AI_REPLY: ACTION_COSTS.AI_REPLY }, usage: summary });
 });
 
 /**
@@ -332,11 +332,11 @@ router.put('/settings/ai', async (req, res) => {
     let savedCosts = null;
     if (costs && typeof costs === 'object') {
       const pick = {};
-      for (const k of ['AI_TITLE', 'AI_DESCRIPTION']) if (costs[k] !== undefined) pick[k] = costs[k];
+      for (const k of ['AI_TITLE', 'AI_DESCRIPTION', 'AI_ASPECTS', 'AI_REPLY']) if (costs[k] !== undefined) pick[k] = costs[k];
       if (Object.keys(pick).length) await updateActionCosts(pick);
     }
     const { ACTION_COSTS } = require('../config/actionCosts');
-    savedCosts = { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION };
+    savedCosts = { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION, AI_ASPECTS: ACTION_COSTS.AI_ASPECTS, AI_REPLY: ACTION_COSTS.AI_REPLY };
     res.json({ success: true, settings, costs: savedCosts });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message || 'Could not save the AI settings.' });

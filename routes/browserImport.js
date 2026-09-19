@@ -159,6 +159,10 @@ router.post('/', requireAuth, async (req, res) => {
         currency: normalized.currency,
         quantity: 1,
         categoryId: null,
+        description: normalized.description || '',
+        bulletPoints: normalized.bulletPoints || [],
+        specifications: normalized.specifications || [],
+        ebayAspects: normalized.ebayAspects || {},
         amazonPrice: normalized.price,
         marginAmount: suggestedPrice != null && normalized.price != null ? Number((suggestedPrice - normalized.price).toFixed(2)) : null,
       });

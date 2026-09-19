@@ -51,6 +51,10 @@ async function syncOneAccountConversations(userId, accountId, refreshToken, last
             if (last) {
               const Conversation = require('../models/schemas/Conversation');
               await Conversation.updateOne({ _id: saved.id, userId }, { $set: { lastMessageFromSelf: !!last.isSelf, lastMessageSnippet: last.content || '', lastMessageDate: last.sentDate ? new Date(last.sentDate) : undefined } });
+              // Buyer wrote last: prepare an AI reply draft when the seller turned that on (Messages page).
+              if (!last.isSelf && conv.conversationType === 'FROM_MEMBERS') {
+                require('../services/replyAssistantService').handleNewBuyerMessage({ userId, conversationId: saved.id, messages: normalized, refreshToken }).catch((e) => console.warn('[ai-reply] ' + e.message));
+              }
             }
           } catch (detailErr) {
             console.warn(`[conversation-sync] Detail sync failed for ${conv.conversationId}: ${detailErr.message}`);
