@@ -14,7 +14,11 @@ const {
   deleteListing,
   scheduleListing,
   unscheduleListing,
+  updateListingSettings,
+  updateListingStats,
 } = require('../models/listingsModel');
+
+const { fetchItemTraffic } = require('../services/ebayStatsService');
 
 const {
   publishListing,
@@ -877,5 +881,92 @@ router.post(
     }
   }
 );
+
+/**
+ * PATCH /api/listings/:id/settings
+ * Saves ONLY the per-product settings from the listing editor (tags, shipping
+ * method, policies, item location, stock/price monitoring). Works for drafts
+ * and live listings alike; it never touches title, price or eBay itself.
+ */
+router.patch('/:id/settings', requireAuth, async (req, res) => {
+  const listing = await updateListingSettings(req.userId, req.params.id, {
+    tags: req.body?.tags,
+    shippingMethod: req.body?.shippingMethod,
+    useDynamicPolicies: req.body?.useDynamicPolicies,
+    paymentPolicyId: req.body?.paymentPolicyId,
+    fulfillmentPolicyId: req.body?.fulfillmentPolicyId,
+    returnPolicyId: req.body?.returnPolicyId,
+    countryLocation: req.body?.countryLocation,
+    locationCity: req.body?.locationCity,
+    postalCode: req.body?.postalCode,
+    stockMonitoring: req.body?.stockMonitoring,
+    priceMonitoring: req.body?.priceMonitoring,
+  });
+  if (!listing) return res.status(404).json({ success: false, error: 'Listing not found.' });
+  res.json({ success: true, listing });
+});
+
+/**
+ * Reads views + watchers for one published listing from eBay and stores them.
+ */
+async function syncOneListingStats(userId, listing, tokenCache) {
+  const itemId = listing.ebay_listing_id;
+  if (!itemId) return { ok: false, reason: 'not_published_to_ebay' };
+  const accountId = listing.ebay_account_id;
+  if (!accountId) return { ok: false, reason: 'no_ebay_account' };
+  if (!tokenCache.has(accountId)) tokenCache.set(accountId, await getEbayAccountRefreshToken(userId, accountId));
+  const refreshToken = tokenCache.get(accountId);
+  if (!refreshToken) return { ok: false, reason: 'account_disconnected' };
+  const traffic = await fetchItemTraffic(refreshToken, itemId, listing.marketplace_id || 'EBAY_US');
+  const updated = await updateListingStats(userId, listing.id, traffic);
+  return { ok: true, listing: updated };
+}
+
+/**
+ * POST /api/listings/:id/stats/sync
+ * Refreshes views + watchers for one published listing.
+ */
+router.post('/:id/stats/sync', requireAuth, async (req, res) => {
+  const listing = await getListingById(req.userId, req.params.id);
+  if (!listing) return res.status(404).json({ success: false, error: 'Listing not found.' });
+  if (listing.status !== 'published') return res.status(400).json({ success: false, error: 'Only published listings have views and watchers.' });
+  try {
+    const result = await syncOneListingStats(req.userId, listing, new Map());
+    if (!result.ok) return res.status(400).json({ success: false, error: 'This listing is not linked to a connected eBay account.', reason: result.reason });
+    res.json({ success: true, listing: result.listing });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not read listing traffic from eBay.' });
+  }
+});
+
+/**
+ * POST /api/listings/stats/sync
+ * Body (optional): { accountId } - refresh every published listing (max 200 per
+ * call) so the Live listings page can show current views and watchers.
+ */
+router.post('/stats/sync', requireAuth, async (req, res) => {
+  const accountId = req.body?.accountId ? String(req.body.accountId) : null;
+  const all = await listListings(req.userId, 'published');
+  const targets = all
+    .filter((l) => l.ebay_listing_id && l.ebay_account_id && (!accountId || l.ebay_account_id === accountId))
+    .slice(0, 200);
+
+  const tokenCache = new Map();
+  const listings = [];
+  let failed = 0;
+  let firstError = null;
+  for (const listing of targets) {
+    try {
+      const result = await syncOneListingStats(req.userId, listing, tokenCache);
+      if (result.ok) listings.push({ id: result.listing.id, views: result.listing.views, watchers: result.listing.watchers, stats_synced_at: result.listing.stats_synced_at });
+      else failed += 1;
+    } catch (err) {
+      failed += 1;
+      firstError = firstError || err.message;
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  res.json({ success: true, synced: listings.length, failed, skipped: all.length - targets.length, error: firstError, listings });
+});
 
 module.exports = router;

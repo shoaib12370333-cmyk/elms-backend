@@ -10,6 +10,7 @@ const {
 const { setAutoOrderSettings } = require('../models/usersModel');
 const { fetchBusinessPolicies } = require('../services/ebayListingService');
 const { lookupPostalCode } = require('../services/postalCodeService');
+const { generatePostalCode } = require('../services/postalGeneratorService');
 const { assertSupportedMarketplace, normalizeMarketplaceId } = require('../config/ebayMarketplaces');
 
 
@@ -120,6 +121,26 @@ router.get('/postal-lookup', requireAuth, async (req, res) => {
     res.json({ success: true, location: result });
   } catch (err) {
     res.status(err.statusCode || 500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seller-settings/postal-generate?country=US&city=New%20York[&state=NY]
+ * Requires a valid session token.
+ *
+ * Returns a REAL postal code for the city (e.g. New York -> 10013, London ->
+ * a full valid postcode such as "WC2N 5DU"). Codes are read from actual
+ * addresses and, where possible, verified - nothing is random or invented.
+ * Hong Kong has no postal codes, so { postalCode: null, notRequired: true }.
+ */
+router.get('/postal-generate', requireAuth, async (req, res) => {
+  const { country, city, state } = req.query;
+  if (!country) return res.status(400).json({ success: false, error: 'country is required.' });
+  try {
+    const result = await generatePostalCode(String(country), String(city || ''), state ? String(state) : '');
+    res.json({ success: true, location: result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not generate a postal code.' });
   }
 });
 

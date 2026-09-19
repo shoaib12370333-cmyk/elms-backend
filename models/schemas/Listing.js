@@ -61,6 +61,28 @@ const listingSchema = new mongoose.Schema(
     publishErrorDetails: { type: mongoose.Schema.Types.Mixed, default: null },
     scheduledAt: { type: Date, default: null },
     errorMessage: { type: String, default: null },
+
+    // ---- Per-product settings edited in the inline / full listing editor ----
+    tags: { type: [String], default: [] },
+    shippingMethod: { type: String, default: null },
+    // true  = use the eBay account's default Payment/Shipping/Return policies.
+    // false = per-product policy IDs below win (blank ones fall back to the account).
+    useDynamicPolicies: { type: Boolean, default: false },
+    paymentPolicyId: { type: String, default: null },
+    fulfillmentPolicyId: { type: String, default: null },
+    returnPolicyId: { type: String, default: null },
+    // Item location for THIS product. When countryCode + postalCode are set they
+    // override the eBay account's location at publish time.
+    countryLocation: { type: String, default: null },
+    locationCity: { type: String, default: null },
+    postalCode: { type: String, default: null },
+    stockMonitoring: { type: Boolean, default: true },
+    priceMonitoring: { type: Boolean, default: true },
+
+    // ---- eBay listing traffic (synced from eBay) ----
+    views: { type: Number, default: null },
+    watchers: { type: Number, default: null },
+    statsSyncedAt: { type: Date, default: null },
   },
   { timestamps: true } // adds createdAt and updatedAt
 );
