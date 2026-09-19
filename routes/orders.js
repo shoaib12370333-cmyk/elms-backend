@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder } = require('../models/ordersModel');
+const { listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote } = require('../models/ordersModel');
 const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const EbayAccount = require('../models/schemas/EbayAccount');
-const { fetchOrders, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
+const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
+const { syncAccountOrders } = require('../services/orderSyncService');
 const { convertTracking } = require('../services/trackingConversionService');
 const { requireAuth } = require('../middleware/requireAuth');
 
@@ -49,37 +50,21 @@ router.post('/sync', requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: requestedAccountId ? 'The selected eBay account is not connected.' : 'Please connect an eBay account first.' });
   }
 
+  const full = req.query.full === '1' || req.query.full === 'true';
   const results = await Promise.all(accounts.map(async (account) => {
     try {
-      const refreshToken = await getEbayAccountRefreshToken(req.userId, account.id);
-      if (!refreshToken) return { savedCount: 0 };
-
-      const accountDoc = await EbayAccount.findById(account.id);
-      const sinceDate = accountDoc?.lastSyncAttemptAt
-        ? new Date(accountDoc.lastSyncAttemptAt.getTime() - 48 * 60 * 60 * 1000)
-        : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const rawOrders = await fetchOrders(refreshToken, sinceDate);
-      let savedCount = 0;
-
-      for (const rawOrder of rawOrders) {
-        const lineItems = normalizeOrderLineItems(rawOrder);
-        for (const lineItem of lineItems) {
-          await upsertOrder(req.userId, lineItem, account.id);
-          savedCount++;
-        }
-      }
-      await EbayAccount.updateOne({ _id: account.id }, { lastSyncAttemptAt: new Date() });
-      return { savedCount };
+      const { ordersFromEbay, savedCount } = await syncAccountOrders(req.userId, account.id, { full });
+      return { savedCount, ordersFromEbay };
     } catch (err) {
       console.error(`order sync error for account ${account.ebayUserId}:`, err.message);
-      return { savedCount: 0, error: `${account.ebayUserId}: ${err.message}` };
+      return { savedCount: 0, ordersFromEbay: 0, error: `${account.ebayUserId}: ${err.message}` };
     }
   }));
 
   const savedCount = results.reduce((sum, r) => sum + r.savedCount, 0);
   const errors = results.map((r) => r.error).filter(Boolean);
   const orders = await listOrders(req.userId, requestedAccountId);
-  res.json({ success: true, syncedCount: savedCount, orders, errors: errors.length ? errors : undefined });
+  res.json({ success: true, syncedCount: savedCount, ordersFromEbay: results.reduce((sum, x) => sum + (x.ordersFromEbay || 0), 0), full, orders, errors: errors.length ? errors : undefined });
 });
 
 
@@ -164,6 +149,8 @@ router.put('/:id/tracking', requireAuth, async (req, res) => {
   // their end - but don't block saving it locally if that call fails
   // (e.g. missing eBay account access), since the seller still needs the
   // number recorded either way.
+  let ebayNotified = false;
+  let ebayError = null;
   if (order.ebay_order_id && order.ebay_line_item_id && order.ebay_account_id) {
     try {
       const refreshToken = await getEbayAccountRefreshToken(req.userId, order.ebay_account_id);
@@ -177,14 +164,56 @@ router.put('/:id/tracking', requireAuth, async (req, res) => {
           converted.trackingNumber,
           converted.shippingCarrierCode
         );
+        ebayNotified = true;
       }
     } catch (err) {
+      ebayError = err.message;
       console.warn('Could not notify eBay of tracking number:', err.message);
     }
   }
 
   const updated = await setTracking(req.userId, req.params.id, converted.trackingNumber, converted.shippingCarrierCode);
-  res.json({ success: true, order: updated, trackingConversion: converted });
+  res.json({ success: true, order: updated, trackingConversion: converted, ebayNotified, ebayError });
+});
+
+/**
+ * GET /api/orders/:id
+ * One order with everything ELMS stores about it.
+ */
+router.get('/:id', requireAuth, async (req, res) => {
+  const order = await getOrderById(req.userId, req.params.id);
+  if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
+  res.json({ success: true, order });
+});
+
+/**
+ * PUT /api/orders/:id/note  { note }
+ * Private seller note, stored only in ELMS.
+ */
+router.put('/:id/note', requireAuth, async (req, res) => {
+  const order = await setSellerNote(req.userId, req.params.id, req.body?.note);
+  if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
+  res.json({ success: true, order });
+});
+
+/**
+ * POST /api/orders/:id/refresh
+ * Re-reads this order from eBay right now (payment, shipping and cancel status)
+ * and updates ELMS.
+ */
+router.post('/:id/refresh', requireAuth, async (req, res) => {
+  const order = await getOrderById(req.userId, req.params.id);
+  if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
+  if (!order.ebay_account_id || !order.ebay_order_id) return res.status(400).json({ success: false, error: 'This order is not linked to an eBay account.' });
+  try {
+    const refreshToken = await getEbayAccountRefreshToken(req.userId, order.ebay_account_id);
+    if (!refreshToken) return res.status(400).json({ success: false, error: 'The eBay account for this order is no longer connected.' });
+    const raw = await fetchOrderById(refreshToken, order.ebay_order_id);
+    for (const lineItem of normalizeOrderLineItems(raw)) await upsertOrder(req.userId, lineItem, order.ebay_account_id);
+    res.json({ success: true, order: await getOrderById(req.userId, req.params.id) });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not refresh this order from eBay.' });
+  }
 });
 
 module.exports = router;

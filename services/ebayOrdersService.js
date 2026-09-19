@@ -58,52 +58,62 @@ async function ebayPost(refreshToken, path, body) {
 }
 
 /**
- * Fetches orders from eBay's Fulfillment API for the given user, optionally
- * only those created after a given date (used for incremental syncing so we
- * don't re-fetch orders we already have every time).
+ * Fetches orders from eBay's Fulfillment API for the given seller account.
+ *
+ * `sinceDate` is matched against the order's LAST MODIFIED time (not its
+ * creation time), so an order that was created long ago but has just been paid,
+ * shipped, cancelled or returned is fetched again and its status stays current.
+ * Pages of 200 (eBay's maximum) are read until eBay has no more.
  *
  * @param {string} refreshToken
- * @param {Date|null} sinceDate - only return orders created after this date
+ * @param {Date|null} sinceDate
  * @returns {Promise<Array>} raw eBay order objects
  */
 async function fetchOrders(refreshToken, sinceDate) {
-  let allOrders = [];
+  const allOrders = [];
+  const limit = 200;
   let offset = 0;
-  const limit = 50;
 
-  // eBay paginates orders - loop until there are no more pages. Capped at
-  // 10 pages (500 orders) per sync run as a safety limit.
-  for (let page = 0; page < 10; page++) {
-    let filter = '';
-    if (sinceDate) {
-      filter = `&filter=${encodeURIComponent(`creationdate:[${sinceDate.toISOString()}..]`)}`;
-    }
-
-    const data = await ebayGet(
-      refreshToken,
-      `/sell/fulfillment/v1/order?limit=${limit}&offset=${offset}${filter}`
-    );
-
+  for (let page = 0; page < 50; page++) {
+    const filter = sinceDate
+      ? `&filter=${encodeURIComponent(`lastmodifieddate:[${sinceDate.toISOString()}..]`)}`
+      : '';
+    const data = await ebayGet(refreshToken, `/sell/fulfillment/v1/order?limit=${limit}&offset=${offset}${filter}`);
     const orders = Array.isArray(data.orders) ? data.orders : [];
-    allOrders = allOrders.concat(orders);
-
-    if (orders.length < limit) break; // no more pages
+    allOrders.push(...orders);
+    if (orders.length < limit) break;
     offset += limit;
   }
-
   return allOrders;
 }
 
+/** Fetches ONE order (used to refresh a single order on demand). */
+async function fetchOrderById(refreshToken, ebayOrderId) {
+  return ebayGet(refreshToken, `/sell/fulfillment/v1/order/${encodeURIComponent(ebayOrderId)}`);
+}
+
+const money = (v) => {
+  const n = parseFloat(v?.value);
+  return Number.isFinite(n) ? n : null;
+};
+const toDate = (v) => {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
 /**
- * Converts one raw eBay order object into the simple shape our database
- * stores. An eBay order can contain multiple line items (different SKUs) -
- * we return one normalized entry per line item, since our Order model
- * tracks fulfillment per listing.
+ * Converts one raw eBay order into one normalized entry per line item, which
+ * is how ELMS tracks fulfillment. Every line item is kept - including ones
+ * that are not ELMS listings (no SKU) - so the Orders page always shows every
+ * eBay order the seller has.
  */
 function normalizeOrderLineItems(rawOrder) {
   const lineItems = Array.isArray(rawOrder.lineItems) ? rawOrder.lineItems : [];
 
-  const shipTo = rawOrder.fulfillmentStartInstructions?.[0]?.shippingStep?.shipTo;
+  const instruction = rawOrder.fulfillmentStartInstructions?.[0];
+  const step = instruction?.shippingStep;
+  const shipTo = step?.shipTo;
   const shippingAddress = shipTo
     ? {
         fullName: shipTo.fullName || null,
@@ -116,26 +126,51 @@ function normalizeOrderLineItems(rawOrder) {
       }
     : null;
 
+  const payment = Array.isArray(rawOrder.paymentSummary?.payments) ? rawOrder.paymentSummary.payments[0] : null;
+  const orderTotal = money(rawOrder.pricingSummary?.total);
+
   return lineItems.map((item) => {
-    // Variant details (e.g. "Color: Blue, Size: Large") come back as an
-    // array of { name, value } pairs when the listing has variations.
     const variantDetails = Array.isArray(item.lineItemProperties) && item.lineItemProperties.length
       ? item.lineItemProperties.map((p) => `${p.name}: ${p.value}`).join(', ')
       : null;
+    const fulfillment = item.lineItemFulfillmentInstructions || {};
+    const taxes = Array.isArray(item.taxes) ? item.taxes.reduce((sum, t) => sum + (money(t.amount) || 0), 0) : null;
 
     return {
       ebayOrderId: rawOrder.orderId,
       ebayLineItemId: item.lineItemId || null,
-      sku: item.sku || null,
+      // A line without a SKU still needs a stable, unique key for the (order, sku) index.
+      sku: item.sku || `EBAY-${item.legacyItemId || item.lineItemId}`,
       buyerUsername: rawOrder.buyer?.username || null,
-      salePrice: item.lineItemCost?.value ? parseFloat(item.lineItemCost.value) : null,
+      salePrice: money(item.lineItemCost),
       quantity: item.quantity || 1,
       variantDetails,
       shippingAddress,
-      createdAt: rawOrder.creationDate ? new Date(rawOrder.creationDate) : new Date(),
+      createdAt: toDate(rawOrder.creationDate) || new Date(),
       ebayOrderFulfillmentStatus: rawOrder.orderFulfillmentStatus || null,
       ebayPaymentStatus: rawOrder.orderPaymentStatus || null,
       ebayCancelStatus: rawOrder.cancelStatus?.cancelState || rawOrder.cancelStatus?.cancelStatus || null,
+
+      itemTitle: item.title || null,
+      legacyItemId: item.legacyItemId || null,
+      currency: item.lineItemCost?.currency || rawOrder.pricingSummary?.total?.currency || null,
+      deliveryCost: money(item.deliveryCost?.shippingCost),
+      tax: taxes,
+      lineTotal: money(item.total),
+      orderTotal,
+      buyerEmail: shipTo?.email || null,
+      buyerPhone: shipTo?.primaryPhone?.phoneNumber || null,
+      buyerNote: rawOrder.buyerCheckoutNotes || null,
+      salesRecord: rawOrder.salesRecordReference || null,
+      marketplaceId: item.purchaseMarketplaceId || null,
+      shippingService: step?.shippingServiceCode || null,
+      lineItemStatus: item.lineItemFulfillmentStatus || null,
+      ebayCreatedAt: toDate(rawOrder.creationDate),
+      ebayModifiedAt: toDate(rawOrder.lastModifiedDate),
+      paidAt: toDate(payment?.paymentDate),
+      shipByDate: toDate(fulfillment.shipByDate),
+      estDeliveryMin: toDate(fulfillment.minEstimatedDeliveryDate),
+      estDeliveryMax: toDate(fulfillment.maxEstimatedDeliveryDate),
     };
   });
 }
@@ -161,4 +196,4 @@ async function createShippingFulfillment(refreshToken, ebayOrderId, ebayLineItem
   });
 }
 
-module.exports = { fetchOrders, normalizeOrderLineItems, createShippingFulfillment };
+module.exports = { fetchOrders, fetchOrderById, normalizeOrderLineItems, createShippingFulfillment };
