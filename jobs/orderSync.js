@@ -1,6 +1,5 @@
 const cron = require('node-cron');
-const { fetchOrders, normalizeOrderLineItems } = require('../services/ebayOrdersService');
-const { upsertOrder } = require('../models/ordersModel');
+const { syncAccountOrders } = require('../services/orderSyncService');
 const { getEbayAccountRefreshToken, getEbayAccountById } = require('../models/ebayAccountsModel');
 const { acquireLock } = require('../services/jobLockService');
 const { hasCredits, spendCredit } = require('../models/usersModel');
@@ -13,25 +12,8 @@ const User = require('../models/schemas/User');
  * Shared by the periodic job below and the immediate webhook-triggered sync.
  */
 async function syncOneAccount(userId, accountId, ebayUsername, lastSyncAttemptAt = null) {
-  const refreshToken = await getEbayAccountRefreshToken(userId, accountId);
-  if (!refreshToken) return 0;
-
-  // Re-fetch a small overlap so recent order updates are not missed. For a
-  // brand-new account, import the last 30 days instead of the old 500-order cap.
-  const sinceDate = lastSyncAttemptAt
-    ? new Date(lastSyncAttemptAt.getTime() - 48 * 60 * 60 * 1000)
-    : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const rawOrders = await fetchOrders(refreshToken, sinceDate);
-
-  let saved = 0;
-  for (const rawOrder of rawOrders) {
-    const lineItems = normalizeOrderLineItems(rawOrder);
-    for (const lineItem of lineItems) {
-      await upsertOrder(userId, lineItem, accountId);
-      saved += 1;
-    }
-  }
-  return saved;
+  const { savedCount } = await syncAccountOrders(userId, accountId);
+  return savedCount;
 }
 
 /**

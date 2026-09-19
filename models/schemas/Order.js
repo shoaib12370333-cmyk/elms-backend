@@ -42,6 +42,29 @@ const orderSchema = new mongoose.Schema(
     ebayOrderFulfillmentStatus: { type: String, default: null },
     ebayPaymentStatus: { type: String, default: null },
     ebayCancelStatus: { type: String, default: null },
+
+    // ---- Full eBay order detail (so ELMS shows the same information as Seller Hub) ----
+    itemTitle: { type: String, default: null },      // eBay's own title, used when the item is not an ELMS listing
+    legacyItemId: { type: String, default: null },   // the item number buyers see on eBay
+    currency: { type: String, default: null },
+    deliveryCost: { type: Number, default: null },   // shipping the buyer paid for this line
+    tax: { type: Number, default: null },
+    lineTotal: { type: Number, default: null },      // item + shipping + tax for this line
+    orderTotal: { type: Number, default: null },     // whole eBay order total (all lines)
+    buyerEmail: { type: String, default: null },
+    buyerPhone: { type: String, default: null },
+    buyerNote: { type: String, default: null },      // checkout note left by the buyer
+    salesRecord: { type: String, default: null },
+    marketplaceId: { type: String, default: null },
+    shippingService: { type: String, default: null },
+    lineItemStatus: { type: String, default: null }, // NOT_STARTED | IN_PROGRESS | FULFILLED
+    ebayCreatedAt: { type: Date, default: null },    // when the buyer placed the order on eBay
+    ebayModifiedAt: { type: Date, default: null },
+    paidAt: { type: Date, default: null },
+    shipByDate: { type: Date, default: null },
+    estDeliveryMin: { type: Date, default: null },
+    estDeliveryMax: { type: Date, default: null },
+    sellerNote: { type: String, default: '' },       // private note, only stored in ELMS
   },
   { timestamps: true }
 );
@@ -52,5 +75,6 @@ const orderSchema = new mongoose.Schema(
 // via sync, but just in case) don't collide with each other.
 orderSchema.index({ userId: 1, ebayOrderId: 1, sku: 1 }, { unique: true, sparse: true });
 orderSchema.index({ userId: 1, ebayAccountId: 1, createdAt: -1 });
+orderSchema.index({ userId: 1, ebayCreatedAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);
