@@ -1187,58 +1187,45 @@ async function createOrGetCustomLocation(
   countryCode,
   postalCode
 ) {
-  // Deterministic key based on the country+postal code, so calling this
-  // again with the same values reuses the same location instead of
-  // creating duplicates.
+  const { resolveLocation } = require('./postalGeneratorService');
+  const country = String(countryCode || '').toUpperCase();
+  const details = await resolveLocation(country, postalCode);
+  if (!details.complete) {
+    const err = new Error(`The saved postal code "${postalCode}" is incomplete for ${country}. Use the full code (for the UK e.g. "SW1A 1AA") or press Generate in Settings to create a valid one.`);
+    err.statusCode = 400;
+    throw err;
+  }
+  const fullCode = details.postalCode;
 
+  // Deterministic key based on the country + full postal code, so calling this
+  // again reuses the same location. The "v2" prefix keeps clear of older
+  // locations that were saved with an incomplete address.
   const locationKey =
-    `elms-custom-${countryCode.toLowerCase()}-${postalCode.replace(
-      /[^a-z0-9]/gi,
-      ''
-    )}`.slice(0, 50);
+    `elms-v2-${country.toLowerCase()}-${fullCode.replace(/[^a-z0-9]/gi, '')}`.slice(0, 50);
+
+  const address = { country, postalCode: fullCode };
+  if (details.city) address.city = details.city;
+  if (details.state) address.stateOrProvince = details.state;
 
   try {
     await ebayRequest(
       refreshToken,
       'POST',
-      `/sell/inventory/v1/location/${encodeURIComponent(
-        locationKey
-      )}`,
+      `/sell/inventory/v1/location/${encodeURIComponent(locationKey)}`,
       {
-        location: {
-          address: {
-            country:
-              countryCode.toUpperCase(),
-
-            postalCode,
-          },
-        },
-
-        name:
-          `ELMS custom location (${postalCode}, ${countryCode.toUpperCase()})`,
-
-        merchantLocationStatus:
-          'ENABLED',
-
-        locationTypes: [
-          'WAREHOUSE',
-        ],
+        location: { address },
+        name: `ELMS location (${fullCode}, ${country})`,
+        merchantLocationStatus: 'ENABLED',
+        locationTypes: ['WAREHOUSE'],
       }
     );
   } catch (err) {
-    // eBay returns a 409-style "already exists" style error if this
-    // location key was already created in a previous call - that's fine,
-    // we just reuse it. Any other error should still surface.
-
+    // eBay answers 409 / "already exists" when this key was created before -
+    // that is fine, the existing location is reused. Anything else surfaces.
     const alreadyExists =
       err.statusCode === 409 ||
-      /already exists/i.test(
-        err.message || ''
-      );
-
-    if (!alreadyExists) {
-      throw err;
-    }
+      /already exists/i.test(err.message || '');
+    if (!alreadyExists) throw err;
   }
 
   return locationKey;

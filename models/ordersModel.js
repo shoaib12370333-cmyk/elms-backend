@@ -14,7 +14,8 @@ const Import = require('./schemas/Import');
  */
 async function upsertOrder(userId, orderLineItem, ebayAccountId) {
   const listing = orderLineItem.sku
-    ? await Listing.findOne({ userId, sku: orderLineItem.sku })
+    ? ((ebayAccountId && await Listing.findOne({ userId, sku: orderLineItem.sku, ebayAccountId }))
+        || await Listing.findOne({ userId, sku: orderLineItem.sku }))
     : null;
 
   const fields = {

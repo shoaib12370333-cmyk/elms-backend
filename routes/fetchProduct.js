@@ -32,7 +32,7 @@ async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
       }
     }
 
-    const importRecord = await createImport(userId, product, suggestedPrice, amazonUrl);
+    const importRecord = await createImport(userId, product, suggestedPrice, amazonUrl, activeEbayAccount?.id || null);
     product.images = product.images?.length
       ? await materializeImageUrls({ urls: product.images, userId, listingId: importRecord.id, req })
       : [];

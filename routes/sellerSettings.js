@@ -171,6 +171,16 @@ router.put('/', requireAuth, async (req, res) => {
     }
   }
 
+  if (updates.customPostalCode && (updates.customCountryCode || updates.productLocationMode === 'custom')) {
+    const { resolveLocation } = require('../services/postalGeneratorService');
+    const cc = updates.customCountryCode || 'US';
+    const loc = await resolveLocation(cc, updates.customPostalCode).catch(() => null);
+    if (loc && !loc.complete) {
+      return res.status(400).json({ success: false, error: `"${updates.customPostalCode}" is not a full postal code for ${cc}. Use the full code (UK example: SW1A 1AA) or press Generate.` });
+    }
+    if (loc?.postalCode) updates.customPostalCode = loc.postalCode;
+  }
+
   const settings = await updateEbayAccountSettings(req.userId, accountId, updates);
   if (!settings) {
     return res.status(404).json({ success: false, error: 'That eBay account was not found.' });

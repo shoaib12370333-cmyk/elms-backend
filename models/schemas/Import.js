@@ -10,6 +10,7 @@ const importSchema = new mongoose.Schema(
     currency: { type: String, default: 'USD' },
     mainImage: { type: String, default: null },
     product: { type: mongoose.Schema.Types.Mixed, required: true }, // full normalized product object
+    ebayAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'EbayAccount', default: null, index: true },
     suggestedPrice: { type: Number, default: null },
   },
   { timestamps: { createdAt: 'createdAt', updatedAt: false } }

@@ -9,7 +9,7 @@ const { requireAuth } = require('../middleware/requireAuth');
  * Returns the current user's recent history of Amazon products fetched.
  */
 router.get('/', requireAuth, async (req, res) => {
-  const imports = await listImports(req.userId);
+  const imports = await listImports(req.userId, 50, req.query.accountId || null);
   res.json({ success: true, imports });
 });
 

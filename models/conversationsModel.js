@@ -62,8 +62,8 @@ async function listConversations(userId, accountId, options = {}) {
  * Returns how many of a user's conversations (across all accounts) are
  * unread - powers the notification bell's badge count.
  */
-async function countUnreadConversations(userId) {
-  return Conversation.countDocuments({ userId, isRead: false });
+async function countUnreadConversations(userId, accountId = null) {
+  return Conversation.countDocuments({ userId, isRead: false, ...(accountId ? { ebayAccountId: accountId } : {}) });
 }
 
 async function getConversationById(userId, id) {

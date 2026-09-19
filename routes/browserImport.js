@@ -139,7 +139,7 @@ router.post('/', requireAuth, async (req, res) => {
     let importRecord;
     let draft;
     try {
-      importRecord = await createImport(req.userId, normalized, suggestedPrice, amazonUrl.trim());
+      importRecord = await createImport(req.userId, normalized, suggestedPrice, amazonUrl.trim(), activeEbayAccount?.id || null);
       const storedImages = normalized.images.length
         ? await materializeImageUrls({ urls: normalized.images, userId: req.userId, listingId: importRecord.id, req })
         : [];

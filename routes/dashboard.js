@@ -10,19 +10,23 @@ const { countUnreadConversations } = require('../models/conversationsModel');
 
 router.get('/', requireAuth, async (req, res) => {
   const userId = req.userId;
+  const acc = req.query.accountId ? { ebayAccountId: req.query.accountId } : {};
+  const importIds = req.query.accountId
+    ? (await Listing.find({ userId, ...acc, importId: { $ne: null } }, { importId: 1 }).lean()).map((l) => l.importId)
+    : null;
   const [user, drafts, queued, published, errors, imports, orders, unreadSystem, unreadMessages] = await Promise.all([
     User.findById(userId).lean(),
-    Listing.countDocuments({ userId, status: 'draft' }),
-    Listing.countDocuments({ userId, status: 'publishing' }),
-    Listing.countDocuments({ userId, status: 'published' }),
-    Listing.countDocuments({ userId, status: 'error' }),
-    Import.countDocuments({ userId }),
-    Order.countDocuments({ userId }),
-    countUnreadSystemNotifications(userId),
-    countUnreadConversations(userId),
+    Listing.countDocuments({ userId, ...acc, status: 'draft' }),
+    Listing.countDocuments({ userId, ...acc, status: 'publishing' }),
+    Listing.countDocuments({ userId, ...acc, status: 'published' }),
+    Listing.countDocuments({ userId, ...acc, status: 'error' }),
+    Import.countDocuments(importIds ? { userId, _id: { $in: importIds } } : { userId }),
+    Order.countDocuments({ userId, ...acc }),
+    countUnreadSystemNotifications(userId, req.query.accountId || null),
+    countUnreadConversations(userId, req.query.accountId || null),
   ]);
 
-  const recent = await Listing.find({ userId, status: { $in: ['published', 'error', 'publishing'] } })
+  const recent = await Listing.find({ userId, ...acc, status: { $in: ['published', 'error', 'publishing'] } })
     .sort({ updatedAt: -1 }).limit(8).lean();
 
   res.json({ success: true, stats: {

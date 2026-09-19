@@ -26,7 +26,7 @@ const { syncConversationsForUser } = require('../jobs/conversationSync');
  * are unread - powers the notification bell's badge number.
  */
 router.get('/unread-count', requireAuth, async (req, res) => {
-  const count = await countUnreadConversations(req.userId);
+  const count = await countUnreadConversations(req.userId, req.query.accountId || null);
   res.json({ success: true, count });
 });
 
