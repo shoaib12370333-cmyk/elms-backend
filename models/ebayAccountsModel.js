@@ -115,12 +115,36 @@ async function setActiveEbayAccount(userId, accountId) {
   return serialize(account);
 }
 
+async function purgeStoreData(userId, accountId) {
+  const Listing = require('./schemas/Listing');
+  const Order = require('./schemas/Order');
+  const Conversation = require('./schemas/Conversation');
+  const Message = require('./schemas/Message');
+  const Import = require('./schemas/Import');
+  const SystemNotification = require('./schemas/SystemNotification');
+  const listings = await Listing.find({ userId, ebayAccountId: accountId }, { _id: 1, importId: 1 }).lean();
+  const listingIds = listings.map((l) => l._id);
+  const importIds = listings.map((l) => l.importId).filter(Boolean);
+  await Promise.all([
+    Listing.deleteMany({ userId, ebayAccountId: accountId }),
+    Order.deleteMany({ userId, ebayAccountId: accountId }),
+    Message.deleteMany({ userId, ebayAccountId: accountId }),
+    Conversation.deleteMany({ userId, ebayAccountId: accountId }),
+    Import.deleteMany({ userId, $or: [{ ebayAccountId: accountId }, { _id: { $in: importIds } }] }),
+    SystemNotification.deleteMany({ userId, $or: [{ ebayAccountId: accountId }, { listingId: { $in: listingIds } }] }),
+  ]);
+}
+
 /**
- * Disconnects (removes) one of a user's eBay accounts.
+ * Disconnects (removes) one of a user's eBay accounts and deletes the data ELMS kept for it.
  */
 async function removeEbayAccount(userId, accountId) {
   const doc = await EbayAccount.findOneAndDelete({ _id: accountId, userId });
   if (!doc) return false;
+
+  // Everything ELMS stored for this store goes with it (the live eBay listings
+  // themselves are untouched): listings/drafts, orders, messages, notifications, imports.
+  await purgeStoreData(userId, doc._id);
 
   // If the removed account was the active one, promote another connected
   // account (if any) to active so the sidebar always has a sensible default.
