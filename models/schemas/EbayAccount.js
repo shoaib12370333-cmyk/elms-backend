@@ -41,6 +41,9 @@ const ebayAccountSchema = new mongoose.Schema(
 
     // Last successful eBay Message API sync. Used to request only recent
     // conversations instead of paging through the entire mailbox every run.
+    // Set once the first-connect import (orders, messages, policies) has run, so it never repeats.
+    initialSyncedAt: { type: Date, default: null },
+
     lastConversationSyncAt: { type: Date, default: null },
   },
   { timestamps: true }

@@ -4,6 +4,7 @@ const { buildAuthorizationUrl, exchangeCodeForToken } = require('../services/eba
 const { fetchBusinessPolicies } = require('../services/ebayListingService');
 const { fetchEbayUsername } = require('../services/ebayIdentityService');
 const { syncConversationsForUser } = require('../jobs/conversationSync');
+const { runInitialSync } = require('../services/initialSyncService');
 const { addEbayAccount, updateEbayAccountSettings, removeEbayAccount, getEbayAccountById, getAccountLimitStatus } = require('../models/ebayAccountsModel');
 const { issueEbayConnectState, verifyEbayConnectState, verifySessionToken } = require('../services/sessionService');
 const { requireAuth } = require('../middleware/requireAuth');
@@ -117,13 +118,12 @@ router.get('/callback', async (req, res) => {
       console.warn('Could not auto-fetch business policies after connect:', policyErr.message);
     }
 
-    // Start the initial message import automatically after the store is
-    // connected. It runs in the background so OAuth completion is not delayed
-    // by a large mailbox; the Messages page reads the cached results.
-    syncConversationsForUser(userId, account.id).then((result) => {
-      console.log(`[ebay-connect] Initial message sync complete for ${account.ebayUserId}: ${result.conversations} conversation(s).`);
+    // One-time import in the background (orders from the last 90 days + the message inbox) so the
+    // store is not empty after connecting. Runs once per store; later syncs are handled by the jobs.
+    runInitialSync(userId, account).then((result) => {
+      if (!result.skipped) console.log(`[ebay-connect] Initial import complete for ${account.ebayUserId}: ${result.orders} order(s), ${result.conversations} conversation(s).`);
     }).catch((syncErr) => {
-      console.warn(`[ebay-connect] Initial message sync failed for ${account.ebayUserId}: ${syncErr.message}`);
+      console.warn(`[ebay-connect] Initial import failed for ${account.ebayUserId}: ${syncErr.message}`);
     });
 
     res.redirect(`${frontendUrl}?ebayConnect=success`);

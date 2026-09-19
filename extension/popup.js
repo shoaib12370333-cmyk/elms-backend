@@ -77,7 +77,8 @@ function renderPreview(product) {
   const p=$('preview');
   if(!product){p.classList.add('hidden');return;}
   p.classList.remove('hidden');
-  p.innerHTML=`<strong>${escapeHtml(product.title||'Product')}</strong><div class="stats">${product.images?.length||0} product images · ${product.specifications?.length||0} specs</div>`;
+  const thumb=product.images?.[0]?`<img src="${escapeHtml(product.images[0])}" alt="">`:'';
+  p.innerHTML=`${thumb}<div><strong>${escapeHtml(product.title||'Product')}</strong><div class="stats">${product.images?.length||0} images · ${product.specifications?.length||0} specs${product.price!=null?` · ${escapeHtml(Number(product.price).toFixed(2))}`:''}</div></div>`;
 }
 function escapeHtml(s){return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 

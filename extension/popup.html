@@ -5,27 +5,76 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ELMS Amazon Importer</title>
 <style>
-:root{--navy:#101828;--blue:#2563eb;--indigo:#4f46e5;--cyan:#06b6d4;--muted:#667085;--line:#d9e2ef;--bg:#f5f8fc}
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;width:350px;margin:0;padding:0;background:var(--bg);color:#101828}.header{padding:18px 18px 16px;background:linear-gradient(135deg,#2563eb 0%,#4f46e5 58%,#06b6d4 100%);color:#fff}.brand{display:flex;align-items:center;gap:10px}.brand-mark{width:36px;height:36px;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,.16)}.brand-mark img{width:29px;height:29px;object-fit:contain}.brand-title{font-size:19px;font-weight:800}.header p{margin:7px 0 0;font-size:12px;line-height:1.4;opacity:.92}.body{padding:16px 15px 18px}.field{margin:0 0 13px}label{display:block;font-size:12px;font-weight:800;margin:0 0 6px;color:#182230}input{width:100%;padding:11px 12px;border:1px solid #cfd8e6;border-radius:9px;background:#fff;color:#101828;outline:none}input:focus{border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,.12)}button{width:100%;padding:11px 12px;border:0;border-radius:9px;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;font-weight:800;font-size:14px;cursor:pointer;margin-top:8px;box-shadow:0 5px 14px rgba(37,99,235,.18)}button:hover{filter:brightness(1.03)}button:disabled{opacity:.6;cursor:wait;box-shadow:none}.disconnect{background:#fff;color:#b42318;border:1px solid #f0b9b3;box-shadow:none}.secondary{background:#eef2f7;color:#182230;box-shadow:none}.register-line{margin:11px 0 2px;text-align:center;font-size:12px;color:var(--muted)}.register-line a{color:#2563eb;font-weight:800;text-decoration:none}.connection-card{padding:13px;border:1px solid #b7e4d3;border-radius:12px;background:linear-gradient(180deg,#f0fdf7,#fff);margin-bottom:13px}.connection-top{display:flex;align-items:center;gap:9px}.check{width:28px;height:28px;border-radius:50%;background:#d1fae5;color:#047857;display:flex;align-items:center;justify-content:center;font-weight:900}.connected-label{font-size:12px;color:#047857;font-weight:800}.username{font-size:15px;font-weight:800;margin-top:2px;color:#101828;word-break:break-word}.email{font-size:11px;color:#667085;margin-top:2px;word-break:break-word}.preview{margin-top:12px;padding:11px;background:#fff;border:1px solid var(--line);border-radius:10px;font-size:12px;line-height:1.4}.stats{color:#667085;margin-top:4px}.status{margin-top:11px;font-size:12px;line-height:1.45;white-space:pre-wrap}.connected-text{color:#047857;font-weight:800}.notconnected{color:#b42318;font-weight:700}.hidden{display:none!important}.divider{margin:14px 0 8px;font-size:10px;color:#98a2b3;text-align:center;text-transform:uppercase;letter-spacing:.08em}.footer{font-size:10px;color:#98a2b3;text-align:center;margin-top:12px}
+:root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--bg:#f5f7fb;--blue:#0064d2;--red:#e53238;--yellow:#f5af02;--green:#86b817}
+*{box-sizing:border-box}
+body{width:360px;margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 Inter,-apple-system,"Segoe UI",Arial,sans-serif}
+.header{position:relative;padding:18px 18px 16px;background:linear-gradient(135deg,#0f172a 0%,#172554 100%);color:#fff}
+.header::after{content:"";position:absolute;left:0;right:0;bottom:0;height:4px;background:linear-gradient(90deg,var(--red) 0 25%,var(--blue) 25% 50%,var(--yellow) 50% 75%,var(--green) 75%)}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-mark{width:40px;height:40px;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;flex:none}
+.brand-mark img{width:32px;height:32px;object-fit:contain}
+.brand-title{font-size:16px;font-weight:800;letter-spacing:-.01em}
+.brand-sub{font-size:11.5px;opacity:.75;margin-top:1px}
+.body{padding:14px 14px 16px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 4px 14px rgba(15,23,42,.04)}
+.field{margin:0 0 12px}.field:last-child{margin-bottom:0}
+label{display:block;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin:0 0 6px}
+input{width:100%;height:40px;padding:0 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit;outline:none;transition:border-color .15s,box-shadow .15s}
+input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,100,210,.14)}
+button{width:100%;height:42px;border:0;border-radius:11px;background:var(--blue);color:#fff;font:inherit;font-weight:800;font-size:13.5px;cursor:pointer;transition:background .15s,transform .05s;display:flex;align-items:center;justify-content:center;gap:8px}
+button:hover{background:#0055b3}button:active{transform:translateY(1px)}
+button:disabled{opacity:.6;cursor:wait}
+.import-btn{height:46px;font-size:14.5px;background:linear-gradient(135deg,#0064d2,#4f46e5);box-shadow:0 8px 18px rgba(0,100,210,.25)}
+.disconnect{background:#fff;color:#b91c1c;border:1.5px solid #fca5a5;height:36px;font-size:12.5px;margin-top:10px}
+.disconnect:hover{background:#fef2f2}
+.register-line{margin:12px 0 0;text-align:center;font-size:12px;color:var(--muted)}
+.register-line a{color:var(--blue);font-weight:800;text-decoration:none}
+.connection{display:flex;align-items:center;gap:12px}
+.check{width:38px;height:38px;border-radius:50%;background:#ecfccb;color:#4d7c0f;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:16px;flex:none}
+.connected-label{font-size:10.5px;font-weight:800;letter-spacing:.06em;color:#4d7c0f}
+.username{font-size:15px;font-weight:800;margin-top:1px;word-break:break-word}
+.email{font-size:11.5px;color:var(--muted);word-break:break-word}
+.steps{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.steps li{display:flex;gap:10px;align-items:flex-start;color:#475569;font-size:12.5px}
+.steps b{flex:none;width:20px;height:20px;border-radius:50%;background:#e8f1fd;color:var(--blue);display:grid;place-items:center;font-size:11px}
+.preview{display:flex;gap:11px;align-items:center;margin-top:12px;padding:10px;background:#fff;border:1px solid var(--line);border-radius:12px}
+.preview img{width:52px;height:52px;object-fit:contain;border-radius:8px;background:#f1f5f9;flex:none}
+.preview strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12.5px}
+.stats{color:var(--muted);margin-top:3px;font-size:11.5px}
+.status{margin-top:12px;font-size:12.5px;line-height:1.5;white-space:pre-wrap}
+.status:empty{display:none}
+.connected-text{color:#4d7c0f;font-weight:800}
+.notconnected{color:#b91c1c;font-weight:800}
+.hidden{display:none!important}
+.footer{font-size:11px;color:#94a3b8;text-align:center;margin-top:12px}
 </style>
 </head>
 <body>
-<div class="header"><div class="brand"><div class="brand-mark"><img src="logo.png" alt="ELMS"></div><div class="brand-title">ELMS Amazon Importer</div></div><p>Import the product currently open on Amazon directly into your ELMS Drafts.</p></div>
+<div class="header"><div class="brand"><div class="brand-mark"><img src="logo.png" alt="ELMS"></div><div><div class="brand-title">ELMS Amazon Importer</div><div class="brand-sub">Amazon product &rarr; ELMS draft in one click</div></div></div></div>
 <div class="body">
-  <div id="connectedCard" class="connection-card hidden">
-    <div class="connection-top"><div class="check">✓</div><div><div class="connected-label">CONNECTED SUCCESSFULLY</div><div id="connectedUsername" class="username">ELMS Account</div><div id="connectedEmail" class="email"></div></div></div>
+  <div id="connectedCard" class="card hidden">
+    <div class="connection"><div class="check">&#10003;</div><div><div class="connected-label">CONNECTED</div><div id="connectedUsername" class="username">ELMS Account</div><div id="connectedEmail" class="email"></div></div></div>
+    <button id="disconnect" class="disconnect hidden">Disconnect ELMS</button>
   </div>
-  <div id="keySection">
+  <div id="keySection" class="card">
     <div class="field"><label>ELMS Extension Key</label><input id="extensionKey" type="password" autocomplete="off" placeholder="Paste your ELMS Extension Key"></div>
     <button id="connect">Connect ELMS Account</button>
-    <div class="register-line">Don’t have an ELMS account? <a id="registerLink" href="#">Register now</a></div>
+    <div class="register-line">Don&rsquo;t have an ELMS account? <a id="registerLink" href="#">Register now</a></div>
   </div>
-  <div class="field"><label>Markup % (optional)</label><input id="markup" type="number" step="0.01" min="0" placeholder="0"></div>
-  <button id="disconnect" class="disconnect hidden">Disconnect ELMS</button>
-  <button id="import">Import current Amazon product</button>
-  <div id="preview" class="preview hidden"></div>
-  <div id="status" class="status"></div>
-  <div class="footer">ELMS • Amazon → eBay Drafts</div>
+  <div class="card">
+    <div class="field"><label>Markup % (optional)</label><input id="markup" type="number" step="0.01" min="0" placeholder="0"></div>
+    <button id="import" class="import-btn">Import current Amazon product</button>
+    <div id="preview" class="preview hidden"></div>
+    <div id="status" class="status"></div>
+  </div>
+  <div class="card">
+    <ul class="steps">
+      <li><b>1</b><span>Open an Amazon product page.</span></li>
+      <li><b>2</b><span>Press the button above, or the ELMS button on the page.</span></li>
+      <li><b>3</b><span>Find the draft in <strong>ELMS &rarr; Drafts</strong>, review it and publish.</span></li>
+    </ul>
+  </div>
+  <div class="footer">ELMS &middot; Amazon &rarr; eBay</div>
 </div>
 <script src="popup.js"></script>
 </body>

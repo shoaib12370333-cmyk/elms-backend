@@ -40,6 +40,8 @@ const ACTION_COSTS = {
   BESTSELLER_EXPLORER: 1, // browsing a category's top-ranked products
   CATEGORY_FINDER: 1, // finding which categories a product belongs to
   LISTING_GRADER: 1, // scoring a listing's title/bullets/images/reviews
+  AI_TITLE: 1, // AI-written eBay title (Claude)
+  AI_DESCRIPTION: 1, // AI-written eBay description (Claude)
   IMAGE_EXTRACTOR: 0, // pulling a product's images - FREE (images are already included in every product fetch)
 };
 
@@ -71,6 +73,8 @@ const ACTION_COST_METADATA = [
   { key: 'BESTSELLER_EXPLORER', label: 'Bestseller Explorer', usesCanopy: true, description: 'Browsing a category’s top-ranked products.' },
   { key: 'CATEGORY_FINDER', label: 'Category Finder', usesCanopy: true, description: 'Finding which categories a product belongs to.' },
   { key: 'LISTING_GRADER', label: 'Listing Grader', usesCanopy: true, description: 'Scoring a listing’s title/bullets/images/reviews.' },
+  { key: 'AI_TITLE', label: 'AI title', usesCanopy: false, usesAi: true, description: 'One AI-written eBay title (80 characters max) in the listing editor.' },
+  { key: 'AI_DESCRIPTION', label: 'AI description', usesCanopy: false, usesAi: true, description: 'One AI-written eBay listing description in the listing editor.' },
   { key: 'IMAGE_EXTRACTOR', label: 'Image Extractor', usesCanopy: false, description: 'Pulling a product’s images - free, they’re already included in every product fetch.' },
 ];
 
