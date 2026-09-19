@@ -525,16 +525,20 @@
     const shadow = host.attachShadow({mode:'closed'});
     const style = document.createElement('style');
     style.textContent = `
-      .wrap{position:relative;width:58px;height:58px;font-family:Arial,sans-serif}
-      button{width:58px;height:58px;border:0;border-radius:16px;padding:7px;background:#241f30;box-shadow:0 7px 24px rgba(0,0,0,.28);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .16s,box-shadow .16s}
-      button:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(0,0,0,.35)}
+      .wrap{position:relative;width:58px;height:58px;font-family:Inter,-apple-system,"Segoe UI",Arial,sans-serif}
+      button{position:relative;width:58px;height:58px;border:0;border-radius:18px;padding:8px;background:linear-gradient(145deg,#0f172a,#172554);box-shadow:0 8px 26px rgba(15,23,42,.35),0 0 0 3px rgba(255,255,255,.9);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .16s,box-shadow .16s}
+      button::after{content:"";position:absolute;left:10px;right:10px;bottom:-3px;height:3px;border-radius:3px;background:linear-gradient(90deg,#e53238 0 25%,#0064d2 25% 50%,#f5af02 50% 75%,#86b817 75%)}
+      button:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(15,23,42,.42),0 0 0 3px #fff}
       button:active{transform:scale(.96)}
-      button[disabled]{cursor:wait;opacity:.82}
+      button[disabled]{cursor:wait;opacity:.85}
+      button[disabled] img{animation:pulse 1s ease-in-out infinite}
+      @keyframes pulse{50%{opacity:.45;transform:scale(.92)}}
       img{width:100%;height:100%;object-fit:contain;border-radius:11px;display:block}
-      .dot{position:absolute;right:-2px;top:-2px;width:13px;height:13px;border-radius:50%;background:#22c55e;border:2px solid #fff;box-sizing:border-box;display:none}
-      .toast{position:absolute;right:68px;bottom:2px;min-width:210px;max-width:290px;padding:10px 12px;border-radius:10px;background:#18151f;color:#fff;font-size:12px;line-height:1.35;box-shadow:0 8px 25px rgba(0,0,0,.25);display:none}
-      .toast.show{display:block}
-      .toast.ok{background:#065f46}.toast.err{background:#7f1d1d}.toast.busy{background:#312e81}
+      .dot{position:absolute;right:-3px;top:-3px;width:14px;height:14px;border-radius:50%;background:#86b817;border:2px solid #fff;box-sizing:border-box;display:none}
+      .toast{position:absolute;right:70px;bottom:0;min-width:220px;max-width:300px;padding:11px 14px;border-radius:12px;background:#0f172a;color:#fff;font-size:12.5px;line-height:1.4;white-space:pre-line;box-shadow:0 12px 30px rgba(15,23,42,.3);border-left:4px solid #0064d2;display:none}
+      .toast.show{display:block;animation:in .18s ease-out}
+      @keyframes in{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:none}}
+      .toast.ok{border-left-color:#86b817}.toast.err{border-left-color:#e53238;background:#2a1216}.toast.busy{border-left-color:#f5af02}
     `;
     const wrap = document.createElement('div'); wrap.className='wrap';
     const button = document.createElement('button'); button.type='button'; button.title='Import this Amazon product to ELMS';
