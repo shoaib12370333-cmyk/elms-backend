@@ -75,7 +75,7 @@ async function ebayRequest(refreshToken, method, path, body, options = {}) {
 
     const message =
       ebayErrors && ebayErrors.length
-        ? ebayErrors.map((e) => e.message).join('; ')
+        ? ebayErrors.map((e) => (e.errorId ? `${e.message} (eBay error ${e.errorId})` : e.message)).join('; ')
         : err.message || 'The eBay API request failed.';
 
     const wrapped = new Error(message);
@@ -1287,6 +1287,7 @@ function buildAspects(product) {
 
 module.exports = {
   publishListing,
+  buildAspects,
   publishExistingOffer,
   deleteOffer,
   withdrawListing,
