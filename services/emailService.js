@@ -2,6 +2,47 @@ const nodemailer = require('nodemailer');
 
 let transporters = new Map();
 
+// Sender identities. Each falls back to SMTP_FROM (then SMTP_USER) when its own
+// variable is not set, so nothing breaks before the extra mailboxes exist.
+//   noreply  - automatic mails (password reset OTP, welcome)
+//   support  - help mails; also the Reply-To of every automatic mail
+//   billing  - receipts, payment problems, refunds
+//   security - login / password / device alerts
+//   admin    - mails to the owner
+const SENDERS = {
+  noreply: { env: 'SMTP_FROM', label: '' },
+  support: { env: 'SMTP_FROM_SUPPORT', label: 'Support' },
+  billing: { env: 'SMTP_FROM_BILLING', label: 'Billing' },
+  security: { env: 'SMTP_FROM_SECURITY', label: 'Security' },
+  admin: { env: 'SMTP_FROM_ADMIN', label: '' },
+};
+
+function senderAddress(kind) {
+  const def = SENDERS[kind] || SENDERS.noreply;
+  return String(process.env[def.env] || process.env.SMTP_FROM || process.env.SMTP_USER || '').trim();
+}
+
+function fromHeader(kind) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const def = SENDERS[kind] || SENDERS.noreply;
+  const name = def.label ? appName + ' ' + def.label : appName;
+  return '"' + name + '" <' + senderAddress(kind) + '>';
+}
+
+// Automatic mails should send replies to support, unless support is the sender.
+function replyToFor(kind) {
+  if (kind === 'support') return undefined;
+  const support = String(process.env.SMTP_FROM_SUPPORT || '').trim();
+  return support && support !== senderAddress(kind) ? support : undefined;
+}
+
+function withSender(message, kind) {
+  const out = Object.assign({}, message, { from: fromHeader(kind) });
+  const replyTo = replyToFor(kind);
+  if (replyTo) out.replyTo = replyTo;
+  return out;
+}
+
 function buildTransporter(port) {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
@@ -47,10 +88,9 @@ async function sendWithTimeout(tx, message, timeoutMs = 20000) {
 }
 
 async function sendPasswordResetOtp({ to, code }) {
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
   const appName = process.env.APP_NAME || 'ELMS';
   const message = {
-    from: `"${appName}" <${from}>`,
+    ...withSender({}, 'noreply'),
     to,
     subject: `${appName} password reset code`,
     text: `Your ${appName} password reset code is ${code}. It expires in 10 minutes. If you did not request this, you can ignore this email.`,
@@ -90,12 +130,12 @@ async function verifyEmailTransport() {
 }
 
 
-function buildSecurityMessage({ to, subject, title, paragraphs }) {
+function buildSecurityMessage({ to, subject, title, paragraphs, kind = 'security' }) {
   const appName = process.env.APP_NAME || 'ELMS';
   const safe = (value) => String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const htmlParagraphs = paragraphs.map((p) => `<p style="margin:0 0 14px;line-height:1.55">${safe(p)}</p>`).join('');
   return {
-    from: `"${appName} Support" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+    ...withSender({}, kind),
     to,
     subject,
     text: `${title}\n\n${paragraphs.join('\n\n')}\n\nRegards,\n${appName} Support Team`,
@@ -103,8 +143,8 @@ function buildSecurityMessage({ to, subject, title, paragraphs }) {
   };
 }
 
-async function sendSecurityEmail({ to, subject, title, paragraphs }) {
-  const message = buildSecurityMessage({ to, subject, title, paragraphs });
+async function sendSecurityEmail({ to, subject, title, paragraphs, kind }) {
+  const message = buildSecurityMessage({ to, subject, title, paragraphs, kind });
   const configuredPort = Number(process.env.SMTP_PORT || 465);
   const ports = configuredPort === 587 ? [587, 465] : configuredPort === 465 ? [465, 587] : [configuredPort];
   let lastError;
@@ -184,4 +224,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
