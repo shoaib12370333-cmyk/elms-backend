@@ -34,6 +34,8 @@ const userSchema = new mongoose.Schema(
     // Security: tokens issued before this moment are rejected ("log out everywhere"), and the new-device email switch.
     sessionsValidFrom: { type: Date, default: null },
     notifyNewDevice: { type: Boolean, default: true },
+    // Announcement mails (product news). Users can switch them off with the unsubscribe link in every mail.
+    marketingOptOut: { type: Boolean, default: false },
     aiReplyMode: { type: String, enum: ['off', 'draft', 'auto'], default: 'off' },
     aiReplyEnabledAt: { type: Date, default: null },
 

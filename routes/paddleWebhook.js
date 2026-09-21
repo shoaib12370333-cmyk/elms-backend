@@ -73,6 +73,17 @@ router.post('/', async (req, res) => {
         // purchase is null if this transaction ID was already recorded -
         // meaning we've already credited this user for it, so skip re-crediting.
         await addCredits(elmsUserId, creditsGranted);
+        try {
+          const { getUserById } = require('../models/usersModel');
+          const { sendPurchaseReceiptEmail, sendAdminAlert } = require('../services/emailService');
+          const buyer = await getUserById(elmsUserId);
+          if (buyer && buyer.email) {
+            sendPurchaseReceiptEmail({ to: buyer.email, credits: creditsGranted, priceUsd, transactionId: transaction.id }).catch((e) => console.warn('receipt email failed:', e.message));
+            sendAdminAlert({ subject: 'New payment: $' + Number(priceUsd).toFixed(2), lines: ['User: ' + buyer.email, 'Credits: ' + creditsGranted, 'Amount: $' + Number(priceUsd).toFixed(2), 'Transaction: ' + transaction.id] }).catch(() => {});
+          }
+        } catch (mailErr) {
+          console.warn('paddle webhook: email step failed:', mailErr.message);
+        }
         console.log(`paddle webhook: credited ${creditsGranted} credits to user ${elmsUserId} for transaction ${transaction.id}.`);
       }
     }

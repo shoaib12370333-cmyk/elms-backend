@@ -130,6 +130,98 @@ async function verifyEmailTransport() {
 }
 
 
+const esc = (value) => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Sends one prepared message from the given identity, trying the configured port then the alternate one.
+async function sendFrom(kind, message, label) {
+  const configuredPort = Number(process.env.SMTP_PORT || 587);
+  const ports = configuredPort === 587 ? [587, 465] : configuredPort === 465 ? [465, 587] : [configuredPort];
+  const full = withSender(message, kind);
+  let lastError;
+  for (const port of ports) {
+    try {
+      const info = await sendWithTimeout(getTransporter(port), full);
+      console.log(label + ' email accepted by SMTP on port ' + port + ' -> ' + full.to);
+      return info;
+    } catch (err) {
+      lastError = err;
+      console.error(label + ' SMTP send failed on port ' + port + ':', err.message);
+    }
+  }
+  throw lastError || new Error('SMTP send failed.');
+}
+
+function frontendUrl(path) {
+  const base = String(process.env.FRONTEND_URL || 'https://elmstool.com').replace(/\/$/, '');
+  return base + (path || '');
+}
+
+function wrapHtml(title, bodyHtml, footerHtml) {
+  return '<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937"><h2 style="margin:0 0 14px">' + esc(title) + '</h2>' + bodyHtml + (footerHtml || '') + '</div>';
+}
+
+function paragraphsHtml(text) {
+  return String(text || '').split(/\n{2,}/).map((p) => '<p style="margin:0 0 14px;line-height:1.55">' + esc(p).replace(/\n/g, '<br>') + '</p>').join('');
+}
+
+async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, when }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const lines = [
+    'Thank you for your purchase.',
+    'Credits added: ' + Number(credits).toLocaleString('en-US'),
+    'Amount paid: $' + Number(priceUsd || 0).toFixed(2),
+    'Date: ' + new Date(when || Date.now()).toUTCString(),
+    'Reference: ' + transactionId,
+    'Your credits are available in your account now. Payments are processed by Paddle, who will also send you their own receipt.',
+    'Questions about this payment? Reply to this email.',
+  ];
+  return sendFrom('billing', {
+    to,
+    subject: appName + ' receipt: ' + Number(credits).toLocaleString('en-US') + ' credits',
+    text: lines.join('\n\n'),
+    html: wrapHtml(appName + ' receipt', paragraphsHtml(lines.join('\n\n'))),
+  }, 'Receipt');
+}
+
+async function sendTicketReplyEmail({ to, subject, reply }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const text = 'Your support request "' + subject + '" has been answered:\n\n' + reply + '\n\nYou can reply to this email if you need more help.';
+  return sendFrom('support', {
+    to,
+    subject: 'Re: ' + subject,
+    text,
+    html: wrapHtml(appName + ' Support', paragraphsHtml(text)),
+  }, 'Ticket reply');
+}
+
+// Alert to the owner. Goes to ADMIN_ALERT_EMAIL, or to the admin sender address itself.
+async function sendAdminAlert({ subject, lines }) {
+  const to = String(process.env.ADMIN_ALERT_EMAIL || senderAddress('admin') || '').trim();
+  if (!to) return null;
+  const appName = process.env.APP_NAME || 'ELMS';
+  const text = lines.join('\n');
+  return sendFrom('admin', {
+    to,
+    subject: '[' + appName + '] ' + subject,
+    text,
+    html: wrapHtml(subject, paragraphsHtml(text)),
+  }, 'Admin alert');
+}
+
+async function sendAnnouncementEmail({ to, subject, body, unsubscribeUrl, listUnsubscribe = true }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const footerText = '\n\n--\nYou get this because you have an ' + appName + ' account. Unsubscribe: ' + unsubscribeUrl;
+  const footerHtml = '<p style="margin-top:28px;font-size:12px;color:#6b7280">You get this because you have an ' + esc(appName) + ' account. <a href="' + esc(unsubscribeUrl) + '">Unsubscribe</a></p>';
+  const message = {
+    to,
+    subject,
+    text: body + footerText,
+    html: wrapHtml(subject, paragraphsHtml(body), footerHtml),
+  };
+  if (listUnsubscribe) message.headers = { 'List-Unsubscribe': '<' + unsubscribeUrl + '>' };
+  return sendFrom('support', message, 'Announcement');
+}
+
 function buildSecurityMessage({ to, subject, title, paragraphs, kind = 'security' }) {
   const appName = process.env.APP_NAME || 'ELMS';
   const safe = (value) => String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -224,4 +316,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { frontendUrl, sendPurchaseReceiptEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };

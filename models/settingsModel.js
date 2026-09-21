@@ -119,6 +119,29 @@ async function updateAiSettings(input = {}) {
   return serializeAi(doc.toObject());
 }
 
+const LIMIT_DEFAULTS = { bulkImportMax: 25, mailBatchSize: 20, mailDailyCap: 200 };
+const LIMIT_RANGES = { bulkImportMax: [1, 50], mailBatchSize: [1, 100], mailDailyCap: [1, 100000] };
+
+async function getLimits() {
+  const doc = await Settings.findOne({ key: 'global' }).lean();
+  const out = {};
+  for (const k of Object.keys(LIMIT_DEFAULTS)) out[k] = Number(doc && doc[k]) || LIMIT_DEFAULTS[k];
+  return out;
+}
+
+async function updateLimits(input = {}) {
+  const update = {};
+  for (const k of Object.keys(LIMIT_DEFAULTS)) {
+    if (input[k] === undefined) continue;
+    const n = Math.floor(Number(input[k]));
+    const [lo, hi] = LIMIT_RANGES[k];
+    if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(k + ' must be a number between ' + lo + ' and ' + hi + '.');
+    update[k] = n;
+  }
+  await Settings.findOneAndUpdate({ key: 'global' }, update, { new: true, upsert: true });
+  return getLimits();
+}
+
 function serialize(doc) {
   const obj = doc.toObject();
   return {
@@ -240,4 +263,6 @@ module.exports = {
   applyActionCostOverridesOnStartup,
   getAiSettings,
   updateAiSettings,
+  getLimits,
+  updateLimits,
 };

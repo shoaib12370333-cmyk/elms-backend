@@ -37,6 +37,7 @@ const { startScheduledPublisher } = require('./jobs/scheduledPublisher');
 const { startOrderSync } = require('./jobs/orderSync');
 const { startConversationSync } = require('./jobs/conversationSync');
 const { startStatsSync } = require('./jobs/statsSync');
+const { startAnnouncementSender } = require('./jobs/announcementSender');
 const { startPublishQueue, runPublishQueue } = require('./jobs/publishQueue');
 
 const app = express();
@@ -176,6 +177,7 @@ app.use('/api/notifications', notificationsRoute);
 app.use('/api/system-notifications', systemNotificationsRoute);
 app.use('/api/dashboard', dashboardRoute);
 app.use('/api/security', require('./routes/security'));
+app.use('/api/unsubscribe', require('./routes/unsubscribe'));
 app.use('/api/message-snippets', messageSnippetsRoute);
 
 // One-time admin seeding utility - remove after creating your first admin
@@ -228,6 +230,7 @@ app.listen(PORT, () => {
     startOrderSync();
     startConversationSync();
     startStatsSync();
+    startAnnouncementSender();
     startPublishQueue();
     runPublishQueue().catch((err) => console.error('[publish-queue] initial run failed:', err.message));
   });

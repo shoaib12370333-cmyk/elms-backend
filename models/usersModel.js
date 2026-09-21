@@ -14,6 +14,13 @@ const { getSettings } = require('./settingsModel');
  * history are never split across two accounts just because they used a
  * different login method.
  */
+// Tells the owner (admin sender address / ADMIN_ALERT_EMAIL) that someone signed up. Never blocks or breaks sign-up.
+function notifyNewUser(email, method) {
+  try {
+    require('../services/emailService').sendAdminAlert({ subject: 'New user signed up', lines: ['Email: ' + email, 'Method: ' + method] }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
 async function findOrCreateUser({ googleId, email, name, picture }) {
   let user = await User.findOne({ googleId });
 
@@ -33,6 +40,7 @@ async function findOrCreateUser({ googleId, email, name, picture }) {
       // A genuinely brand-new account - apply the welcome bonus if enabled.
       const creditBalance = await getWelcomeBonusAmount();
       user = await User.create({ googleId, email, name, picture, creditBalance });
+      notifyNewUser(email, 'Google');
     }
   } else {
     // Keep the profile info fresh (name/picture can change on Google's side).
@@ -89,6 +97,7 @@ async function registerWithPassword({ username, email, password }) {
     // A genuinely brand-new account - apply the welcome bonus if enabled.
     const creditBalance = await getWelcomeBonusAmount();
     user = await User.create({ username, email, passwordHash, name: username, creditBalance });
+    notifyNewUser(email, 'email and password');
   }
 
   return serialize(user);
