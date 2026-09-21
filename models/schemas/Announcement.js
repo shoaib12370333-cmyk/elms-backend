@@ -10,6 +10,9 @@ const announcementSchema = new mongoose.Schema(
     total: { type: Number, default: 0 },
     sent: { type: Number, default: 0 },
     failed: { type: Number, default: 0 },
+    // Users whose mail failed (capped) so they can be retried, and the last SMTP error so the admin can see why.
+    failedUsers: { type: [{ userId: mongoose.Schema.Types.ObjectId, email: String, retry: { type: Boolean, default: false }, _id: false }], default: [] },
+    lastError: { type: String, default: null },
     cursor: { type: mongoose.Schema.Types.ObjectId, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     finishedAt: { type: Date, default: null },
