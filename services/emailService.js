@@ -78,15 +78,42 @@ function getTransporter(port) {
   return transporters.get(key);
 }
 
+function isSenderRejected(err) {
+  return /sender address rejected|not owned by user|not authorized to send|send as denied|553/i.test(String((err && (err.response || err.message)) || ''));
+}
+
+function addressOf(from) {
+  const m = String(from || '').match(/<([^>]+)>/);
+  return (m ? m[1] : String(from || '')).trim().toLowerCase();
+}
+
+// Sends one message. If the provider refuses the From address because the SMTP login does not own it
+// (alias not set up), it is sent again from the login address itself, with the wanted address as Reply-To,
+// so the mail still arrives and replies still reach the right mailbox.
 async function sendWithTimeout(tx, message, timeoutMs = 20000) {
-  return Promise.race([
-    tx.sendMail(message),
+  const attempt = (msg) => Promise.race([
+    tx.sendMail(msg),
     new Promise((_, reject) => setTimeout(() => {
       const err = new Error('SMTP send timed out.');
       err.code = 'ETIMEDOUT';
       reject(err);
     }, timeoutMs)),
   ]);
+  try {
+    return await attempt(message);
+  } catch (err) {
+    const login = String(process.env.SMTP_USER || '').trim();
+    const wanted = addressOf(message.from);
+    if (!isSenderRejected(err) || !login || !wanted || wanted === login.toLowerCase()) throw err;
+    const nameMatch = String(message.from || '').match(/^\s*"?([^"<]*)"?\s*</);
+    const name = nameMatch && nameMatch[1].trim();
+    console.warn('SMTP refused sender ' + wanted + ' (not owned by ' + login + '). Resending from the login address; add ' + wanted + ' as an alias in your mail provider.');
+    const retry = Object.assign({}, message, {
+      from: name ? '"' + name + '" <' + login + '>' : login,
+      replyTo: message.replyTo || wanted,
+    });
+    return attempt(retry);
+  }
 }
 
 async function sendPasswordResetOtp({ to, code }) {
