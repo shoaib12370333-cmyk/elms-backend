@@ -17,8 +17,23 @@ const SENDERS = {
   admin: { env: 'SMTP_FROM_ADMIN', label: '' },
 };
 
+// Each identity can have its own mailbox login: SMTP_USER_SUPPORT / SMTP_PASS_SUPPORT, SMTP_USER_BILLING /
+// SMTP_PASS_BILLING, ... (noreply uses SMTP_USER / SMTP_PASS). Without its own login, an identity sends through
+// the default login (which may need the address to be an alias in the mail provider).
+function credentialsFor(kind) {
+  const suffix = String(kind || 'noreply').toUpperCase();
+  if (kind && kind !== 'noreply') {
+    const user = String(process.env['SMTP_USER_' + suffix] || '').trim();
+    const pass = process.env['SMTP_PASS_' + suffix];
+    if (user && pass) return { user, pass, own: true, id: kind };
+  }
+  return { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS, own: false, id: 'default' };
+}
+
 function senderAddress(kind) {
   const def = SENDERS[kind] || SENDERS.noreply;
+  const own = credentialsFor(kind);
+  if (own.own) return String(process.env[def.env] || own.user).trim();
   return String(process.env[def.env] || process.env.SMTP_FROM || process.env.SMTP_USER || '').trim();
 }
 
@@ -32,7 +47,8 @@ function fromHeader(kind) {
 // Automatic mails should send replies to support, unless support is the sender.
 function replyToFor(kind) {
   if (kind === 'support') return undefined;
-  const support = String(process.env.SMTP_FROM_SUPPORT || '').trim();
+  const hasSupport = process.env.SMTP_FROM_SUPPORT || credentialsFor('support').own;
+  const support = hasSupport ? senderAddress('support') : '';
   return support && support !== senderAddress(kind) ? support : undefined;
 }
 
@@ -43,10 +59,9 @@ function withSender(message, kind) {
   return out;
 }
 
-function buildTransporter(port) {
+function buildTransporter(port, kind) {
   const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const { user, pass } = credentialsFor(kind);
   if (!host || !user || !pass || /^your-email-password$/i.test(String(pass).trim())) {
     const err = new Error('Password reset email is not configured. Please contact support.');
     err.statusCode = 503;
@@ -72,9 +87,9 @@ function buildTransporter(port) {
   });
 }
 
-function getTransporter(port) {
-  const key = String(port);
-  if (!transporters.has(key)) transporters.set(key, buildTransporter(port));
+function getTransporter(port, kind) {
+  const key = credentialsFor(kind).id + ':' + String(port);
+  if (!transporters.has(key)) transporters.set(key, buildTransporter(port, kind));
   return transporters.get(key);
 }
 
@@ -90,7 +105,7 @@ function addressOf(from) {
 // Sends one message. If the provider refuses the From address because the SMTP login does not own it
 // (alias not set up), it is sent again from the login address itself, with the wanted address as Reply-To,
 // so the mail still arrives and replies still reach the right mailbox.
-async function sendWithTimeout(tx, message, timeoutMs = 20000) {
+async function sendWithTimeout(tx, message, timeoutMs = 20000, loginUser) {
   const attempt = (msg) => Promise.race([
     tx.sendMail(msg),
     new Promise((_, reject) => setTimeout(() => {
@@ -102,7 +117,7 @@ async function sendWithTimeout(tx, message, timeoutMs = 20000) {
   try {
     return await attempt(message);
   } catch (err) {
-    const login = String(process.env.SMTP_USER || '').trim();
+    const login = String(loginUser || process.env.SMTP_USER || '').trim();
     const wanted = addressOf(message.from);
     if (!isSenderRejected(err) || !login || !wanted || wanted === login.toLowerCase()) throw err;
     const nameMatch = String(message.from || '').match(/^\s*"?([^"<]*)"?\s*</);
@@ -137,7 +152,7 @@ async function sendPasswordResetOtp({ to, code }) {
   // response behaves differently. The send itself is the real test.
   for (const port of ports) {
     try {
-      const info = await sendWithTimeout(getTransporter(port), message);
+      const info = await sendWithTimeout(getTransporter(port, 'noreply'), message, 20000, credentialsFor('noreply').user);
       console.log(`Password-reset email accepted by SMTP on port ${port}: ${info.messageId || 'message accepted'} -> ${to}`);
       return info;
     } catch (err) {
@@ -169,7 +184,7 @@ async function sendFrom(kind, message, label) {
   let lastError;
   for (const port of ports) {
     try {
-      const info = await sendWithTimeout(getTransporter(port), full);
+      const info = await sendWithTimeout(getTransporter(port, kind), full, 20000, credentialsFor(kind).user);
       console.log(label + ' email accepted by SMTP on port ' + port + ' -> ' + full.to);
       return info;
     } catch (err) {
@@ -271,7 +286,7 @@ async function sendSecurityEmail({ to, subject, title, paragraphs, kind }) {
   let lastError;
   for (const port of ports) {
     try {
-      const info = await sendWithTimeout(getTransporter(port), message);
+      const info = await sendWithTimeout(getTransporter(port, kind || 'security'), message, 20000, credentialsFor(kind || 'security').user);
       console.log(`Security email accepted by SMTP on port ${port}: ${info.messageId || 'message accepted'} -> ${to}`);
       return info;
     } catch (err) {
@@ -345,4 +360,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { frontendUrl, sendPurchaseReceiptEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendPurchaseReceiptEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
