@@ -37,12 +37,17 @@ async function acquireLock(jobName, durationMs) {
         $or: [{ lockedUntil: { $lte: now } }, { lockedUntil: { $exists: false } }],
       },
       { jobName, lockedAt: now, lockedUntil },
-      { upsert: true, new: true, rawResult: true }
+      { upsert: true, new: true, includeResultMetadata: true }
     );
 
     // If this call created a brand-new document (via upsert) or updated an
     // existing expired one, we got the lock.
-    return !!result.lastErrorObject?.updatedExisting || !!result.lastErrorObject?.upserted;
+    // Mongoose 8 removed 'rawResult'; 'includeResultMetadata' returns { value, lastErrorObject }. A document only
+    // comes back when the filter matched (expired lock) or the upsert inserted - a held lock ends in E11000 below.
+    if (result && result.lastErrorObject) {
+      return !!result.lastErrorObject.updatedExisting || !!result.lastErrorObject.upserted;
+    }
+    return !!(result && result._id);
   } catch (err) {
     // A duplicate-key error here means another instance's upsert won the
     // race for a brand-new lock document - we simply didn't get it.
