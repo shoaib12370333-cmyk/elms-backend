@@ -387,7 +387,7 @@ router.get('/announcements', async (req, res) => {
     sentToday: used,
     limits: { mailBatchSize: limits.mailBatchSize, mailDailyCap: limits.mailDailyCap },
     from: svc.senderAddress('support'),
-    announcements: list.map((a) => ({ id: String(a._id), subject: a.subject, status: a.status, total: a.total, sent: a.sent, failed: a.failed, createdAt: a.createdAt, finishedAt: a.finishedAt })),
+    announcements: list.map((a) => ({ id: String(a._id), subject: a.subject, status: a.status, total: a.total, sent: a.sent, failed: a.failed, retryable: (a.failedUsers || []).length, lastError: a.lastError || null, createdAt: a.createdAt, finishedAt: a.finishedAt })),
   });
 });
 function readAnnouncement(body) {
@@ -417,11 +417,19 @@ router.post('/announcements', async (req, res) => {
     res.status(400).json({ success: false, error: err.message || 'Could not start the announcement.' });
   }
 });
+router.post('/announcements/:id/retry-failed', async (req, res) => {
+  try {
+    const n = await require('../services/announcementService').retryFailed(req.params.id);
+    res.json({ success: true, retrying: n });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
 router.post('/announcements/:id/:action(pause|resume|cancel)', async (req, res) => {
   const Announcement = require('../models/schemas/Announcement');
   const next = { pause: 'paused', resume: 'sending', cancel: 'cancelled' }[req.params.action];
   const from = req.params.action === 'resume' ? ['paused'] : ['sending', 'paused'];
-  const ann = await Announcement.findOneAndUpdate({ _id: req.params.id, status: { $in: from } }, { status: next }, { new: true });
+  const ann = await Announcement.findOneAndUpdate({ _id: req.params.id, status: { $in: from } }, req.params.action === 'resume' ? { status: next, lastError: null } : { status: next }, { new: true });
   if (!ann) return res.status(404).json({ success: false, error: 'Announcement not found or already finished.' });
   res.json({ success: true, status: ann.status });
 });
