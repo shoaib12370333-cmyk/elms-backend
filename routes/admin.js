@@ -120,8 +120,21 @@ router.post('/tickets/:id/resolve', async (req, res) => {
   if (!ticket) {
     return res.status(404).json({ success: false, error: 'Ticket not found.' });
   }
+  let emailed = false;
+  if (adminReply && String(adminReply).trim() && ticket.userId) {
+    try {
+      const { getUserById } = require('../models/usersModel');
+      const owner = await getUserById(ticket.userId);
+      if (owner && owner.email) {
+        await require('../services/emailService').sendTicketReplyEmail({ to: owner.email, subject: ticket.subject, reply: String(adminReply).trim() });
+        emailed = true;
+      }
+    } catch (mailErr) {
+      console.warn('ticket reply email failed:', mailErr.message);
+    }
+  }
 
-  res.json({ success: true, ticket });
+  res.json({ success: true, ticket, emailed });
 });
 
 /**
@@ -341,6 +354,76 @@ router.put('/settings/ai', async (req, res) => {
   } catch (err) {
     res.status(400).json({ success: false, error: err.message || 'Could not save the AI settings.' });
   }
+});
+
+/** GET/PUT /api/admin/settings/limits - bulk import size and mail sending caps. */
+router.get('/settings/limits', async (req, res) => {
+  const { getLimits } = require('../models/settingsModel');
+  res.json({ success: true, limits: await getLimits() });
+});
+router.put('/settings/limits', async (req, res) => {
+  try {
+    const { updateLimits } = require('../models/settingsModel');
+    res.json({ success: true, limits: await updateLimits(req.body || {}) });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/** Announcements (bulk mail). Sent in small batches by jobs/announcementSender.js. */
+router.get('/announcements', async (req, res) => {
+  const Announcement = require('../models/schemas/Announcement');
+  const svc = require('../services/announcementService');
+  const { getLimits } = require('../models/settingsModel');
+  const [list, recipients, used, limits] = await Promise.all([
+    Announcement.find().sort({ createdAt: -1 }).limit(20).lean(),
+    svc.countRecipients(),
+    svc.sentToday(),
+    getLimits(),
+  ]);
+  res.json({
+    success: true,
+    recipients,
+    sentToday: used,
+    limits: { mailBatchSize: limits.mailBatchSize, mailDailyCap: limits.mailDailyCap },
+    from: svc.senderAddress('support'),
+    announcements: list.map((a) => ({ id: String(a._id), subject: a.subject, status: a.status, total: a.total, sent: a.sent, failed: a.failed, createdAt: a.createdAt, finishedAt: a.finishedAt })),
+  });
+});
+function readAnnouncement(body) {
+  const subject = String((body && body.subject) || '').trim();
+  const text = String((body && body.body) || '').trim();
+  if (subject.length < 3 || subject.length > 150) throw new Error('Subject must be 3 to 150 characters.');
+  if (text.length < 10 || text.length > 8000) throw new Error('Message must be 10 to 8000 characters.');
+  return { subject, body: text };
+}
+router.post('/announcements/test', async (req, res) => {
+  try {
+    const msg = readAnnouncement(req.body);
+    const { getUserById } = require('../models/usersModel');
+    const me = await getUserById(req.userId);
+    await require('../services/announcementService').sendTest({ to: me.email, ...msg });
+    res.json({ success: true, to: me.email });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message || 'Could not send the test mail.' });
+  }
+});
+router.post('/announcements', async (req, res) => {
+  try {
+    const msg = readAnnouncement(req.body);
+    const ann = await require('../services/announcementService').startAnnouncement({ ...msg, createdBy: req.userId });
+    res.json({ success: true, id: String(ann._id), total: ann.total });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message || 'Could not start the announcement.' });
+  }
+});
+router.post('/announcements/:id/:action(pause|resume|cancel)', async (req, res) => {
+  const Announcement = require('../models/schemas/Announcement');
+  const next = { pause: 'paused', resume: 'sending', cancel: 'cancelled' }[req.params.action];
+  const from = req.params.action === 'resume' ? ['paused'] : ['sending', 'paused'];
+  const ann = await Announcement.findOneAndUpdate({ _id: req.params.id, status: { $in: from } }, { status: next }, { new: true });
+  if (!ann) return res.status(404).json({ success: false, error: 'Announcement not found or already finished.' });
+  res.json({ success: true, status: ann.status });
 });
 
 /**

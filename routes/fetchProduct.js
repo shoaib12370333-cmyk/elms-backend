@@ -122,14 +122,20 @@ router.post('/', requireAuth, async (req, res) => {
  * report which links succeeded or failed, rather than failing the whole
  * batch if one link is bad.
  */
+router.get('/limits', requireAuth, async (req, res) => {
+  const { bulkImportMax } = await require('../models/settingsModel').getLimits();
+  res.json({ success: true, bulkImportMax });
+});
+
 router.post('/bulk', requireAuth, async (req, res) => {
   const { amazonUrls, markupPercent } = req.body;
 
   if (!Array.isArray(amazonUrls) || amazonUrls.length === 0) {
     return res.status(400).json({ success: false, error: 'amazonUrls must be a non-empty array.' });
   }
-  if (amazonUrls.length > 25) {
-    return res.status(400).json({ success: false, error: 'Please import at most 25 links at a time.' });
+  const { bulkImportMax } = await require('../models/settingsModel').getLimits();
+  if (amazonUrls.length > bulkImportMax) {
+    return res.status(400).json({ success: false, error: 'Please import at most ' + bulkImportMax + ' links at a time.', max: bulkImportMax });
   }
 
   const results = [];
