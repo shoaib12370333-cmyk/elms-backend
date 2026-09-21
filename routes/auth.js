@@ -13,6 +13,7 @@ const {
   getUserByExtensionKey,
 } = require('../models/usersModel');
 const { issueSessionToken } = require('../services/sessionService');
+const { startSession, recordFailedLogin } = require('../services/sessionTracker');
 const { requireAuth } = require('../middleware/requireAuth');
 const { getSettings } = require('../models/settingsModel');
 const PasswordResetOtp = require('../models/schemas/PasswordResetOtp');
@@ -91,12 +92,7 @@ router.post('/google', async (req, res) => {
   try {
     const profile = await verifyGoogleToken(credential);
     const user = await findOrCreateUser(profile);
-    const sessionToken = issueSessionToken(user.id);
-
-    // Security notification must never block a successful login.
-    sendNewLoginEmail({ to: user.email, method: 'google' }).catch((mailErr) => {
-      console.error('google login security email failed:', mailErr.message);
-    });
+    const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'google'));
 
     res.json({ success: true, sessionToken, user });
   } catch (err) {
@@ -132,7 +128,7 @@ router.post('/register', registerLimiter, async (req, res) => {
 
   try {
     const user = await registerWithPassword({ username: username.trim(), email: email.trim().toLowerCase(), password });
-    const sessionToken = issueSessionToken(user.id);
+    const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'register'));
     res.json({ success: true, sessionToken, user });
   } catch (err) {
     console.error('register error:', err.message);
@@ -248,16 +244,11 @@ router.post('/login', loginLimiter, async (req, res) => {
 
   try {
     const user = await loginWithPassword({ email: email.trim().toLowerCase(), password });
-    const sessionToken = issueSessionToken(user.id);
-
-    // Security notification must never turn a successful login into a failed
-    // login if SMTP is temporarily unavailable.
-    sendNewLoginEmail({ to: user.email, method: 'password' }).catch((mailErr) => {
-      console.error('password login security email failed:', mailErr.message);
-    });
+    const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'password'));
 
     res.json({ success: true, sessionToken, user });
   } catch (err) {
+    recordFailedLogin(req, email);
     console.error('login error:', err.message);
     res.status(err.statusCode || 500).json({ success: false, error: err.message });
   }
@@ -288,9 +279,10 @@ router.post('/admin-login', adminLoginLimiter, async (req, res) => {
       return res.status(403).json({ success: false, error: 'This account does not have admin access.' });
     }
 
-    const sessionToken = issueSessionToken(user.id);
+    const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'password'));
     res.json({ success: true, sessionToken, user });
   } catch (err) {
+    recordFailedLogin(req, email);
     console.error('admin-login error:', err.message);
     res.status(err.statusCode || 500).json({ success: false, error: err.message });
   }

@@ -28,7 +28,7 @@ async function accountFilter(userId, accountId) {
   if (!accountId) return {};
   const Listing = require('./schemas/Listing');
   const ids = (await Listing.find({ userId, ebayAccountId: accountId }, { _id: 1 }).lean()).map((l) => l._id);
-  return { $or: [{ ebayAccountId: accountId }, { ebayAccountId: null, listingId: { $in: ids } }] };
+  return { $or: [{ ebayAccountId: accountId }, { ebayAccountId: null, listingId: { $in: ids } }, { type: 'security' }] };
 }
 
 async function listSystemNotifications(userId, { limit = 30, unreadOnly = false, accountId = null } = {}) {

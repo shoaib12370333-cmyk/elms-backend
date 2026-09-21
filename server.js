@@ -175,6 +175,7 @@ app.use('/api/tools', researchToolsRoute);
 app.use('/api/notifications', notificationsRoute);
 app.use('/api/system-notifications', systemNotificationsRoute);
 app.use('/api/dashboard', dashboardRoute);
+app.use('/api/security', require('./routes/security'));
 app.use('/api/message-snippets', messageSnippetsRoute);
 
 // One-time admin seeding utility - remove after creating your first admin

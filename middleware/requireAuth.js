@@ -1,15 +1,20 @@
-const { verifySessionToken } = require('../services/sessionService');
+const { verifySessionPayload } = require('../services/sessionService');
+const { assertSessionActive } = require('../services/sessionTracker');
 
 /**
- * Protects a route: requires a valid "Authorization: Bearer <token>" header.
- * On success, sets req.userId so route handlers know which user made the request.
+ * Protects a route: requires a valid "Authorization: Bearer <token>" header whose session has not been
+ * ended (Security page: log out a device / log out everywhere).
+ * On success, sets req.userId (and req.sid) so route handlers know who made the request.
  */
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
   try {
-    req.userId = verifySessionToken(token);
+    const payload = verifySessionPayload(token);
+    await assertSessionActive(payload);
+    req.userId = payload.userId;
+    req.sid = payload.sid;
     next();
   } catch (err) {
     res.status(err.statusCode || 401).json({ success: false, error: err.message });
