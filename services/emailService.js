@@ -55,7 +55,9 @@ function buildTransporter(port) {
 
   const numericPort = Number(port);
   const secureEnv = String(process.env.SMTP_SECURE || '').trim().toLowerCase();
-  const secure = secureEnv ? secureEnv === 'true' : numericPort === 465;
+  // The port decides the mode: 465 is implicit TLS, 587 is STARTTLS. A mismatched SMTP_SECURE (e.g. false on 465,
+  // true on 587) causes 'wrong version number', so it is only used for non-standard ports.
+  const secure = numericPort === 465 ? true : numericPort === 587 ? false : secureEnv === 'true';
   return nodemailer.createTransport({
     host,
     port: numericPort,
