@@ -127,6 +127,7 @@ async function getItemAspectsForCategory(refreshToken, categoryId, marketplaceId
       required: !!c.aspectRequired,
       usage: c.aspectUsage || (c.aspectRequired ? 'REQUIRED' : 'OPTIONAL'),
       cardinality: c.itemToAspectCardinality || 'SINGLE',
+      mode: c.aspectMode || 'FREE_TEXT',
       dataType: c.aspectDataType || 'STRING',
       values: Array.isArray(a.aspectValues) ? a.aspectValues.map(v => v.localizedValue).filter(Boolean).slice(0, 100) : [],
     };

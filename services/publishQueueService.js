@@ -8,6 +8,7 @@ const {
 
 const { getImportById } = require('../models/importsModel');
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
+const { prepareAspects } = require('./publishPreflightService');
 const { convertAmount } = require('./currencyService');
 
 const {
@@ -403,7 +404,7 @@ async function processOneQueuedListing(listing) {
             ),
 
       ebayAspects:
-        listing.ebay_aspects && typeof listing.ebay_aspects === 'object'
+        listing.ebay_aspects && typeof listing.ebay_aspects === 'object' && Object.keys(listing.ebay_aspects).length
           ? listing.ebay_aspects
           : (importRecord.product.ebayAspects || {}),
     };
@@ -453,6 +454,20 @@ async function processOneQueuedListing(listing) {
       'CALLING EBAY PUBLISH'
     );
 
+
+    // Sanity checks that eBay would otherwise answer with an error after a slow round trip.
+    if (!Number.isFinite(Number(listing.sell_price)) || Number(listing.sell_price) <= 0) throw new Error('The sell price must be greater than 0.');
+    if (!(Number(listing.quantity) >= 1)) throw new Error('The quantity must be at least 1.');
+    if (String(product.title || '').trim().length < 3) throw new Error('The title is too short.');
+
+    // Item specifics: match eBay's allowed values, fill what eBay lets you mark "not applicable", stop early if a required one is missing.
+    const prepared = await prepareAspects({ categoryId: listing.category_id, marketplaceId: sellerSettings.marketplaceId, product });
+    if (prepared.aspects) {
+      product.ebayAspects = prepared.aspects;
+      product.specifications = [];
+      product.brand = undefined;
+      prepared.notes.forEach((n) => debug('ASPECTS: ' + n));
+    }
 
     // eBay needs at least one picture.
     if (!Array.isArray(product.images) || !product.images.some((u) => String(u || '').toLowerCase().startsWith('https://'))) {
