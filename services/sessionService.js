@@ -9,12 +9,12 @@ const TOKEN_EXPIRY = '7d';
  * Issues a session token for a logged-in user. The frontend stores this
  * and sends it back on every request (as an Authorization header).
  */
-function issueSessionToken(userId) {
+function issueSessionToken(userId, sid = null) {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new Error('JWT_SECRET is not set in the .env file.');
   }
-  return jwt.sign({ userId }, secret, { expiresIn: TOKEN_EXPIRY });
+  return jwt.sign(sid ? { userId, sid } : { userId }, secret, { expiresIn: TOKEN_EXPIRY });
 }
 
 /**
@@ -71,4 +71,13 @@ function verifySessionToken(token) {
   }
 }
 
-module.exports = { issueSessionToken, verifySessionToken, issueEbayConnectState, verifyEbayConnectState };
+/** Like verifySessionToken but also returns the session id and issue time (used to honour logouts). */
+function verifySessionPayload(token) {
+  verifySessionToken(token); // throws the friendly 401 errors
+  const payload = jwt.verify(token, process.env.JWT_SECRET);
+  return { userId: payload.userId, sid: payload.sid || null, iat: payload.iat || 0 };
+}
+
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+module.exports = { SESSION_TTL_MS, verifySessionPayload, issueSessionToken, verifySessionToken, issueEbayConnectState, verifyEbayConnectState };

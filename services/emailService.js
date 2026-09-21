@@ -164,4 +164,24 @@ async function sendNewLoginEmail({ to, method }) {
   });
 }
 
-module.exports = { sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+async function sendNewDeviceEmail({ to, device, where, method, when }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const loginMethod = method === 'google' ? 'Google' : 'email and password';
+  const frontend = process.env.FRONTEND_URL || '';
+  return sendSecurityEmail({
+    to,
+    subject: `New device signed in to your ${appName} account`,
+    title: `Someone signed in to your ${appName} account from a new device`,
+    paragraphs: [
+      `Device: ${device}`,
+      `Location: ${where} (approximate, from the IP address)`,
+      `Time: ${new Date(when).toUTCString()}`,
+      `Sign-in method: ${loginMethod}`,
+      'If this was you, no action is needed.',
+      `If it was not you: open ${frontend ? frontend.replace(/\/$/, '') + '/settings' : 'ELMS'} \u2192 Security, press "Log out everywhere", then change your password.`,
+      'You can turn these emails off in Settings \u2192 Security.',
+    ],
+  });
+}
+
+module.exports = { sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };

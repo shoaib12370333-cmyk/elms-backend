@@ -31,6 +31,9 @@ const userSchema = new mongoose.Schema(
 
     // Messages page: how ELMS answers new buyer messages. off = never, draft = AI writes a draft for you
     // to review, auto = AI also sends it (only for simple, low-risk messages).
+    // Security: tokens issued before this moment are rejected ("log out everywhere"), and the new-device email switch.
+    sessionsValidFrom: { type: Date, default: null },
+    notifyNewDevice: { type: Boolean, default: true },
     aiReplyMode: { type: String, enum: ['off', 'draft', 'auto'], default: 'off' },
     aiReplyEnabledAt: { type: Date, default: null },
 
