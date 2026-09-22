@@ -18,7 +18,8 @@
     "test:easyparser": "node tests/easyparserAdapter.test.js",
     "test:bulkimport": "node tests/bulkImportJob.test.js",
     "test:orders-list": "node tests/ordersList.test.js",
-    "test:listings-bulk-delete": "node tests/listingsBulkDelete.test.js"
+    "test:listings-bulk-delete": "node tests/listingsBulkDelete.test.js",
+    "test:listing-markup": "node tests/updateListingMarkup.test.js"
   },
   "engines": {
     "node": "22.13.0"
