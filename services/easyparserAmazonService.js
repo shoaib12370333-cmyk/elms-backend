@@ -36,9 +36,10 @@ function apiKey() {
  * POST (Easyparser accepts an array of job objects, up to 5,000 items total per request -
  * see https://easyparser.gitbook.io/easyparser-documentation/bulk-integration).
  *
- * callbackUrl is required by their schema but we don't run a public webhook receiver for
- * this yet; ELMS polls the Data Service instead (also documented as supported), so a
- * harmless placeholder callback is sent.
+ * callbackUrl is required by their schema, but ELMS actually polls the Data Service for
+ * results instead of waiting on it (also documented as supported). routes/easyparserCallback.js
+ * just answers 200 to whatever this URL points at, so Easyparser doesn't send "Webhook Error
+ * Notification" emails after enough failed delivery attempts - the payload itself is unused.
  *
  * Returns { asin, domain, queryId, credit }[] for every ASIN Easyparser accepted, matched
  * back by the `asin` field on each returned result (falling back to array position if a
@@ -56,7 +57,7 @@ async function submitBulkDetail(itemsByDomain, callbackUrl) {
       operation: 'DETAIL',
       domain: group.domain,
       payload: { asins: group.asins },
-      callback_url: callbackUrl || 'https://elms-backend-1-tr5h.onrender.com/api/easyparser/callback',
+      callback_url: callbackUrl || String(process.env.BACKEND_URL || process.env.RENDER_EXTERNAL_URL || 'https://elms-backend-1-tr5h.onrender.com').replace(/\/$/, '') + '/api/easyparser/callback',
     }));
   if (!jobObjects.length) return { accepted: [], rejected: [], meta: null };
 
