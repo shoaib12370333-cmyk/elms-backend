@@ -5,7 +5,7 @@ const { createImport, updateImportImages } = require('../models/importsModel');
 const { upsertDraft } = require('../models/listingsModel');
 const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
 const { requireAuth } = require('../middleware/requireAuth');
-const { isValidAmazonUrl } = require('../services/validationService');
+const { isValidAmazonUrl, assertAmazonMatchesStore } = require('../services/validationService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { getActiveEbayAccount } = require('../models/ebayAccountsModel');
 const { materializeImageUrls } = require('../services/imageStorageService');
@@ -25,8 +25,8 @@ const { getCachedProduct, setCachedProduct } = require('../services/productCache
  * env var is set (see imageStorageService.publicBaseUrl) - the background job passes a minimal
  * stand-in object since it has no real HTTP request.
  */
-async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req) {
-  const activeEbayAccount = await getActiveEbayAccount(userId);
+async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount) {
+  const activeEbayAccount = knownActiveEbayAccount !== undefined ? knownActiveEbayAccount : await getActiveEbayAccount(userId);
   const charged = await spendCredit(userId, ACTION_COSTS.AMAZON_IMPORT);
 
   try {
@@ -77,6 +77,9 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
  * the single-URL and small-bulk (synchronous) routes below.
  */
 async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
+  const activeEbayAccount = await getActiveEbayAccount(userId);
+  assertAmazonMatchesStore(amazonUrl, activeEbayAccount?.marketplaceId || null);
+
   const asin = extractAsinFromUrl(amazonUrl);
   const country = detectCountryFromUrl(amazonUrl);
   let product = asin ? await getCachedProduct(asin, country) : null;
@@ -84,7 +87,7 @@ async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
     product = await fetchProductByUrl(amazonUrl);
     if (product.asin) await setCachedProduct(product.asin, country, product, 'canopy');
   }
-  return saveProductAsDraft(userId, product, markupPercent, amazonUrl, req);
+  return saveProductAsDraft(userId, product, markupPercent, amazonUrl, req, activeEbayAccount);
 }
 
 /**
@@ -211,6 +214,7 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
     return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
   }
 
+  const activeEbayAccount = await getActiveEbayAccount(req.userId);
   const seen = new Set();
   const items = [];
   const skipped = [];
@@ -218,6 +222,12 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
     const url = String(amazonUrl || '').trim();
     if (!url) continue;
     if (!isValidAmazonUrl(url)) { skipped.push({ amazonUrl: url, error: 'Not a valid Amazon product URL.' }); continue; }
+    try {
+      assertAmazonMatchesStore(url, activeEbayAccount?.marketplaceId || null);
+    } catch (err) {
+      skipped.push({ amazonUrl: url, error: err.message });
+      continue;
+    }
     const asin = extractAsinFromUrl(url);
     if (!asin) { skipped.push({ amazonUrl: url, error: 'Could not find an ASIN in that URL.' }); continue; }
     const country = detectCountryFromUrl(url);
@@ -230,7 +240,6 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: 'None of those links look like valid Amazon product links.', skipped });
   }
 
-  const activeEbayAccount = await getActiveEbayAccount(req.userId);
   const { createBulkImportJob } = require('../models/bulkImportJobsModel');
   const job = await createBulkImportJob(req.userId, {
     ebayAccountId: activeEbayAccount?.id || null,

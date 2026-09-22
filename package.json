@@ -20,6 +20,7 @@
     "test:orders-list": "node tests/ordersList.test.js",
     "test:listings-bulk-delete": "node tests/listingsBulkDelete.test.js",
     "test:listing-markup": "node tests/updateListingMarkup.test.js",
+    "test:store-match": "node tests/amazonStoreMatch.test.js",
     "test:product-cache": "node tests/productCache.test.js",
     "test:draft-save": "node tests/draftSave.test.js"
   },
