@@ -139,7 +139,19 @@ async function pollResult(queryId) {
 function imageUrlOf(entry) {
   if (!entry) return null;
   if (typeof entry === 'string') return entry;
-  return entry.link || entry.url || entry.src || entry.hi_res || entry.large || entry.image_url || null;
+  return entry.link || entry.url || entry.src || entry.hi_res || entry.hires || entry.high_res
+    || entry.large || entry.original || entry.full || entry.image_url || entry.src_url || null;
+}
+
+/** `raw.images` might not be a plain array (e.g. `{ list: [...] }` or `{ items: [...] }`) - try the common wrapper shapes too. */
+function imagesArrayOf(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') {
+    for (const key of ['list', 'items', 'all', 'images', 'gallery']) {
+      if (Array.isArray(value[key])) return value[key];
+    }
+  }
+  return [];
 }
 
 /** Pulls a numeric price out of an Easyparser price object, whose exact key name isn't confirmed. */
@@ -164,9 +176,19 @@ function numberFrom(value) {
  * different shape for the rest of the app.
  */
 function normalizeDetail(raw, sourceUrl) {
-  const images = Array.isArray(raw.images) ? raw.images.map(imageUrlOf).filter(Boolean) : [];
+  const images = imagesArrayOf(raw.images).map(imageUrlOf).filter(Boolean);
   const mainImage = imageUrlOf(raw.main_image);
   const allImages = mainImage ? [mainImage, ...images.filter((u) => u !== mainImage)] : images;
+
+  // TEMPORARY: only fires when 0-1 images came out, i.e. exactly the case we don't yet trust -
+  // logs the raw shape once so it can be fixed for real from a live Render log, then removed.
+  if (allImages.length <= 1 && raw && typeof raw === 'object') {
+    try {
+      console.warn('[easyparser-debug] only ' + allImages.length + ' image(s) extracted for asin ' + (raw.asin || '?')
+        + '. raw.images=' + JSON.stringify(raw.images).slice(0, 1500)
+        + ' raw.main_image=' + JSON.stringify(raw.main_image).slice(0, 500));
+    } catch (e) { /* ignore logging failures */ }
+  }
 
   const priceObj = raw.buybox_winner?.price || {};
   const price = numberFrom(priceObj.value ?? priceObj.amount ?? priceObj.current_price ?? priceObj.raw ?? priceObj);

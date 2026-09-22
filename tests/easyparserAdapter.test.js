@@ -97,5 +97,10 @@ const svc = require('../services/easyparserAmazonService');
   assert.strictEqual(p2.price, 9.5);
   assert.strictEqual(p2.availability, 'Out of Stock');
 
+  // images wrapped in an object (e.g. { list: [...] }) instead of a plain array are still found
+  const raw3 = { asin: 'B3', images: { list: [{ hires: 'https://img/a.jpg' }, { original: 'https://img/b.jpg' }] }, main_image: 'https://img/main3.jpg' };
+  const p3 = svc.normalizeDetail(raw3);
+  assert.deepStrictEqual(p3.images, ['https://img/main3.jpg', 'https://img/a.jpg', 'https://img/b.jpg']);
+
   console.log('easyparser adapter tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
