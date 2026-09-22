@@ -4,7 +4,7 @@ const { createImport, updateImportImages } = require('../models/importsModel');
 const { upsertDraft } = require('../models/listingsModel');
 const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
 const { requireAuth } = require('../middleware/requireAuth');
-const { isValidAmazonUrl } = require('../services/validationService');
+const { isValidAmazonUrl, assertAmazonMatchesStore } = require('../services/validationService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { getActiveEbayAccount } = require('../models/ebayAccountsModel');
 const { materializeImageUrls } = require('../services/imageStorageService');
@@ -99,6 +99,12 @@ router.post('/', requireAuth, async (req, res) => {
     if (!amazonUrl || !isValidAmazonUrl(amazonUrl)) {
       return res.status(400).json({ success: false, error: 'A valid Amazon product URL is required.' });
     }
+    const activeEbayAccount = await getActiveEbayAccount(req.userId);
+    try {
+      assertAmazonMatchesStore(amazonUrl, activeEbayAccount?.marketplaceId || null);
+    } catch (err) {
+      return res.status(err.statusCode || 400).json({ success: false, error: err.message });
+    }
     if (!product || typeof product !== 'object') {
       return res.status(400).json({ success: false, error: 'Product data is required.' });
     }
@@ -125,7 +131,6 @@ router.post('/', requireAuth, async (req, res) => {
       });
     }
 
-    const activeEbayAccount = await getActiveEbayAccount(req.userId);
     let suggestedPrice = normalized.price;
     if (normalized.price != null && markupPercent != null && markupPercent !== '') {
       const markup = Number(markupPercent);
