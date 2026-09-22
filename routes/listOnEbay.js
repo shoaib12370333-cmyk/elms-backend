@@ -17,7 +17,7 @@ const {
   getActiveEbayAccount,
 } = require('../models/ebayAccountsModel');
 const { requireAuth } = require('../middleware/requireAuth');
-const { isPositiveNumber } = require('../services/validationService');
+const { isPositiveNumber, isValidObjectIdString } = require('../services/validationService');
 const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { requireAsinSku } = require('../services/skuService');
@@ -333,70 +333,82 @@ router.put('/:id', requireAuth, async (req, res) => {
   if (quantity !== undefined && quantity !== null && !isPositiveNumber(quantity)) {
     return res.status(400).json({ success: false, error: 'quantity must be a positive number.' });
   }
-
-  let destinationAccountId = accountId;
-  let destinationMarketplaceId = marketplaceId;
-  if (destinationAccountId) {
-    const destinationAccount = await getEbayAccountById(req.userId, destinationAccountId);
-    if (!destinationAccount) return res.status(400).json({ success: false, error: 'The selected eBay account is no longer connected.' });
-    destinationMarketplaceId = destinationMarketplaceId || destinationAccount.marketplaceId || 'EBAY_US';
-  }
-  const productToSave = draftProduct && typeof draftProduct === 'object'
-    ? {
-        ...draftProduct,
-        ebayAspects: ebayAspects && typeof ebayAspects === 'object'
-          ? ebayAspects
-          : draftProduct.ebayAspects,
-      }
-    : null;
-
-  const updated = await updateListing(req.userId, id, {
-    title,
-    mainImage,
-    images,
-    sellPrice,
-    markupPercent,
-    currency,
-    quantity,
-    categoryId,
-    ebayAccountId: destinationAccountId,
-    marketplaceId: destinationMarketplaceId,
-    description: productToSave?.description ?? req.body.description,
-    bulletPoints: productToSave?.bulletPoints,
-    specifications: productToSave?.specifications ?? req.body.specifications,
-    // Per-product settings from the listing editor (validated in listingsModel.buildSettingsUpdate).
-    tags: req.body.tags,
-    shippingMethod: req.body.shippingMethod,
-    useDynamicPolicies: req.body.useDynamicPolicies,
-    paymentPolicyId: req.body.paymentPolicyId,
-    fulfillmentPolicyId: req.body.fulfillmentPolicyId,
-    returnPolicyId: req.body.returnPolicyId,
-    countryLocation: req.body.countryLocation,
-    locationCity: req.body.locationCity,
-    postalCode: req.body.postalCode,
-    stockMonitoring: req.body.stockMonitoring,
-    priceMonitoring: req.body.priceMonitoring,
-    ebayAspects: productToSave?.ebayAspects,
-    amazonPrice: productToSave?.price,
-    marginAmount: productToSave?.price != null && sellPrice != null ? Number((Number(sellPrice) - Number(productToSave.price)).toFixed(2)) : undefined,
-  });
-
-  if (!updated) {
-    return res.status(404).json({ success: false, error: 'Listing not found.' });
+  if (accountId !== undefined && accountId !== null && accountId !== '' && !isValidObjectIdString(accountId)) {
+    return res.status(400).json({ success: false, error: 'That does not look like a valid eBay account.' });
   }
 
-  if (productToSave && updated.import_id) {
-    // Keep the source import synchronized for the editor/history, but the
-    // listing snapshot above is the publish source of truth. This prevents a
-    // later source refresh from changing a draft the seller already saved.
-    try {
-      await updateImportProduct(req.userId, updated.import_id, productToSave);
-    } catch (syncErr) {
-      console.warn('[draft-save] source import sync failed:', syncErr.message);
+  try {
+    let destinationAccountId = accountId;
+    let destinationMarketplaceId = marketplaceId;
+    if (destinationAccountId) {
+      const destinationAccount = await getEbayAccountById(req.userId, destinationAccountId);
+      if (!destinationAccount) return res.status(400).json({ success: false, error: 'The selected eBay account is no longer connected.' });
+      destinationMarketplaceId = destinationMarketplaceId || destinationAccount.marketplaceId || 'EBAY_US';
     }
-  }
+    const productToSave = draftProduct && typeof draftProduct === 'object'
+      ? {
+          ...draftProduct,
+          ebayAspects: ebayAspects && typeof ebayAspects === 'object'
+            ? ebayAspects
+            : draftProduct.ebayAspects,
+        }
+      : null;
 
-  res.json({ success: true, listing: updated });
+    const updated = await updateListing(req.userId, id, {
+      title,
+      mainImage,
+      images,
+      sellPrice,
+      markupPercent,
+      currency,
+      quantity,
+      categoryId,
+      ebayAccountId: destinationAccountId,
+      marketplaceId: destinationMarketplaceId,
+      description: productToSave?.description ?? req.body.description,
+      bulletPoints: productToSave?.bulletPoints,
+      specifications: productToSave?.specifications ?? req.body.specifications,
+      // Per-product settings from the listing editor (validated in listingsModel.buildSettingsUpdate).
+      tags: req.body.tags,
+      shippingMethod: req.body.shippingMethod,
+      useDynamicPolicies: req.body.useDynamicPolicies,
+      paymentPolicyId: req.body.paymentPolicyId,
+      fulfillmentPolicyId: req.body.fulfillmentPolicyId,
+      returnPolicyId: req.body.returnPolicyId,
+      countryLocation: req.body.countryLocation,
+      locationCity: req.body.locationCity,
+      postalCode: req.body.postalCode,
+      stockMonitoring: req.body.stockMonitoring,
+      priceMonitoring: req.body.priceMonitoring,
+      ebayAspects: productToSave?.ebayAspects,
+      amazonPrice: productToSave?.price,
+      marginAmount: productToSave?.price != null && sellPrice != null ? Number((Number(sellPrice) - Number(productToSave.price)).toFixed(2)) : undefined,
+    });
+
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Listing not found.' });
+    }
+
+    if (productToSave && updated.import_id) {
+      // Keep the source import synchronized for the editor/history, but the
+      // listing snapshot above is the publish source of truth. This prevents a
+      // later source refresh from changing a draft the seller already saved.
+      try {
+        await updateImportProduct(req.userId, updated.import_id, productToSave);
+      } catch (syncErr) {
+        console.warn('[draft-save] source import sync failed:', syncErr.message);
+      }
+    }
+
+    res.json({ success: true, listing: updated });
+  } catch (err) {
+    // Unlike every other route in this file, this one had no catch at all - any thrown
+    // error (a malformed id, a Mongoose validation error, ...) fell through to the global
+    // handler's generic "Something went wrong on our end", hiding the real reason. This at
+    // least surfaces the actual message so a save failure is diagnosable without server logs.
+    console.error('draft save error:', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not save this draft.' });
+  }
 });
 
 module.exports = router;

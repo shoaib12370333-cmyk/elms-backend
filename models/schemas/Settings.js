@@ -47,6 +47,10 @@ const settingsSchema = new mongoose.Schema(
     bulkJobMax: { type: Number, default: 1000, min: 1, max: 5000 },
     mailBatchSize: { type: Number, default: 20, min: 1, max: 100 },
     mailDailyCap: { type: Number, default: 200, min: 1, max: 100000 },
+    // How many days a fetched Amazon product (services/productCacheService.js) is reused
+    // before importing that ASIN again spends a fresh provider call - a credit is still
+    // charged either way (see routes/fetchProduct.js).
+    productCacheDays: { type: Number, default: 7, min: 1, max: 90 },
 
     actionCosts: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
