@@ -609,6 +609,43 @@ router.delete('/:id', requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/listings/bulk-delete
+ * Body: { ids: string[] }
+ *
+ * Deletes several listings at once (the Drafts page's "select several -> Remove" bar).
+ * Same per-listing logic as DELETE /:id (ends the eBay offer first if the listing is
+ * live) - one bad id doesn't stop the rest, so the response reports how many actually
+ * got deleted plus a message for each one that failed.
+ */
+router.post('/bulk-delete', requireAuth, async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+
+  let deletedCount = 0;
+  const errors = [];
+  for (const id of ids) {
+    try {
+      const listing = await getListingById(req.userId, id);
+      if (!listing) { errors.push(`${id}: not found.`); continue; }
+
+      if (listing.ebay_offer_id && listing.ebay_account_id) {
+        const refreshToken = await getEbayAccountRefreshToken(req.userId, listing.ebay_account_id);
+        if (!refreshToken) { errors.push(`${listing.title || id}: the connected eBay account is missing a refresh token.`); continue; }
+        await deleteOffer(refreshToken, listing.ebay_offer_id);
+      }
+
+      await deleteListing(req.userId, id);
+      deletedCount += 1;
+    } catch (err) {
+      console.error(`bulk listing delete error for ${id}:`, err.message);
+      errors.push(`${id}: ${err.message || 'Could not delete.'}`);
+    }
+  }
+
+  res.json({ success: true, deletedCount, errors: errors.length ? errors : undefined });
+});
+
+/**
  * POST /api/listings/:id/pause
  * Withdraws the eBay offer but keeps the offer object and ELMS listing.
  */
