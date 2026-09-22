@@ -53,6 +53,19 @@ router.get('/start', async (req, res) => {
 });
 
 /**
+ * GET /api/ebay-connect/declined
+ * This is the RuName's "Auth Declined URL" - eBay redirects the browser HERE, not to
+ * /callback, when the seller presses "Decline" on eBay's consent screen (unlike generic
+ * OAuth, eBay's RuName setup uses a genuinely separate URL for this, not an ?error= on
+ * the accepted one). No code/state is exchanged - just send the seller back to the app
+ * with a friendly, non-alarming message so they can try again if it was a mistake.
+ */
+router.get('/declined', (req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5500';
+  res.redirect(`${frontendUrl}?ebayConnect=declined`);
+});
+
+/**
  * GET /api/ebay-connect/callback
  * This is the RuName's "Auth Accepted URL" - eBay redirects the browser here
  * after the user grants consent, with ?code=... and ?state=... in the query string.
