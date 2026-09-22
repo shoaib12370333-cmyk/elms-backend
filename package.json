@@ -16,7 +16,8 @@
     "test:announcement": "node tests/announcement.test.js",
     "test:joblock": "node tests/jobLock.test.js",
     "test:easyparser": "node tests/easyparserAdapter.test.js",
-    "test:bulkimport": "node tests/bulkImportJob.test.js"
+    "test:bulkimport": "node tests/bulkImportJob.test.js",
+    "test:orders-list": "node tests/ordersList.test.js"
   },
   "engines": {
     "node": "22.13.0"

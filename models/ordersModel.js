@@ -118,7 +118,7 @@ async function listOrders(userId, accountId) {
     // order profit stable even if the source/import price changes later.
     const savedAmazonPrice = listing?.amazonPrice ?? importRecord?.amazonPrice ?? null;
 
-    serialized.listing_title = listing?.title || obj.itemTitle || null;
+    serialized.listing_title = listing?.title || serialized.item_title || null;
     serialized.main_image = listing?.mainImage || null;
     serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
     serialized.buy_price = savedAmazonPrice;
