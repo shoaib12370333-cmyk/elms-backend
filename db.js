@@ -15,6 +15,7 @@ async function connectDB() {
   console.log('Connected to MongoDB Atlas.');
   await migrateListingIndex();
   await migrateOrderIndex();
+  await migrateProductCacheTtl();
 }
 
 /**
@@ -55,6 +56,28 @@ async function migrateOrderIndex() {
     await Order.syncIndexes();
   } catch (err) {
     console.warn('Order index migration skipped:', err.message);
+  }
+}
+
+/**
+ * The ProductCache collection's TTL index (auto-cleanup, not the "is this still usable"
+ * check - that's an admin setting checked in application code, see productCacheService.js)
+ * moved from a fixed 7 days to a 90-day backstop. A TTL index's expireAfterSeconds is fixed
+ * at index-creation time, so raising it needs the same drop-and-recreate as the other index
+ * migrations above - otherwise rows already have the old 7-day auto-delete applied.
+ */
+async function migrateProductCacheTtl() {
+  try {
+    const ProductCache = require('./models/schemas/ProductCache');
+    const indexes = await ProductCache.collection.indexes().catch(() => []);
+    const ttlIndex = indexes.find((i) => i.name === 'fetchedAt_1');
+    if (ttlIndex && ttlIndex.expireAfterSeconds !== 60 * 60 * 24 * 90) {
+      await ProductCache.collection.dropIndex('fetchedAt_1');
+      console.log('Dropped old productcaches TTL index fetchedAt_1 (was ' + ttlIndex.expireAfterSeconds + 's).');
+    }
+    await ProductCache.syncIndexes();
+  } catch (err) {
+    console.warn('Product cache TTL migration skipped:', err.message);
   }
 }
 
