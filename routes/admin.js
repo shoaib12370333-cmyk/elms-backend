@@ -476,6 +476,7 @@ router.get('/overview', async (req, res) => {
     health: {
       anthropic: !!process.env.ANTHROPIC_API_KEY,
       canopy: !!process.env.CANOPY_API_KEY,
+      easyparser: !!process.env.EASYPARSER_API_KEY,
       paddle: !!(process.env.PADDLE_API_KEY || process.env.PADDLE_WEBHOOK_SECRET),
       ebay: !!((process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET)),
       email: !!((process.env.SMTP_HOST && process.env.SMTP_USER)),

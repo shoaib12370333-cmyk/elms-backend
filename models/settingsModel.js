@@ -119,8 +119,8 @@ async function updateAiSettings(input = {}) {
   return serializeAi(doc.toObject());
 }
 
-const LIMIT_DEFAULTS = { bulkImportMax: 25, mailBatchSize: 20, mailDailyCap: 200 };
-const LIMIT_RANGES = { bulkImportMax: [1, 50], mailBatchSize: [1, 100], mailDailyCap: [1, 100000] };
+const LIMIT_DEFAULTS = { bulkImportMax: 25, bulkJobMax: 1000, mailBatchSize: 20, mailDailyCap: 200 };
+const LIMIT_RANGES = { bulkImportMax: [1, 50], bulkJobMax: [1, 5000], mailBatchSize: [1, 100], mailDailyCap: [1, 100000] };
 
 async function getLimits() {
   const doc = await Settings.findOne({ key: 'global' }).lean();

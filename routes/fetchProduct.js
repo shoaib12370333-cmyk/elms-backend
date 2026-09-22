@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { fetchProductByUrl } = require('../services/canopyAmazonService');
+const { fetchProductByUrl, extractAsinFromUrl, detectCountryFromUrl } = require('../services/canopyAmazonService');
 const { createImport, updateImportImages } = require('../models/importsModel');
 const { upsertDraft } = require('../models/listingsModel');
 const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
@@ -10,16 +10,22 @@ const { ACTION_COSTS } = require('../config/actionCosts');
 const { getActiveEbayAccount } = require('../models/ebayAccountsModel');
 const { materializeImageUrls } = require('../services/imageStorageService');
 const { requireAsinSku } = require('../services/skuService');
+const { getCachedProduct, setCachedProduct } = require('../services/productCacheService');
 
 /**
- * Fetches one Amazon product, saves it as an import, and creates/refreshes
- * its matching draft listing. Shared by both the single-URL and bulk routes.
- * Spends credits (per ACTION_COSTS.AMAZON_IMPORT) on a successful Amazon
- * fetch - but refunds them if saving the result afterwards fails, so a
- * database hiccup never permanently costs the user a credit for nothing.
+ * Saves an already-fetched, normalized product (see canopyAmazonService.normalizeProduct /
+ * easyparserAmazonService.normalizeDetail) as an import + draft listing for a user. This is
+ * the provider-agnostic half of what used to be fetchAndSaveDraft: fetching the product data
+ * is a separate step so it can come from Canopy (single/small-bulk import, below), from
+ * Easyparser (the background bulk-job processor, see jobs/bulkImportProcessor.js), or from
+ * the browser extension. Spends a credit on success, refunds it if saving fails, so a
+ * database hiccup never permanently costs a credit for nothing - same as before.
+ *
+ * `req` is only used to build absolute image URLs when no BACKEND_PUBLIC_URL/RENDER_EXTERNAL_URL
+ * env var is set (see imageStorageService.publicBaseUrl) - the background job passes a minimal
+ * stand-in object since it has no real HTTP request.
  */
-async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
-  const product = await fetchProductByUrl(amazonUrl);
+async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req) {
   const activeEbayAccount = await getActiveEbayAccount(userId);
   const charged = await spendCredit(userId, ACTION_COSTS.AMAZON_IMPORT);
 
@@ -32,7 +38,7 @@ async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
       }
     }
 
-    const importRecord = await createImport(userId, product, suggestedPrice, amazonUrl, activeEbayAccount?.id || null);
+    const importRecord = await createImport(userId, product, suggestedPrice, sourceUrl, activeEbayAccount?.id || null);
     product.images = product.images?.length
       ? await materializeImageUrls({ urls: product.images, userId, listingId: importRecord.id, req })
       : [];
@@ -60,12 +66,25 @@ async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
 
     return { product, suggestedPrice, importId: importRecord.id, draft };
   } catch (err) {
-    // We already have the Amazon data (the part credits actually pay for),
-    // but saving it failed - refund so the user isn't charged for a draft
-    // they never actually got.
     if (charged) await refundCredit(userId, ACTION_COSTS.AMAZON_IMPORT);
     throw err;
   }
+}
+
+/**
+ * Fetches one Amazon product (via Canopy, using a 7-day cache so the same ASIN isn't paid
+ * for twice - see services/productCacheService), then saves it as a draft. Shared by both
+ * the single-URL and small-bulk (synchronous) routes below.
+ */
+async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req) {
+  const asin = extractAsinFromUrl(amazonUrl);
+  const country = detectCountryFromUrl(amazonUrl);
+  let product = asin ? await getCachedProduct(asin, country) : null;
+  if (!product) {
+    product = await fetchProductByUrl(amazonUrl);
+    if (product.asin) await setCachedProduct(product.asin, country, product, 'canopy');
+  }
+  return saveProductAsDraft(userId, product, markupPercent, amazonUrl, req);
 }
 
 /**
@@ -111,22 +130,25 @@ router.post('/', requireAuth, async (req, res) => {
 });
 
 /**
+ * GET /api/fetch-product/limits
+ * bulkImportMax: the synchronous bulk route's cap (POST /bulk, below).
+ * bulkJobMax: the background bulk-job route's much higher cap (POST /bulk-job).
+ */
+router.get('/limits', requireAuth, async (req, res) => {
+  const { bulkImportMax, bulkJobMax } = await require('../models/settingsModel').getLimits();
+  res.json({ success: true, bulkImportMax, bulkJobMax, easyparserConfigured: !!process.env.EASYPARSER_API_KEY });
+});
+
+/**
  * POST /api/fetch-product/bulk
  * Requires a valid session token.
  * Body: { amazonUrls: string[], markupPercent?: number }
  *
- * Fetches multiple Amazon links one at a time and saves each as an import +
- * draft, same as the single fetch route. Stops early if the user runs out
- * of credits partway through, reporting how many succeeded before that
- * point. Returns a per-URL result so the caller can show progress and
- * report which links succeeded or failed, rather than failing the whole
- * batch if one link is bad.
+ * Fetches multiple Amazon links one at a time (synchronously, within this one request) and
+ * saves each as an import + draft. Capped low (see bulkImportMax, default 25) because it
+ * runs entirely inside one HTTP request - for large lists, use POST /bulk-job instead, which
+ * runs in the background and can handle far more links without timing out.
  */
-router.get('/limits', requireAuth, async (req, res) => {
-  const { bulkImportMax } = await require('../models/settingsModel').getLimits();
-  res.json({ success: true, bulkImportMax });
-});
-
 router.post('/bulk', requireAuth, async (req, res) => {
   const { amazonUrls, markupPercent } = req.body;
 
@@ -163,4 +185,97 @@ router.post('/bulk', requireAuth, async (req, res) => {
   res.json({ success: true, results });
 });
 
+/**
+ * POST /api/fetch-product/bulk-job
+ * Requires a valid session token and EASYPARSER_API_KEY to be configured on the server.
+ * Body: { amazonUrls: string[], markupPercent?: number }
+ *
+ * For large lists (up to bulkJobMax, default 1000). Unlike POST /bulk, this returns
+ * immediately with a job id - the links are fetched and saved in the background by
+ * jobs/bulkImportProcessor.js (via Easyparser's Bulk API), so the request never times out
+ * and the browser tab can be closed. Poll GET /bulk-job/:id for progress.
+ */
+router.post('/bulk-job', requireAuth, async (req, res) => {
+  const { amazonUrls, markupPercent } = req.body;
+  if (!Array.isArray(amazonUrls) || amazonUrls.length === 0) {
+    return res.status(400).json({ success: false, error: 'amazonUrls must be a non-empty array.' });
+  }
+  if (!process.env.EASYPARSER_API_KEY) {
+    return res.status(503).json({ success: false, error: 'Large background imports are not configured on the server yet (EASYPARSER_API_KEY is missing).' });
+  }
+  const { bulkJobMax } = await require('../models/settingsModel').getLimits();
+  if (amazonUrls.length > bulkJobMax) {
+    return res.status(400).json({ success: false, error: 'Please import at most ' + bulkJobMax + ' links at a time.', max: bulkJobMax });
+  }
+  if (!(await hasCredits(req.userId, ACTION_COSTS.AMAZON_IMPORT))) {
+    return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
+  }
+
+  const seen = new Set();
+  const items = [];
+  const skipped = [];
+  for (const amazonUrl of amazonUrls) {
+    const url = String(amazonUrl || '').trim();
+    if (!url) continue;
+    if (!isValidAmazonUrl(url)) { skipped.push({ amazonUrl: url, error: 'Not a valid Amazon product URL.' }); continue; }
+    const asin = extractAsinFromUrl(url);
+    if (!asin) { skipped.push({ amazonUrl: url, error: 'Could not find an ASIN in that URL.' }); continue; }
+    const country = detectCountryFromUrl(url);
+    const dedupeKey = country + ':' + asin;
+    if (seen.has(dedupeKey)) continue; // same product pasted twice - one item covers it
+    seen.add(dedupeKey);
+    items.push({ amazonUrl: url, asin, country, status: 'pending' });
+  }
+  if (!items.length) {
+    return res.status(400).json({ success: false, error: 'None of those links look like valid Amazon product links.', skipped });
+  }
+
+  const activeEbayAccount = await getActiveEbayAccount(req.userId);
+  const { createBulkImportJob } = require('../models/bulkImportJobsModel');
+  const job = await createBulkImportJob(req.userId, {
+    ebayAccountId: activeEbayAccount?.id || null,
+    markupPercent: Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0,
+    items,
+  });
+  res.json({ success: true, jobId: job.id, total: job.total, skipped });
+});
+
+/**
+ * GET /api/fetch-product/bulk-job/:id - progress for one job (store-scoped: only the
+ * user's own jobs are returned).
+ * GET /api/fetch-product/bulk-job - the user's recent jobs, newest first.
+ */
+router.get('/bulk-job/:id', requireAuth, async (req, res) => {
+  const { getBulkImportJob } = require('../models/bulkImportJobsModel');
+  const job = await getBulkImportJob(req.userId, req.params.id);
+  if (!job) return res.status(404).json({ success: false, error: 'Job not found.' });
+  res.json({ success: true, job });
+});
+router.get('/bulk-job', requireAuth, async (req, res) => {
+  const { listBulkImportJobs } = require('../models/bulkImportJobsModel');
+  const jobs = await listBulkImportJobs(req.userId);
+  res.json({ success: true, jobs });
+});
+
+/** POST /api/fetch-product/bulk-job/:id/cancel - stops a job that's still queued/running. */
+router.post('/bulk-job/:id/cancel', requireAuth, async (req, res) => {
+  const { cancelBulkImportJob } = require('../models/bulkImportJobsModel');
+  const job = await cancelBulkImportJob(req.userId, req.params.id);
+  if (!job) return res.status(404).json({ success: false, error: 'Job not found or already finished.' });
+  res.json({ success: true, job });
+});
+
+/** POST /api/fetch-product/bulk-job/:id/retry - retries this job's failed items. */
+router.post('/bulk-job/:id/retry', requireAuth, async (req, res) => {
+  try {
+    const { retryBulkImportJob } = require('../models/bulkImportJobsModel');
+    const job = await retryBulkImportJob(req.userId, req.params.id);
+    if (!job) return res.status(404).json({ success: false, error: 'Job not found.' });
+    res.json({ success: true, job });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
+module.exports.saveProductAsDraft = saveProductAsDraft;
