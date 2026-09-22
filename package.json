@@ -14,7 +14,9 @@
     "test:publish": "node tests/publishPreflight.test.js",
     "test:sessions": "node tests/sessions.test.js",
     "test:announcement": "node tests/announcement.test.js",
-    "test:joblock": "node tests/jobLock.test.js"
+    "test:joblock": "node tests/jobLock.test.js",
+    "test:easyparser": "node tests/easyparserAdapter.test.js",
+    "test:bulkimport": "node tests/bulkImportJob.test.js"
   },
   "engines": {
     "node": "22.13.0"

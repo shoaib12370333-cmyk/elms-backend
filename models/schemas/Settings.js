@@ -42,6 +42,9 @@ const settingsSchema = new mongoose.Schema(
 
     // Limits an admin can tune without a deploy.
     bulkImportMax: { type: Number, default: 25, min: 1, max: 50 },
+    // Background bulk-job import cap (POST /api/fetch-product/bulk-job, Easyparser-backed) - much
+    // higher than bulkImportMax since it doesn't run inside one HTTP request.
+    bulkJobMax: { type: Number, default: 1000, min: 1, max: 5000 },
     mailBatchSize: { type: Number, default: 20, min: 1, max: 100 },
     mailDailyCap: { type: Number, default: 200, min: 1, max: 100000 },
 
