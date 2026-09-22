@@ -179,6 +179,7 @@ app.use('/api/system-notifications', systemNotificationsRoute);
 app.use('/api/dashboard', dashboardRoute);
 app.use('/api/security', require('./routes/security'));
 app.use('/api/unsubscribe', require('./routes/unsubscribe'));
+app.use('/api/easyparser/callback', require('./routes/easyparserCallback'));
 app.use('/api/message-snippets', messageSnippetsRoute);
 
 // One-time admin seeding utility - remove after creating your first admin
