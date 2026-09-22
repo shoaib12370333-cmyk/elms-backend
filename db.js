@@ -14,6 +14,7 @@ async function connectDB() {
   await mongoose.connect(uri);
   console.log('Connected to MongoDB Atlas.');
   await migrateListingIndex();
+  await migrateOrderIndex();
 }
 
 /**
@@ -32,6 +33,28 @@ async function migrateListingIndex() {
     await Listing.syncIndexes();
   } catch (err) {
     console.warn('Listing index migration skipped:', err.message);
+  }
+}
+
+/**
+ * Orders used to be unique per ebayOrderId alone, from before an eBay order could have more
+ * than one line item. That old single-field unique index is still sitting in the database
+ * (models/schemas/Order.js has only ever declared the correct compound one, {userId,
+ * ebayOrderId, sku}), so a second line item on the same order - or the same line item synced
+ * twice at once by the periodic job and a webhook - hits a duplicate-key error on it and the
+ * whole account's sync for that run fails (E11000 ... index: ebayOrderId_1).
+ */
+async function migrateOrderIndex() {
+  try {
+    const Order = require('./models/schemas/Order');
+    const indexes = await Order.collection.indexes().catch(() => []);
+    if (indexes.some((i) => i.name === 'ebayOrderId_1')) {
+      await Order.collection.dropIndex('ebayOrderId_1');
+      console.log('Dropped old orders index ebayOrderId_1.');
+    }
+    await Order.syncIndexes();
+  } catch (err) {
+    console.warn('Order index migration skipped:', err.message);
   }
 }
 
