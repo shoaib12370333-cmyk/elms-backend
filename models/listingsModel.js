@@ -263,6 +263,20 @@ async function listListings(userId, status, accountId = null) {
  * given user so one user can never edit another's listing.
  */
 async function updateListing(userId, id, fields) {
+  // If the price changed but no explicit markup came with it (e.g. the quick inline-card
+  // save, which only ever sends sellPrice), keep the stored markup% honest by deriving it
+  // from the new price against the listing's Amazon cost - otherwise it silently goes stale
+  // and later shows a markup the seller never actually set (see draftRowHtml's note on why
+  // the shown "%" is the stored markup, not one recomputed from profit/sellPrice).
+  if (fields.sellPrice !== undefined && fields.markupPercent === undefined) {
+    const existing = await Listing.findOne({ _id: id, userId }).select('amazonPrice').lean();
+    const amazonPrice = normalizeAmazonPrice(existing?.amazonPrice);
+    const sell = Number(fields.sellPrice);
+    if (amazonPrice && amazonPrice > 0 && Number.isFinite(sell)) {
+      fields = { ...fields, markupPercent: Number((((sell / amazonPrice) - 1) * 100).toFixed(2)) };
+    }
+  }
+
   const update = {};
   if (fields.title !== undefined) update.title = fields.title;
   if (fields.images !== undefined) {
