@@ -22,7 +22,8 @@
     "test:listing-markup": "node tests/updateListingMarkup.test.js",
     "test:store-match": "node tests/amazonStoreMatch.test.js",
     "test:product-cache": "node tests/productCache.test.js",
-    "test:draft-save": "node tests/draftSave.test.js"
+    "test:draft-save": "node tests/draftSave.test.js",
+    "test:category-query": "node tests/categoryQuery.test.js"
   },
   "engines": {
     "node": "22.13.0"

@@ -66,6 +66,25 @@ async function getCategoryTreeId(refreshToken, marketplaceId = 'EBAY_US') {
 }
 
 /**
+ * eBay's category-suggestion matching works best on a short, buyer-style search
+ * phrase (similar to what someone types into eBay search) - not a full Amazon
+ * listing title, which is typically 100-200 characters of brand + model + size/
+ * color/pack-count variants + marketing copy. Feeding the whole raw title in
+ * consistently drowns out the actual product keywords and returns an irrelevant,
+ * overly generic top category. Stripping bracketed/parenthetical noise (pack
+ * counts, color/size call-outs, compatibility notes) and keeping only the first
+ * handful of words gets much closer to what the Taxonomy API is tuned for.
+ */
+function buildCategoryQuery(title) {
+  const cleaned = String(title || '')
+    .replace(/[([][^)\]]*[)\]]/g, ' ')
+    .replace(/[|/,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.split(' ').filter(Boolean).slice(0, 10).join(' ') || cleaned;
+}
+
+/**
  * Suggests eBay categories for a product based on its title (or other
  * descriptive text). Returns the top suggestion's category ID/name plus
  * the full list, so the caller can auto-fill the top pick while still
@@ -84,7 +103,7 @@ async function suggestCategories(refreshToken, query, marketplaceId = 'EBAY_US')
 
   const data = await ebayGet(
     refreshToken,
-    `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(treeId)}/get_category_suggestions?q=${encodeURIComponent(query.trim())}`,
+    `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(treeId)}/get_category_suggestions?q=${encodeURIComponent(buildCategoryQuery(query))}`,
     marketplaceId
   );
 
@@ -138,4 +157,4 @@ async function getItemAspectsForCategory(refreshToken, categoryId, marketplaceId
   return result;
 }
 
-module.exports = { suggestCategories, getItemAspectsForCategory };
+module.exports = { suggestCategories, getItemAspectsForCategory, buildCategoryQuery };
