@@ -28,9 +28,11 @@ async function cleanVeroTerms(input) {
   let usage = null;
 
   if (Object.keys(toRewrite).length) {
-    const words = scan.terms.join(', ');
+    const words = scan.hardTerms.join(', ');
+    const ordinary = scan.terms.filter((t) => !scan.hardTerms.includes(t)).join(', ');
     const prompt = [
-      'You edit eBay listings so they contain none of these protected brand, character or trademark words (eBay VeRO): ' + words + '.',
+      'You edit eBay listings so they contain none of these protected brand, character or trademark words (eBay VeRO): ' + (words || '(none of the clear-cut ones)') + '.',
+      ordinary ? 'These words are ALSO ordinary language: ' + ordinary + '. Remove them ONLY where they name the brand or character (e.g. "Apple Watch band", "Ring doorbell"); keep them exactly where they have their ordinary meaning ("diamond ring", "apple green", "toggle switch", "8GB RAM").' : '',
       'Rewrite ONLY the fields given below. Remove each of those words, or replace it with a plain generic description of the item',
       '(for example "Nike running shoes" -> "running shoes"; "fits iPhone 14" -> "fits select smartphone models").',
       'Never invent facts, sizes, materials, claims or features that are not in the text. Keep everything else exactly as it is:',
@@ -40,7 +42,7 @@ async function cleanVeroTerms(input) {
       '',
       'Fields to rewrite:',
       JSON.stringify(toRewrite),
-    ].join('\n');
+    ].filter((line, i) => line !== '' || i > 3).join('\n');
 
     const answer = await askClaude({ prompt, maxTokens: 3500 });
     usage = answer;
@@ -57,15 +59,21 @@ async function cleanVeroTerms(input) {
     if (Array.isArray(parsed.bulletPoints) && parsed.bulletPoints.length === bulletPoints.length) result.bulletPoints = parsed.bulletPoints.map((b) => String(b ?? ''));
   }
 
-  // Guarantee: whatever is still there (the AI missed one, or was not asked) is cut out by rule.
-  const finalTitle = stripVeroTerms(result.title).slice(0, 80).trim();
-  const finalDescription = stripVeroTerms(result.description);
-  const finalBullets = result.bulletPoints.map((b) => stripVeroTerms(b)).filter((b) => b.trim());
+  // Guarantee: every clear-cut word still there (the AI missed one, or was not asked) is cut out by rule.
+  // Words that are also ordinary language (ring, apple, ...) were decided by the AI from the context and stay.
+  const keep = { keepAmbiguous: true };
+  const finalTitle = stripVeroTerms(result.title, keep).slice(0, 80).trim();
+  const finalDescription = stripVeroTerms(result.description, keep);
+  const finalBullets = result.bulletPoints.map((b) => stripVeroTerms(b, keep)).filter((b) => b.trim());
   const rules = cleanSpecificsAndAspects({ specifications: input.specifications, aspects: input.aspects });
 
   // A VeRO brand on the product itself must not come back through the Brand item specific.
   const aspects = { ...rules.aspects };
   if (findVeroTerms(input.brand).length) aspects.Brand = ['Unbranded'];
+
+  // What was really taken out: found before, gone afterwards.
+  const after = scanListing({ title: finalTitle, description: finalDescription, bulletPoints: finalBullets, specifications: rules.specifications, aspects });
+  const removed = [...new Set([...scan.terms, ...rules.removed])].filter((t) => !after.terms.includes(t));
 
   const data = {
     title: finalTitle,
@@ -73,7 +81,9 @@ async function cleanVeroTerms(input) {
     bulletPoints: finalBullets,
     specifications: rules.specifications,
     aspects,
-    removed: [...new Set([...scan.terms, ...rules.removed])],
+    removed,
+    // Words still flagged after cleaning are ordinary-language uses the AI kept on purpose.
+    kept: after.terms,
     unchanged: false,
   };
   return { text: JSON.stringify({ removed: data.removed }), data, usage };
