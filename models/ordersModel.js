@@ -32,6 +32,7 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     ebayPaymentStatus: orderLineItem.ebayPaymentStatus || null,
     ebayCancelStatus: orderLineItem.ebayCancelStatus || null,
     itemTitle: orderLineItem.itemTitle || null,
+    itemImage: orderLineItem.itemImage || null,
     legacyItemId: orderLineItem.legacyItemId || null,
     currency: orderLineItem.currency || null,
     deliveryCost: orderLineItem.deliveryCost ?? null,
@@ -110,33 +111,47 @@ async function listOrders(userId, accountId) {
     .sort({ ebayCreatedAt: -1, createdAt: -1 })
     .lean();
 
-  return docs.map((doc) => {
-    const serialized = serialize(doc);
-    const listing = doc.listingId;
-    const importRecord = listing?.importId;
+  return docs.map((doc) => enrichOrder(serialize(doc), doc));
+}
 
-    // Prefer the listing's saved Amazon price snapshot. This keeps historical
-    // order profit stable even if the source/import price changes later.
-    const savedAmazonPrice = listing?.amazonPrice ?? importRecord?.amazonPrice ?? null;
+/**
+ * Fills in the fields that need the linked listing/import/account (title,
+ * image, buy price, profit) on top of the plain serialized order. Shared by
+ * listOrders and getOrderById so a single order fetched after an action
+ * (refresh, mark shipped, save note...) looks exactly like it does in the list,
+ * instead of the drawer briefly losing its image/title/profit.
+ */
+function enrichOrder(serialized, doc) {
+  const listing = doc.listingId;
+  const importRecord = listing?.importId;
 
-    serialized.listing_title = listing?.title || serialized.item_title || null;
-    serialized.main_image = listing?.mainImage || null;
-    serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
-    serialized.buy_price = savedAmazonPrice;
+  // Prefer the listing's saved Amazon price snapshot. This keeps historical
+  // order profit stable even if the source/import price changes later.
+  const savedAmazonPrice = listing?.amazonPrice ?? importRecord?.amazonPrice ?? null;
 
-    if (serialized.buy_price != null && serialized.sale_price != null) {
-      serialized.profit = Number((serialized.sale_price - serialized.buy_price * (serialized.quantity || 1)).toFixed(2));
-    } else {
-      serialized.profit = null;
-    }
+  serialized.listing_title = listing?.title || serialized.item_title || null;
+  // Fall back to eBay's own picture for the line item (item.image.imageUrl)
+  // when the order has no linked ELMS listing - the common case for orders
+  // synced straight from eBay that were never imported/published via ELMS.
+  serialized.main_image = listing?.mainImage || doc.itemImage || null;
+  serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
+  serialized.buy_price = savedAmazonPrice;
 
-    return serialized;
-  });
+  if (serialized.buy_price != null && serialized.sale_price != null) {
+    serialized.profit = Number((serialized.sale_price - serialized.buy_price * (serialized.quantity || 1)).toFixed(2));
+  } else {
+    serialized.profit = null;
+  }
+
+  return serialized;
 }
 
 async function getOrderById(userId, id) {
-  const doc = await Order.findOne({ _id: id, userId });
-  return doc ? serialize(doc) : null;
+  const doc = await Order.findOne({ _id: id, userId })
+    .populate({ path: 'listingId', populate: { path: 'importId' } })
+    .populate('ebayAccountId')
+    .lean();
+  return doc ? enrichOrder(serialize(doc), doc) : null;
 }
 
 async function updateFulfillmentStatus(userId, id, fulfillmentStatus, amazonOrderId) {
