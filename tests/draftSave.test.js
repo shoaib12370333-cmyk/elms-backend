@@ -64,6 +64,16 @@ function fakeRes() {
   assert.strictEqual(updateListingCalls[0].categoryId, '9355');
   assert.strictEqual(updateListingCalls[0].marketplaceId, 'EBAY_GB');
 
+  // The editor sends item specifics and bullets at the top level (no draftProduct). They used to be
+  // dropped, so filled-in specifics were never saved and the publish then failed on "required specifics empty".
+  updateListingCalls = [];
+  res = fakeRes();
+  await handler({ userId: 'u1', params: { id: 'l1' }, body: { title: 'T title', ebayAspects: { Color: ['Black'] }, bulletPoints: ['One', 'Two'], specifications: [{ name: 'A', value: 'b' }] } }, res);
+  assert.strictEqual(res.body.success, true);
+  assert.deepStrictEqual(updateListingCalls[0].ebayAspects, { Color: ['Black'] });
+  assert.deepStrictEqual(updateListingCalls[0].bulletPoints, ['One', 'Two']);
+  assert.deepStrictEqual(updateListingCalls[0].specifications, [{ name: 'A', value: 'b' }]);
+
   // An unrelated error thrown deeper (e.g. from updateListing) is now caught and reported
   // cleanly too, instead of the generic 500.
   updateListingImpl = async () => { throw new Error('eBay does not recognise category 9355 on EBAY_GB.'); };

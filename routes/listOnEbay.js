@@ -402,7 +402,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       ebayAccountId: destinationAccountId,
       marketplaceId: destinationMarketplaceId,
       description: productToSave?.description ?? req.body.description,
-      bulletPoints: productToSave?.bulletPoints,
+      bulletPoints: productToSave?.bulletPoints ?? (Array.isArray(req.body.bulletPoints) ? req.body.bulletPoints : undefined),
       specifications: productToSave?.specifications ?? req.body.specifications,
       // Per-product settings from the listing editor (validated in listingsModel.buildSettingsUpdate).
       tags: req.body.tags,
@@ -416,7 +416,8 @@ router.put('/:id', requireAuth, async (req, res) => {
       postalCode: req.body.postalCode,
       stockMonitoring: req.body.stockMonitoring,
       priceMonitoring: req.body.priceMonitoring,
-      ebayAspects: productToSave?.ebayAspects,
+      // The editor sends the item specifics at the top level (no draftProduct); they used to be dropped.
+      ebayAspects: ebayAspects && typeof ebayAspects === 'object' ? ebayAspects : productToSave?.ebayAspects,
       amazonPrice: productToSave?.price,
       marginAmount: productToSave?.price != null && sellPrice != null ? Number((Number(sellPrice) - Number(productToSave.price)).toFixed(2)) : undefined,
     });
