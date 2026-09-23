@@ -36,6 +36,28 @@ const {
 } = require('../models/systemNotificationsModel');
 
 
+/**
+ * eBay answers now and then with "A system error has occurred" (error 25001) or a 502/503/504 that goes
+ * away on its own. publishListing is safe to run again (the inventory item is a PUT, an existing offer is
+ * found and reused), so a transient failure is retried once, on a shorter deadline, before the publish
+ * is reported as failed.
+ */
+function isTransientEbayError(err) {
+  const id = Number(err?.ebayErrors?.[0]?.errorId);
+  return id === 25001 || [502, 503, 504].includes(Number(err?.statusCode));
+}
+
+async function publishWithTransientRetry(publishFn, args, { delayMs = 3000, log = () => {} } = {}) {
+  try {
+    return await publishFn(args);
+  } catch (err) {
+    if (!isTransientEbayError(err)) throw err;
+    log('TRANSIENT EBAY ERROR - retrying once', { message: err.message });
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return publishFn({ ...args, timeoutMs: 2 * 60 * 1000 });
+  }
+}
+
 function normalizeError(err) {
   return {
     code:
@@ -507,7 +529,7 @@ async function processOneQueuedListing(listing) {
     }
 
     const result =
-      await publishListing({
+      await publishWithTransientRetry(publishListing, {
         refreshToken,
 
         product,
@@ -530,7 +552,7 @@ async function processOneQueuedListing(listing) {
 
         timeoutMs:
           4 * 60 * 1000,
-      });
+      }, { log: debug });
 
 
     // =========================================================
@@ -777,4 +799,6 @@ async function processPublishQueue() {
 module.exports = {
   processPublishQueue,
   processOneQueuedListing,
+  publishWithTransientRetry,
+  isTransientEbayError,
 };
