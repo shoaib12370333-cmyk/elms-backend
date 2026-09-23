@@ -229,9 +229,14 @@ async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, 
 
 // ref: the ticket's short code, put in the subject so the customer's answer finds its ticket again.
 // inReplyTo: Message-ID of the mail that opened the ticket, so mail apps keep it in one conversation.
-async function sendTicketReplyEmail({ to, subject, reply, ref, inReplyTo }) {
+// ai: the reply was written by the support assistant; holding: it only says a person will look at the ticket;
+// viaEmail: the customer can answer by replying to this mail (otherwise they are pointed to a new ticket).
+async function sendTicketReplyEmail({ to, subject, reply, ref, inReplyTo, ai = false, holding = false, viaEmail = true }) {
   const appName = process.env.APP_NAME || 'ELMS';
-  const text = 'Your support request "' + subject + '" has been answered:\n\n' + reply + '\n\nYou can reply to this email if you need more help.';
+  let text;
+  if (holding) text = reply + '\n\n- ' + appName + ' Support';
+  else if (ai) text = 'Here is the answer to your support request "' + subject + '":\n\n' + reply + '\n\n- ' + appName + ' AI assistant. ' + (viaEmail ? 'If this does not solve it, reply to this email and our team will step in.' : 'If this does not solve it, open a new ticket and write "talk to admin".');
+  else text = 'Your support request "' + subject + '" has been answered:\n\n' + reply + '\n\nYou can reply to this email if you need more help.';
   return sendFrom('support', {
     to,
     subject: 'Re: ' + subject + (ref ? ' [Ticket #' + ref + ']' : ''),

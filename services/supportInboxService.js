@@ -12,6 +12,11 @@ const { credentialsFor, senderAddress } = require('./emailService');
  * A mail is marked as read only after it has been saved, so a failed run is simply retried.
  */
 
+/** The support assistant answers a new mail first; serious ones go to an admin. Runs in the background. */
+function kickAssistant(ticketId, opts) {
+  try { require('./supportAssistantService').kickAssistant(ticketId, opts); } catch (err) { console.warn('[support-inbox] assistant not started:', err.message); }
+}
+
 const MAX_PER_RUN = 25;
 const MAX_BODY = 10000;
 const MAX_TICKETS_PER_SENDER_PER_HOUR = 20;
@@ -102,6 +107,7 @@ async function handleParsedMail(parsed, ownAddresses = []) {
         $set: { status: 'open', resolvedAt: null },
         $push: { thread: { from: 'customer', text: body, at: parsed.date || new Date(), emailMessageId: messageId } },
       });
+      kickAssistant(ticket._id, { followUp: true });
       return { action: 'appended', ticketId: String(ticket._id) };
     }
   }
@@ -119,6 +125,7 @@ async function handleParsedMail(parsed, ownAddresses = []) {
     fromName,
     emailMessageId: messageId,
   });
+  kickAssistant(ticket._id);
   return { action: 'created', ticketId: String(ticket._id) };
 }
 

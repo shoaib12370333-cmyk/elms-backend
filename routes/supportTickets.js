@@ -18,6 +18,8 @@ router.post('/', requireAuth, async (req, res) => {
   }
 
   const ticket = await createTicket(req.userId, { subject, message });
+  // The support assistant answers first; anything serious goes to an admin (see supportAssistantService).
+  require('../services/supportAssistantService').kickAssistant(ticket.id);
   res.json({ success: true, ticket });
 });
 

@@ -22,12 +22,16 @@ async function listTicketsForUser(userId) {
  */
 async function listAllTickets() {
   const docs = await SupportTicket.find().populate('userId').sort({ createdAt: -1 });
-  return docs.map((doc) => {
+  const rows = docs.map((doc) => {
     const serialized = serialize(doc);
     serialized.userName = doc.userId?.name || doc.fromName || null;
     serialized.userEmail = doc.userId?.email || doc.fromEmail || null;
+    serialized.escalationReason = doc.escalationReason || null; // for admins only
     return serialized;
   });
+  // Open tickets that need a person come first (urgent before the rest), then the other open ones, then resolved.
+  const rank = (t) => (t.status === 'resolved' ? 3 : t.escalated && t.urgent ? 0 : t.escalated ? 1 : 2);
+  return rows.sort((a, b) => rank(a) - rank(b) || new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 /**
@@ -60,6 +64,11 @@ function serialize(doc) {
     ref: obj.ref || null,
     emailMessageId: obj.emailMessageId || null,
     thread: Array.isArray(obj.thread) ? obj.thread.map((t) => ({ from: t.from, text: t.text, at: t.at })) : [],
+    aiStatus: obj.aiStatus || null,
+    escalated: !!obj.escalated,
+    urgent: !!obj.urgent,
+    // What the assistant answered (the customer sees it in their ticket list).
+    aiReply: (Array.isArray(obj.thread) ? [...obj.thread].reverse().find((t) => t.from === 'ai') : null)?.text || null,
     createdAt: obj.createdAt,
   };
 }
