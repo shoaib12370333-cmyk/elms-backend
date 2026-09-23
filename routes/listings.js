@@ -259,7 +259,6 @@ router.get('/:id/detail', requireAuth, async (req, res) => {
  */
 router.post('/:id/publish', requireAuth, async (req, res) => {
   let claimed = null;
-  let creditSpent = false;
 
   try {
     const listingId = req.params.id;
@@ -287,46 +286,8 @@ router.post('/:id/publish', requireAuth, async (req, res) => {
       });
     }
 
-    const creditCost =
-      Number(
-        ACTION_COSTS?.PUBLISH_LISTING ??
-        ACTION_COSTS?.PUBLISH ??
-        1
-      );
-
-    if (creditCost > 0) {
-      const available =
-        await hasCredits(
-          req.userId,
-          creditCost
-        );
-
-      if (!available) {
-        return res.status(402).json({
-          success: false,
-          error:
-            'You do not have enough credits to publish this listing.',
-        });
-      }
-
-      const spent =
-        await spendCredit(
-          req.userId,
-          creditCost,
-          'eBay listing publish'
-        );
-
-      if (!spent) {
-        return res.status(402).json({
-          success: false,
-          error:
-            'You do not have enough credits to publish this listing.',
-        });
-      }
-
-      creditSpent = true;
-    }
-
+    // The publish credit is charged (and refunded on failure) by processOneQueuedListing itself.
+    // Charging here as well took TWO credits per publish, and the extra one was never refunded.
     claimed =
       await claimListingForPublishing(
         req.userId,
@@ -334,14 +295,6 @@ router.post('/:id/publish', requireAuth, async (req, res) => {
       );
 
     if (!claimed) {
-      if (creditSpent) {
-        await refundCredit(
-          req.userId,
-          creditCost,
-          'eBay listing publish claim failed'
-        );
-      }
-
       return res.status(409).json({
         success: false,
         error:
@@ -363,6 +316,16 @@ router.post('/:id/publish', requireAuth, async (req, res) => {
         claimed
       );
 
+    // processOneQueuedListing reports a failed publish by returning the listing in "error" status
+    // (it does not throw), so answering success here made the UI say "Published" for a failure.
+    if (published && published.status === 'error') {
+      return res.status(502).json({
+        success: false,
+        error: published.error_message || 'eBay publishing failed.',
+        listing: published,
+      });
+    }
+
     return res.json({
       success: true,
       listing: published,
@@ -372,24 +335,6 @@ router.post('/:id/publish', requireAuth, async (req, res) => {
       'instant listing publish error:',
       err
     );
-
-    if (
-      creditSpent &&
-      claimed
-    ) {
-      try {
-        await refundCredit(
-          req.userId,
-          creditCost,
-          'eBay listing publish failed'
-        );
-      } catch (refundErr) {
-        console.error(
-          'publish credit refund failed:',
-          refundErr.message
-        );
-      }
-    }
 
     if (claimed) {
       try {
