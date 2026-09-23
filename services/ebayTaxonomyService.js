@@ -141,15 +141,21 @@ async function getItemAspectsForCategory(refreshToken, categoryId, marketplaceId
 
   const aspects = Array.isArray(data.aspects) ? data.aspects.map((a) => {
     const c = a.aspectConstraint || {};
-    return {
+    const all = Array.isArray(a.aspectValues) ? a.aspectValues.map(v => v.localizedValue).filter(Boolean) : [];
+    const def = {
       name: a.localizedAspectName,
       required: !!c.aspectRequired,
       usage: c.aspectUsage || (c.aspectRequired ? 'REQUIRED' : 'OPTIONAL'),
       cardinality: c.itemToAspectCardinality || 'SINGLE',
       mode: c.aspectMode || 'FREE_TEXT',
       dataType: c.aspectDataType || 'STRING',
-      values: Array.isArray(a.aspectValues) ? a.aspectValues.map(v => v.localizedValue).filter(Boolean).slice(0, 100) : [],
+      // The editor only gets the first 100 choices (keeps the response small) ...
+      values: all.slice(0, 100),
     };
+    // ... but the publish check must know EVERY allowed value, or a valid one past #100 would be dropped.
+    // Not enumerable, so it never goes out in the JSON response.
+    Object.defineProperty(def, 'allValues', { value: all, enumerable: false });
+    return def;
   }).filter(a => a.name) : [];
 
   const result = { categoryId: String(categoryId), categoryTreeId: String(treeId), aspects };
