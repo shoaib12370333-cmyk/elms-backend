@@ -330,7 +330,7 @@ router.get('/settings/ai', async (req, res) => {
       { $group: { _id: { kind: '$kind', ok: '$ok' }, calls: { $sum: 1 }, credits: { $sum: '$credits' }, input: { $sum: '$inputTokens' }, output: { $sum: '$outputTokens' } } },
     ]),
   ]);
-  const summary = { title: { calls: 0, failed: 0, credits: 0 }, description: { calls: 0, failed: 0, credits: 0 }, aspects: { calls: 0, failed: 0, credits: 0 }, reply: { calls: 0, failed: 0, credits: 0 }, inputTokens: 0, outputTokens: 0 };
+  const summary = { title: { calls: 0, failed: 0, credits: 0 }, description: { calls: 0, failed: 0, credits: 0 }, aspects: { calls: 0, failed: 0, credits: 0 }, reply: { calls: 0, failed: 0, credits: 0 }, vero: { calls: 0, failed: 0, credits: 0 }, inputTokens: 0, outputTokens: 0 };
   for (const row of usage) {
     const bucket = summary[row._id.kind];
     if (!bucket) continue;

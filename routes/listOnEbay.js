@@ -174,6 +174,42 @@ router.post('/fill-aspects', requireAuth, async (req, res) => {
   });
 });
 
+/**
+ * GET /api/list-on-ebay/vero-words
+ * The VeRO word list as ONE regex (source + flags), so the browser checks drafts and live listings with
+ * exactly the rules the server uses. Apply it to text with accents removed.
+ */
+router.get('/vero-words', requireAuth, (req, res) => {
+  const { getVeroPattern } = require('../services/veroService');
+  const { getVeroWords } = require('../config/veroWords');
+  res.json({ success: true, pattern: getVeroPattern(), count: getVeroWords().length });
+});
+
+/**
+ * POST /api/list-on-ebay/vero-clean
+ * Body: { title, description?, bulletPoints?, specifications?, aspects?, brand?, categoryName? }
+ * -> { data: { title, description, bulletPoints, specifications, aspects, removed } }
+ * Costs one AI credit, but only when there is something to remove.
+ */
+router.post('/vero-clean', requireAuth, async (req, res) => {
+  const { scanListing } = require('../services/veroService');
+  const { cleanVeroTerms } = require('../services/veroCleanerService');
+  const input = {
+    title: String(req.body?.title || ''),
+    description: String(req.body?.description || ''),
+    bulletPoints: Array.isArray(req.body?.bulletPoints) ? req.body.bulletPoints : [],
+    specifications: Array.isArray(req.body?.specifications) ? req.body.specifications : [],
+    aspects: req.body?.aspects && typeof req.body.aspects === 'object' ? req.body.aspects : {},
+    brand: String(req.body?.brand || ''),
+  };
+  if (!input.title.trim()) return res.status(400).json({ success: false, error: 'Enter a title first.' });
+  if (!scanListing(input).terms.length) return res.json({ success: true, data: { unchanged: true, removed: [] }, creditsUsed: 0 });
+  return runAiAction(req, res, {
+    kind: 'vero', costKey: 'AI_TITLE', enabledKey: 'aiTitleEnabled',
+    run: () => cleanVeroTerms(input),
+  });
+});
+
 router.post('/:id/images/upload', requireAuth, async (req, res) => {
   const imageData = String(req.body?.imageData || '').trim();
   const imageUrl = String(req.body?.imageUrl || '').trim();
@@ -366,7 +402,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       ebayAccountId: destinationAccountId,
       marketplaceId: destinationMarketplaceId,
       description: productToSave?.description ?? req.body.description,
-      bulletPoints: productToSave?.bulletPoints,
+      bulletPoints: productToSave?.bulletPoints ?? (Array.isArray(req.body.bulletPoints) ? req.body.bulletPoints : undefined),
       specifications: productToSave?.specifications ?? req.body.specifications,
       // Per-product settings from the listing editor (validated in listingsModel.buildSettingsUpdate).
       tags: req.body.tags,
@@ -380,7 +416,8 @@ router.put('/:id', requireAuth, async (req, res) => {
       postalCode: req.body.postalCode,
       stockMonitoring: req.body.stockMonitoring,
       priceMonitoring: req.body.priceMonitoring,
-      ebayAspects: productToSave?.ebayAspects,
+      // The editor sends the item specifics at the top level (no draftProduct); they used to be dropped.
+      ebayAspects: ebayAspects && typeof ebayAspects === 'object' ? ebayAspects : productToSave?.ebayAspects,
       amazonPrice: productToSave?.price,
       marginAmount: productToSave?.price != null && sellPrice != null ? Number((Number(sellPrice) - Number(productToSave.price)).toFixed(2)) : undefined,
     });

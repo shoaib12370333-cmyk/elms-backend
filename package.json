@@ -31,7 +31,11 @@
     "test:transient-publish": "node tests/transientPublish.test.js",
     "test:listing-ids": "node tests/listingSerializeIds.test.js",
     "test:item-specifics": "node tests/itemSpecifics.test.js",
-    "test:instant-publish": "node tests/instantPublish.test.js"
+    "test:instant-publish": "node tests/instantPublish.test.js",
+    "test:vero": "node tests/vero.test.js",
+    "test:vero-clean": "node tests/veroClean.test.js",
+    "test:vero-routes": "node tests/veroRoutes.test.js",
+    "test:specifics-fallback": "node tests/itemSpecificsFallback.test.js"
   },
   "engines": {
     "node": "22.13.0"
