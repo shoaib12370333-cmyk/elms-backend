@@ -38,6 +38,7 @@ const { startOrderSync } = require('./jobs/orderSync');
 const { startConversationSync } = require('./jobs/conversationSync');
 const { startStatsSync } = require('./jobs/statsSync');
 const { startAnnouncementSender } = require('./jobs/announcementSender');
+const { startSupportInbox } = require('./jobs/supportInbox');
 const { startBulkImportProcessor } = require('./jobs/bulkImportProcessor');
 const { startPublishQueue, runPublishQueue } = require('./jobs/publishQueue');
 
@@ -233,6 +234,7 @@ app.listen(PORT, () => {
     startConversationSync();
     startStatsSync();
     startAnnouncementSender();
+    startSupportInbox();
     startBulkImportProcessor();
     startPublishQueue();
     runPublishQueue().catch((err) => console.error('[publish-queue] initial run failed:', err.message));

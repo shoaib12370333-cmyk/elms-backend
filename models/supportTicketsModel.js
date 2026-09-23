@@ -24,8 +24,8 @@ async function listAllTickets() {
   const docs = await SupportTicket.find().populate('userId').sort({ createdAt: -1 });
   return docs.map((doc) => {
     const serialized = serialize(doc);
-    serialized.userName = doc.userId?.name || null;
-    serialized.userEmail = doc.userId?.email || null;
+    serialized.userName = doc.userId?.name || doc.fromName || null;
+    serialized.userEmail = doc.userId?.email || doc.fromEmail || null;
     return serialized;
   });
 }
@@ -34,9 +34,11 @@ async function listAllTickets() {
  * Admin-only: marks a ticket resolved, optionally with a reply message.
  */
 async function resolveTicket(id, adminReply) {
+  const reply = adminReply && String(adminReply).trim() ? String(adminReply).trim() : null;
+  const update = { status: 'resolved', adminReply: reply, resolvedAt: new Date() };
   const doc = await SupportTicket.findByIdAndUpdate(
     id,
-    { status: 'resolved', adminReply: adminReply || null, resolvedAt: new Date() },
+    reply ? { ...update, $push: { thread: { from: 'admin', text: reply, at: new Date() } } } : update,
     { new: true }
   );
   return doc ? serialize(doc) : null;
@@ -52,6 +54,12 @@ function serialize(doc) {
     status: obj.status,
     adminReply: obj.adminReply,
     resolvedAt: obj.resolvedAt,
+    source: obj.source || 'app',
+    fromEmail: obj.fromEmail || null,
+    fromName: obj.fromName || null,
+    ref: obj.ref || null,
+    emailMessageId: obj.emailMessageId || null,
+    thread: Array.isArray(obj.thread) ? obj.thread.map((t) => ({ from: t.from, text: t.text, at: t.at })) : [],
     createdAt: obj.createdAt,
   };
 }

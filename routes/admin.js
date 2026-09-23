@@ -121,12 +121,18 @@ router.post('/tickets/:id/resolve', async (req, res) => {
     return res.status(404).json({ success: false, error: 'Ticket not found.' });
   }
   let emailed = false;
-  if (adminReply && String(adminReply).trim() && ticket.userId) {
+  if (adminReply && String(adminReply).trim() && (ticket.userId || ticket.fromEmail)) {
     try {
-      const { getUserById } = require('../models/usersModel');
-      const owner = await getUserById(ticket.userId);
-      if (owner && owner.email) {
-        await require('../services/emailService').sendTicketReplyEmail({ to: owner.email, subject: ticket.subject, reply: String(adminReply).trim() });
+      // A ticket that came in as an email goes back to whoever wrote it (they may have no ELMS account);
+      // an in-app ticket goes to the account's email.
+      let to = ticket.fromEmail || null;
+      if (!to && ticket.userId) {
+        const { getUserById } = require('../models/usersModel');
+        const owner = await getUserById(ticket.userId);
+        to = owner && owner.email ? owner.email : null;
+      }
+      if (to) {
+        await require('../services/emailService').sendTicketReplyEmail({ to, subject: ticket.subject, reply: String(adminReply).trim(), ref: ticket.ref, inReplyTo: ticket.emailMessageId || undefined });
         emailed = true;
       }
     } catch (mailErr) {

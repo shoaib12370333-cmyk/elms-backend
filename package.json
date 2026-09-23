@@ -27,6 +27,7 @@
     "test:message-extras": "node tests/messageExtras.test.js",
     "test:user-extension-key": "node tests/userExtensionKey.test.js",
     "test:package-category": "node tests/packageAndCategory.test.js",
+    "test:support-inbox": "node tests/supportInbox.test.js",
     "test:transient-publish": "node tests/transientPublish.test.js"
   },
   "engines": {
@@ -42,7 +43,9 @@
     "express-async-errors": "^3.1.1",
     "express-rate-limit": "^7.4.1",
     "google-auth-library": "^9.14.1",
+    "imapflow": "^2.0.6",
     "jsonwebtoken": "^9.0.2",
+    "mailparser": "^3.9.28",
     "mongoose": "^8.7.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^7.0.6"
