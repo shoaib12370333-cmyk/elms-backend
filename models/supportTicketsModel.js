@@ -73,4 +73,52 @@ function serialize(doc) {
   };
 }
 
-module.exports = { createTicket, listTicketsForUser, listAllTickets, resolveTicket };
+// ---------- the customer's side of the conversation ----------
+/** How many tickets the user opened since a moment (to stop a flood). */
+async function countTicketsSince(userId, since) {
+  return SupportTicket.countDocuments({ userId, createdAt: { $gte: since } });
+}
+
+const MAX_THREAD = 60;
+const MAX_CUSTOMER_MESSAGES_PER_HOUR = 15;
+
+/** One of the user's own tickets, or null. */
+async function getTicketForUser(userId, id) {
+  const doc = await SupportTicket.findOne({ _id: id, userId });
+  return doc ? serialize(doc) : null;
+}
+
+/**
+ * Adds a message from the customer to their ticket (and reopens it if it was closed).
+ * Returns { ticket } or { error, status } when it is refused (unknown ticket, conversation too long, too fast).
+ */
+async function addCustomerMessage(userId, id, text) {
+  const doc = await SupportTicket.findOne({ _id: id, userId });
+  if (!doc) return { error: 'Ticket not found.', status: 404 };
+  const thread = Array.isArray(doc.thread) ? doc.thread : [];
+  if (thread.length >= MAX_THREAD) return { error: 'This conversation is very long. Please press "Talk to admin" so a person can help.', status: 429 };
+  const hourAgo = Date.now() - 60 * 60 * 1000;
+  if (thread.filter((t) => t.from === 'customer' && new Date(t.at).getTime() > hourAgo).length >= MAX_CUSTOMER_MESSAGES_PER_HOUR) {
+    return { error: 'You are sending messages very quickly. Please wait a little, or press "Talk to admin".', status: 429 };
+  }
+  const updated = await SupportTicket.findOneAndUpdate(
+    { _id: id, userId },
+    { $set: { status: 'open', resolvedAt: null }, $push: { thread: { from: 'customer', text, at: new Date() } } },
+    { new: true }
+  );
+  return { ticket: serialize(updated) };
+}
+
+/** The customer says it is solved: the ticket is closed and the conversation stays saved for the admin. */
+async function closeTicketByCustomer(userId, id) {
+  const doc = await SupportTicket.findOneAndUpdate(
+    { _id: id, userId, status: { $ne: 'resolved' } },
+    { $set: { status: 'resolved', resolvedAt: new Date() }, $push: { thread: { from: 'system', text: 'The customer marked this as solved and closed the ticket.', at: new Date() } } },
+    { new: true }
+  );
+  if (doc) return serialize(doc);
+  const existing = await SupportTicket.findOne({ _id: id, userId });
+  return existing ? serialize(existing) : null;
+}
+
+module.exports = { createTicket, listTicketsForUser, listAllTickets, resolveTicket, getTicketForUser, addCustomerMessage, closeTicketByCustomer, countTicketsSince };
