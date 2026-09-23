@@ -63,4 +63,4 @@ async function fetchItemTraffic(refreshToken, itemId, marketplaceId) {
   return { watchers: pickNumber(xml, 'WatchCount') ?? 0, views: pickNumber(xml, 'HitCount') };
 }
 
-module.exports = { fetchItemTraffic, pickNumber };
+module.exports = { fetchItemTraffic, pickNumber, SITE_IDS };

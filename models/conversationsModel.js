@@ -139,11 +139,18 @@ function serialize(doc) {
     reference_id: obj.referenceId || obj.itemId || null,
     reference_type: obj.referenceType || null,
     internal_notes: Array.isArray(obj.internalNotes) ? obj.internalNotes.map((n) => ({ text: n.text, created_at: n.createdAt })) : [],
+    buyer_profile: serializeBuyerProfile(obj.buyerProfile),
     created_at: obj.createdAt,
   };
 }
 
+function serializeBuyerProfile(p) {
+  if (!p || (p.feedbackScore == null && !p.memberSince && !p.site)) return null;
+  return { feedback_score: p.feedbackScore ?? null, star_color: p.starColor || null, member_since: p.memberSince || null, site: p.site || null };
+}
+
 module.exports = {
+  serializeBuyerProfile,
   upsertConversation,
   listConversations,
   countUnreadConversations,

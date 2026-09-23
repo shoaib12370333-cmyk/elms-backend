@@ -11,7 +11,11 @@ const {
   updateConversationState,
   trashConversation,
   restoreConversation,
+  serializeBuyerProfile,
 } = require('../models/conversationsModel');
+const { ensureBuyerProfile } = require('../services/ebayBuyerProfileService');
+const { saveMessageAttachment, sanitizeAttachments } = require('../services/messageAttachmentService');
+const EbayAccount = require('../models/schemas/EbayAccount');
 const { listMessages, upsertMessages } = require('../models/messagesModel');
 const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const { fetchConversationDetail, sendMessage, updateConversationStatus } = require('../services/ebayMessageService');
@@ -130,10 +134,29 @@ router.get('/:id', requireAuth, async (req, res) => {
     if (cachedMessages.length) detail.messages = cachedMessages;
 
     const refreshToken = await getEbayAccountRefreshToken(req.userId, conversation.ebay_account_id);
-    if (!cachedMessages.length && refreshToken) {
-      const live = await fetchConversationDetail(refreshToken, conversation.ebay_conversation_id, conversation.conversation_type);
-      detail = live;
-      await upsertMessages({ userId: req.userId, ebayAccountId: conversation.ebay_account_id, conversationDoc: { _id: req.params.id }, ebayConversationId: conversation.ebay_conversation_id, messages: live.messages || [] });
+    // Also go live when our last message is still marked unread by the buyer, so the
+    // read-receipt tick reflects what eBay says now, not what it said at the last sync.
+    const lastCached = cachedMessages[cachedMessages.length - 1];
+    const awaitingReceipt = !!lastCached && lastCached.isSelf && !lastCached.readStatus;
+    if ((!cachedMessages.length || awaitingReceipt) && refreshToken) {
+      try {
+        const live = await fetchConversationDetail(refreshToken, conversation.ebay_conversation_id, conversation.conversation_type);
+        detail = live;
+        await upsertMessages({ userId: req.userId, ebayAccountId: conversation.ebay_account_id, conversationDoc: { _id: req.params.id }, ebayConversationId: conversation.ebay_conversation_id, messages: live.messages || [] });
+      } catch (liveErr) {
+        if (!cachedMessages.length) throw liveErr;
+      }
+    }
+
+    // Buyer's feedback score / star / member-since (cached 7 days; never blocks the thread).
+    if (refreshToken && conversation.conversation_type === 'FROM_MEMBERS') {
+      const account = await EbayAccount.findById(conversation.ebay_account_id).select('marketplaceId').lean().catch(() => null);
+      const existing = await require('../models/schemas/Conversation').findById(req.params.id).select('buyerProfile').lean().then((d) => d?.buyerProfile).catch(() => null);
+      const profile = await ensureBuyerProfile({
+        userId: req.userId, conversationId: req.params.id, refreshToken,
+        username: conversation.other_party_username, marketplaceId: account?.marketplaceId || 'EBAY_US', existing,
+      });
+      conversation.buyer_profile = serializeBuyerProfile(profile);
     }
 
     await markConversationRead(req.userId, req.params.id, true);
@@ -160,6 +183,21 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/notifications/attachments
+ * Body: { dataUrl: "data:image/...;base64,..." | "data:application/pdf;base64,...", name }
+ * Hosts one image/PDF on ELMS's own storage so it can be attached to a reply (eBay only
+ * accepts self-hosted HTTPS media URLs). Returns { attachment: { name, type, url } }.
+ */
+router.post('/attachments', requireAuth, async (req, res) => {
+  try {
+    const attachment = await saveMessageAttachment({ dataUrl: req.body?.dataUrl, name: req.body?.name, userId: req.userId, req });
+    res.json({ success: true, attachment });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ success: false, error: err.message || 'Could not upload this file.' });
+  }
+});
+
+/**
  * POST /api/notifications/:id/reply
  * Requires a valid session token.
  * Body: { content: string }
@@ -169,7 +207,8 @@ router.get('/:id', requireAuth, async (req, res) => {
  */
 router.post('/:id/reply', requireAuth, async (req, res) => {
   const { content } = req.body;
-  if (!content || !content.trim()) {
+  const media = sanitizeAttachments(req.body?.attachments);
+  if ((!content || !content.trim()) && !media.length) {
     return res.status(400).json({ success: false, error: 'Message content is required.' });
   }
 
@@ -186,7 +225,8 @@ router.post('/:id/reply', requireAuth, async (req, res) => {
   try {
     const sent = await sendMessage(refreshToken, {
       conversationId: conversation.ebay_conversation_id,
-      content: content.trim(),
+      content: (content || '').trim() || 'Attachment',
+      media,
     });
     try {
       const live = await fetchConversationDetail(refreshToken, conversation.ebay_conversation_id, conversation.conversation_type);

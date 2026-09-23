@@ -143,6 +143,9 @@ async function fetchConversationDetail(refreshToken, conversationId, conversatio
       isSelf: typeof m.isSelf === 'boolean' ? m.isSelf : false,
       readStatus: m.readStatus,
       sentDate: m.createdDate || m.creationDate || m.sentDate || null,
+      media: Array.isArray(m.messageMedia)
+        ? m.messageMedia.filter((x) => x && x.mediaUrl).map((x) => ({ name: x.mediaName || '', type: x.mediaType || '', url: x.mediaUrl }))
+        : [],
     })),
   };
 }
@@ -151,8 +154,12 @@ async function fetchConversationDetail(refreshToken, conversationId, conversatio
  * Sends a reply message in a conversation (or starts a new one, if the
  * eBay API supports that for the given context - see itemId/orderId).
  */
-async function sendMessage(refreshToken, { conversationId, recipientUsername, itemId, content }) {
+async function sendMessage(refreshToken, { conversationId, recipientUsername, itemId, content, media }) {
   const body = { messageText: content };
+  // eBay accepts up to 5 self-hosted (HTTPS) attachments per message: IMAGE, PDF, DOC or TXT.
+  if (Array.isArray(media) && media.length) {
+    body.messageMedia = media.slice(0, 5).map((x) => ({ mediaName: x.name, mediaType: x.type, mediaUrl: x.url }));
+  }
   if (conversationId) body.conversationId = conversationId;
   if (recipientUsername) body.otherPartyUsername = recipientUsername;
   if (itemId) body.reference = { referenceType: 'LISTING', referenceID: itemId };

@@ -24,6 +24,15 @@ const conversationSchema = new mongoose.Schema(
     isRead: { type: Boolean, default: false },
     lastMessageFromSelf: { type: Boolean, default: false },
     trashedAt: { type: Date, default: null },
+    // Buyer's public eBay profile (Trading API GetUser), cached so the Messages list/thread can
+    // show the feedback score, star colour and "Member since" without a live call each time.
+    buyerProfile: {
+      feedbackScore: { type: Number, default: null },
+      starColor: { type: String, default: null },
+      memberSince: { type: Date, default: null },
+      site: { type: String, default: null },
+      fetchedAt: { type: Date, default: null },
+    },
     // Latest AI reply for this conversation. status: ready (waiting for you), sent (you sent it), auto_sent, discarded.
     aiDraft: {
       text: { type: String, default: '' },
