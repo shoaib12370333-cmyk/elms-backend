@@ -9,6 +9,7 @@ function normalizeMessage(m) {
     isSelf: !!m.isSelf,
     readStatus: !!m.readStatus,
     sentDate: m.sentDate ? new Date(m.sentDate) : null,
+    media: Array.isArray(m.media) ? m.media.filter((x) => x && x.url).map((x) => ({ name: String(x.name || ''), type: String(x.type || ''), url: String(x.url) })) : [],
   };
 }
 
@@ -35,6 +36,7 @@ async function listMessages(userId, conversationId) {
     isSelf: m.isSelf,
     readStatus: m.readStatus,
     sentDate: m.sentDate,
+    media: Array.isArray(m.media) ? m.media : [],
   }));
 }
 

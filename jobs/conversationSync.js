@@ -26,6 +26,13 @@ async function syncOneAccountConversations(userId, accountId, refreshToken, last
     : null;
   const endTime = isInitialSync ? null : now;
 
+  // Buyer profile lookups (Trading API GetUser) are decoration, so cap them per run: a big first
+  // sync must not burn thousands of Trading API calls. Thread-open fills in the rest on demand.
+  let profileBudget = 25;
+  const account = await EbayAccount.findById(accountId).select('marketplaceId').lean().catch(() => null);
+  const Conversation = require('../models/schemas/Conversation');
+  const { ensureBuyerProfile } = require('../services/ebayBuyerProfileService');
+
   for (const conversationType of ['FROM_MEMBERS', 'FROM_EBAY']) {
     // eBay currently returns at most 10 conversations per getConversations call.
     // Keep walking pages until there are no more results. A very high safety
@@ -48,8 +55,15 @@ async function syncOneAccountConversations(userId, accountId, refreshToken, last
             const last = normalized[normalized.length - 1];
             await upsertMessages({ userId, ebayAccountId: accountId, conversationDoc: { _id: saved.id }, ebayConversationId: conv.conversationId, messages: normalized });
             // Update the cache with the actual latest message direction.
+            if (conv.conversationType === 'FROM_MEMBERS' && profileBudget > 0) {
+              const existing = await Conversation.findById(saved.id).select('buyerProfile').lean().then((d) => d?.buyerProfile).catch(() => null);
+              const stale = !existing?.fetchedAt || Date.now() - new Date(existing.fetchedAt).getTime() > 7 * 24 * 60 * 60 * 1000;
+              if (stale) {
+                profileBudget -= 1;
+                await ensureBuyerProfile({ userId, conversationId: saved.id, refreshToken, username: conv.otherPartyUsername, marketplaceId: account?.marketplaceId || 'EBAY_US', existing });
+              }
+            }
             if (last) {
-              const Conversation = require('../models/schemas/Conversation');
               await Conversation.updateOne({ _id: saved.id, userId }, { $set: { lastMessageFromSelf: !!last.isSelf, lastMessageSnippet: last.content || '', lastMessageDate: last.sentDate ? new Date(last.sentDate) : undefined } });
               // Buyer wrote last: prepare an AI reply draft when the seller turned that on (Messages page).
               if (!last.isSelf && conv.conversationType === 'FROM_MEMBERS') {

@@ -11,6 +11,7 @@ const messageSchema = new mongoose.Schema({
   isSelf: { type: Boolean, default: false },
   readStatus: { type: Boolean, default: false },
   sentDate: { type: Date, default: null },
+  media: [{ _id: false, name: { type: String, default: '' }, type: { type: String, default: '' }, url: { type: String, default: '' } }],
 }, { timestamps: true });
 
 messageSchema.index({ userId: 1, ebayAccountId: 1, ebayConversationId: 1, ebayMessageId: 1 }, { unique: true });
