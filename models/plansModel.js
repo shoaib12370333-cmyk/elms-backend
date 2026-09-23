@@ -3,8 +3,8 @@ const Plan = require('./schemas/Plan');
 /**
  * Admin-only: creates a new credit plan, linked to a Paddle price ID.
  */
-async function createPlan({ name, priceUsd, credits, paddlePriceId }) {
-  const doc = await Plan.create({ name, priceUsd, credits, paddlePriceId });
+async function createPlan({ name, priceUsd, credits, paddlePriceId, maxEbayAccounts }) {
+  const doc = await Plan.create({ name, priceUsd, credits, paddlePriceId: paddlePriceId || null, maxEbayAccounts: maxEbayAccounts || null });
   return serialize(doc);
 }
 
@@ -12,12 +12,13 @@ async function createPlan({ name, priceUsd, credits, paddlePriceId }) {
  * Admin-only: updates an existing plan's fields. Only provided (non-undefined)
  * fields are changed.
  */
-async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, active }) {
+async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, active }) {
   const update = {};
   if (name !== undefined) update.name = name;
   if (priceUsd !== undefined) update.priceUsd = priceUsd;
   if (credits !== undefined) update.credits = credits;
-  if (paddlePriceId !== undefined) update.paddlePriceId = paddlePriceId;
+  if (paddlePriceId !== undefined) update.paddlePriceId = paddlePriceId || null;
+  if (maxEbayAccounts !== undefined) update.maxEbayAccounts = Number(maxEbayAccounts) > 0 ? Number(maxEbayAccounts) : null;
   if (active !== undefined) update.active = active;
 
   const doc = await Plan.findByIdAndUpdate(id, update, { new: true });
@@ -74,7 +75,8 @@ function serialize(doc) {
     name: obj.name,
     priceUsd: obj.priceUsd,
     credits: obj.credits,
-    paddlePriceId: obj.paddlePriceId,
+    paddlePriceId: obj.paddlePriceId || null,
+    maxEbayAccounts: obj.maxEbayAccounts || null,
     active: obj.active,
   };
 }
