@@ -227,14 +227,17 @@ async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, 
   }, 'Receipt');
 }
 
-async function sendTicketReplyEmail({ to, subject, reply }) {
+// ref: the ticket's short code, put in the subject so the customer's answer finds its ticket again.
+// inReplyTo: Message-ID of the mail that opened the ticket, so mail apps keep it in one conversation.
+async function sendTicketReplyEmail({ to, subject, reply, ref, inReplyTo }) {
   const appName = process.env.APP_NAME || 'ELMS';
   const text = 'Your support request "' + subject + '" has been answered:\n\n' + reply + '\n\nYou can reply to this email if you need more help.';
   return sendFrom('support', {
     to,
-    subject: 'Re: ' + subject,
+    subject: 'Re: ' + subject + (ref ? ' [Ticket #' + ref + ']' : ''),
     text,
     html: wrapHtml(appName + ' Support', paragraphsHtml(text)),
+    ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
   }, 'Ticket reply');
 }
 
