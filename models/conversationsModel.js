@@ -43,7 +43,11 @@ async function listConversations(userId, accountId, options = {}) {
   if (options.status === 'archived') query.conversationStatus = 'ARCHIVE';
   else if (options.status === 'trash') query.conversationStatus = 'DELETE';
   else if (options.status === 'awaiting') query = { ...query, conversationStatus: 'ACTIVE', conversationType: 'FROM_MEMBERS', lastMessageFromSelf: false };
-  else query.conversationStatus = { $ne: 'DELETE' };
+  // No status filter otherwise (every status, including DELETE) - the Messages
+  // page fetches once and re-filters client-side for every tab (All/Unread/
+  // Archived/Trash), so a narrower default here used to leave it holding a
+  // partial dataset (e.g. after switching stores while on the Trash tab) that
+  // made OTHER tabs' counts and contents wrong until the next full refetch.
   if (options.type && options.type !== 'all') query.conversationType = options.type;
   if (options.search) {
     const rx = new RegExp(String(options.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
