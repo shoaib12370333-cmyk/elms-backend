@@ -152,6 +152,7 @@ function normalizeOrderLineItems(rawOrder) {
       ebayCancelStatus: rawOrder.cancelStatus?.cancelState || rawOrder.cancelStatus?.cancelStatus || null,
 
       itemTitle: item.title || null,
+      itemImage: item.image?.imageUrl || null,
       legacyItemId: item.legacyItemId || null,
       currency: item.lineItemCost?.currency || rawOrder.pricingSummary?.total?.currency || null,
       deliveryCost: money(item.deliveryCost?.shippingCost),
