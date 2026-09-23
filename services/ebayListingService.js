@@ -277,6 +277,7 @@ async function publishListing({
   categoryId,
   sku,
   sellerSettings,
+  packageWeightAndSize = null,
   timeoutMs = 4 * 60 * 1000,
 }) {
   const deadlineAt = Date.now() + timeoutMs;
@@ -374,6 +375,9 @@ async function publishListing({
     },
 
     condition: 'NEW',
+
+    // Needed by CALCULATED-shipping policies (eBay works the buyer's postage out from it).
+    ...(packageWeightAndSize ? { packageWeightAndSize } : {}),
 
     product: {
       title: (product.title || '').slice(
@@ -1045,6 +1049,34 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
   return { offerId, quantity };
 }
 
+const policyCostTypeCache = new Map();
+const POLICY_CACHE_MS = 10 * 60 * 1000;
+
+/**
+ * Does this fulfillment policy use CALCULATED shipping (weight/size based)? Such a policy makes eBay
+ * reject a listing that has no package weight. Returns null when it cannot be determined (the caller
+ * then simply doesn't block anything).
+ */
+async function fulfillmentPolicyUsesCalculatedShipping(refreshToken, fulfillmentPolicyId, marketplaceId) {
+  const key = `${marketplaceId}:${fulfillmentPolicyId}`;
+  const hit = policyCostTypeCache.get(key);
+  if (hit && Date.now() - hit.at < POLICY_CACHE_MS) return hit.value;
+  try {
+    const policy = await ebayRequest(
+      refreshToken, 'GET',
+      `/sell/account/v1/fulfillment_policy/${encodeURIComponent(fulfillmentPolicyId)}`,
+      undefined, { marketplaceId }
+    );
+    const options = Array.isArray(policy?.shippingOptions) ? policy.shippingOptions : [];
+    const value = options.some((o) => String(o.costType).toUpperCase() === 'CALCULATED');
+    policyCostTypeCache.set(key, { value, at: Date.now() });
+    return value;
+  } catch (err) {
+    console.warn('fulfillment policy lookup failed:', err.message);
+    return null;
+  }
+}
+
 /**
  * Fetches a user's eBay Business Policies (payment/return/fulfillment) and
  * Inventory Locations, so the Settings page can offer them as dropdowns
@@ -1296,4 +1328,5 @@ module.exports = {
   reviseActiveListing,
   fetchBusinessPolicies,
   createOrGetCustomLocation,
+  fulfillmentPolicyUsesCalculatedShipping,
 };

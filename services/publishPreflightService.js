@@ -65,4 +65,30 @@ async function prepareAspects({ categoryId, marketplaceId, product }) {
   return { aspects: final, notes };
 }
 
-module.exports = { prepareAspects };
+/**
+ * Stops a publish early, with a clear message, when the category is not one eBay accepts listings in:
+ * unknown on this marketplace (each site has its own category numbers) or not a leaf (too general).
+ * If eBay's taxonomy is unreachable the publish is not blocked.
+ */
+async function assertUsableCategory({ categoryId, marketplaceId }) {
+  const { getCategoryInfo } = require('./ebayTaxonomyService');
+  let info;
+  try {
+    info = await getCategoryInfo(null, categoryId, marketplaceId);
+  } catch (err) {
+    if (err.statusCode === 404 || err.statusCode === 400) {
+      const e = new Error('eBay does not recognise category ' + categoryId + ' on ' + marketplaceId + ' (each eBay site has its own category numbers). Pick the category again in the editor.');
+      e.statusCode = 400;
+      throw e;
+    }
+    return;
+  }
+  if (!info.isLeaf) {
+    const hint = info.childNames.length ? ' Pick a more specific one, for example: ' + info.childNames.join(', ') + '.' : ' Pick a more specific category.';
+    const e = new Error('Category ' + categoryId + (info.name ? ' ("' + info.name + '")' : '') + ' is too general - eBay only accepts listings in a final (most specific) category.' + hint);
+    e.statusCode = 400;
+    throw e;
+  }
+}
+
+module.exports = { prepareAspects, assertUsableCategory };

@@ -8,7 +8,8 @@ const {
 
 const { getImportById } = require('../models/importsModel');
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
-const { prepareAspects } = require('./publishPreflightService');
+const { prepareAspects, assertUsableCategory } = require('./publishPreflightService');
+const { extractPackageInfo, toEbayPackageWeightAndSize } = require('./packageInfoService');
 const { convertAmount } = require('./currencyService');
 
 const {
@@ -19,6 +20,7 @@ const {
 const {
   publishListing,
   createOrGetCustomLocation,
+  fulfillmentPolicyUsesCalculatedShipping,
 } = require('./ebayListingService');
 
 const {
@@ -460,6 +462,21 @@ async function processOneQueuedListing(listing) {
     if (!(Number(listing.quantity) >= 1)) throw new Error('The quantity must be at least 1.');
     if (String(product.title || '').trim().length < 3) throw new Error('The title is too short.');
 
+    // The category must exist on this marketplace and be a final (leaf) category.
+    await assertUsableCategory({ categoryId: listing.category_id, marketplaceId: sellerSettings.marketplaceId });
+
+    // Package weight/size (read from the Amazon specs BEFORE they are replaced by eBay aspects below).
+    // A CALCULATED-shipping policy cannot price the postage without a weight, and eBay then rejects the publish.
+    const packageWeightAndSize = toEbayPackageWeightAndSize(extractPackageInfo(product.specifications));
+    if (packageWeightAndSize) {
+      debug('PACKAGE', packageWeightAndSize);
+    } else if (sellerSettings.fulfillmentPolicyId) {
+      const calculated = await fulfillmentPolicyUsesCalculatedShipping(refreshToken, sellerSettings.fulfillmentPolicyId, sellerSettings.marketplaceId);
+      if (calculated) {
+        throw new Error('Your shipping policy uses calculated shipping, so eBay needs the package weight and none was found for this product. Open the draft → Item Specifications → Custom specifications, add "Package Weight" with a value like "1.5 lb" (or "700 g"), then publish again.');
+      }
+    }
+
     // Item specifics: match eBay's allowed values, fill what eBay lets you mark "not applicable", stop early if a required one is missing.
     const prepared = await prepareAspects({ categoryId: listing.category_id, marketplaceId: sellerSettings.marketplaceId, product });
     if (prepared.aspects) {
@@ -508,6 +525,8 @@ async function processOneQueuedListing(listing) {
           listing.sku,
 
         sellerSettings,
+
+        packageWeightAndSize,
 
         timeoutMs:
           4 * 60 * 1000,
