@@ -496,6 +496,15 @@ async function listPublishedListings(userId) {
 }
 
 /**
+ * String id of a reference field. After .populate() the field holds the whole populated document,
+ * and toString() on that gives "[object Object]" - which the UI then sent back as an account id.
+ */
+function idString(ref) {
+  if (!ref) return null;
+  return String(ref._id || ref);
+}
+
+/**
  * Converts a Mongoose document into the plain shape the rest of the app expects.
  */
 function serialize(doc) {
@@ -503,8 +512,8 @@ function serialize(doc) {
   return {
     id: obj._id.toString(),
     userId: obj.userId ? obj.userId.toString() : null,
-    import_id: obj.importId ? obj.importId.toString() : null,
-    ebay_account_id: obj.ebayAccountId ? obj.ebayAccountId.toString() : null,
+    import_id: idString(obj.importId),
+    ebay_account_id: idString(obj.ebayAccountId),
   marketplace_id: obj.marketplaceId || null,
     sku: obj.sku,
     title: obj.title,
@@ -668,4 +677,5 @@ module.exports = {
   scheduleListing,
   unscheduleListing,
   listScheduledDue,
+  serialize,
 };
