@@ -22,7 +22,7 @@ const docs = [
 const fakes = {
   './schemas/Order': {
     find: () => ({
-      populate: () => ({ populate: () => ({ sort: async () => docs }) }),
+      populate: () => ({ populate: () => ({ sort: () => ({ lean: async () => docs }) }) }),
     }),
   },
   './schemas/Listing': {},

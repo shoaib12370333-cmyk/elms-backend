@@ -49,7 +49,7 @@ async function listConversations(userId, accountId, options = {}) {
     const rx = new RegExp(String(options.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     query.$or = [{ subject: rx }, { otherPartyUsername: rx }, { lastMessageSnippet: rx }];
   }
-  const docs = await Conversation.find(query).populate('ebayAccountId').sort({ lastMessageDate: -1 });
+  const docs = await Conversation.find(query).populate('ebayAccountId').sort({ lastMessageDate: -1 }).lean();
   return docs.map((doc) => {
     const serialized = serialize(doc);
     serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
@@ -112,7 +112,10 @@ async function markConversationRead(userId, id, isRead = true) {
 }
 
 function serialize(doc) {
-  const obj = doc.toObject();
+  // Accepts either a real Mongoose document or a plain object from .lean()
+  // (listConversations uses .lean() - skips document hydration for a faster
+  // Messages inbox load).
+  const obj = typeof doc.toObject === 'function' ? doc.toObject() : doc;
   return {
     id: obj._id.toString(),
     ebay_account_id: obj.ebayAccountId?._id ? obj.ebayAccountId._id.toString() : obj.ebayAccountId?.toString(),
