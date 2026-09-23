@@ -97,6 +97,8 @@ app.use(cors({
 // registered after express.json(), the body would already be parsed to an
 // object and Paddle's signature check would fail.
 app.use('/api/payments/webhook', express.raw({ type: 'application/json' }), paddleWebhookRoute);
+// CashTap (the default checkout) is signed over the raw bytes too, so it is registered here as well.
+app.use('/api/payments/cashtap-webhook', express.raw({ type: 'application/json' }), require('./routes/cashtapWebhook'));
 
 // Same reasoning for eBay's order notification webhook - its ECDSA
 // signature is computed over the exact raw bytes eBay sent, so this must

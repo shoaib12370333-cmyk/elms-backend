@@ -161,20 +161,20 @@ router.get('/plans', async (req, res) => {
  * dashboard: Catalog > Products > your product > the price you created).
  */
 router.post('/plans', async (req, res) => {
-  const { name, priceUsd, credits, paddlePriceId } = req.body;
+  const { name, priceUsd, credits, paddlePriceId, maxEbayAccounts } = req.body;
 
-  if (!name || !priceUsd || !credits || !paddlePriceId) {
-    return res.status(400).json({
-      success: false,
-      error: 'name, priceUsd, credits, and paddlePriceId are all required.',
-    });
+  if (!name || !(Number(priceUsd) > 0) || !(Number(credits) > 0)) {
+    return res.status(400).json({ success: false, error: 'A name, a price and the number of credits are required.' });
   }
+  // CashTap's smallest checkout is $0.50.
+  if (Number(priceUsd) < 0.5) return res.status(400).json({ success: false, error: 'The price must be at least $0.50.' });
 
   const plan = await createPlan({
     name,
     priceUsd: Number(priceUsd),
     credits: Number(credits),
-    paddlePriceId,
+    paddlePriceId: paddlePriceId || null,
+    maxEbayAccounts: Number(maxEbayAccounts) > 0 ? Number(maxEbayAccounts) : null,
   });
   res.json({ success: true, plan });
 });
@@ -485,6 +485,7 @@ router.get('/overview', async (req, res) => {
       canopy: !!process.env.CANOPY_API_KEY,
       easyparser: !!process.env.EASYPARSER_API_KEY,
       paddle: !!(process.env.PADDLE_API_KEY || process.env.PADDLE_WEBHOOK_SECRET),
+      cashtap: !!(process.env.CASHTAP_SECRET_KEY && process.env.CASHTAP_WEBHOOK_SECRET),
       ebay: !!((process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET)),
       email: !!((process.env.SMTP_HOST && process.env.SMTP_USER)),
     },

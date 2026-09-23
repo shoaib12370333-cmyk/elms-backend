@@ -7,7 +7,7 @@ const purchaseSchema = new mongoose.Schema(
 
     // Generic fields so a future payment provider (e.g. a card processor)
     // can reuse this same model - not hardcoded to Paddle specifics.
-    provider: { type: String, enum: ['paddle'], default: 'paddle' },
+    provider: { type: String, enum: ['paddle', 'cashtap'], default: 'paddle' },
     providerTransactionId: { type: String, required: true, unique: true }, // Paddle transaction ID - also used to prevent double-crediting
 
     priceUsd: { type: Number, required: true },

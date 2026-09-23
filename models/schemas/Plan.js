@@ -5,7 +5,10 @@ const planSchema = new mongoose.Schema(
     name: { type: String, required: true }, // e.g. "Starter"
     priceUsd: { type: Number, required: true }, // e.g. 10
     credits: { type: Number, required: true }, // e.g. 300
-    paddlePriceId: { type: String, required: true }, // e.g. "pri_01abc..."
+    // Only needed to sell this plan through Paddle (optional now that CashTap is the default checkout).
+    paddlePriceId: { type: String, default: null }, // e.g. "pri_01abc..."
+    // How many eBay accounts the buyer may connect after buying this plan (null = leave their limit as it is).
+    maxEbayAccounts: { type: Number, default: null },
     active: { type: Boolean, default: true }, // inactive plans are hidden from the Pricing page
   },
   { timestamps: true }
