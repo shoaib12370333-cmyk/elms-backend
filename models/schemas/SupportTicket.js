@@ -22,7 +22,12 @@ const supportTicketSchema = new mongoose.Schema(
     // Message-ID of the mail that opened the ticket - dedupes re-reads and threads our replies to it.
     emailMessageId: { type: String, default: undefined },
     // Follow-up conversation (customer mails that arrived after the first one, and admin replies).
-    thread: [{ _id: false, from: { type: String, enum: ['customer', 'admin'] }, text: String, at: { type: Date, default: Date.now }, emailMessageId: String }],
+    thread: [{ _id: false, from: { type: String, enum: ['customer', 'admin', 'ai'] }, text: String, at: { type: Date, default: Date.now }, emailMessageId: String }],
+    // AI-first support: the assistant answers what it can and hands the rest to an admin.
+    aiStatus: { type: String, enum: ['answered', 'escalated', 'error'], default: undefined },
+    escalated: { type: Boolean, default: false },
+    urgent: { type: Boolean, default: false },
+    escalationReason: { type: String, default: undefined },
   },
   { timestamps: true }
 );
