@@ -1,4 +1,4 @@
-const { getVeroWords } = require('../config/veroWords');
+const { getVeroWords, getAmbiguousWords } = require('../config/veroWords');
 const { stripInvisible, fold, foldWithMap } = require('./textCleanService');
 
 // Between the parts of a multi-word term: "spider-man", "spider man" and "spiderman" all match.
@@ -62,15 +62,26 @@ function findMatches(text) {
   return found;
 }
 
-/** The distinct VeRO words found in a text (lowercase). */
-function findVeroTerms(text) {
-  return [...new Set(findMatches(text).map((f) => f.word))];
+const AMBIGUOUS = getAmbiguousWords();
+// "Spider-Man" / "on  running" -> the list's spelling, so a matched word can be looked up in AMBIGUOUS.
+const isAmbiguous = (word) => AMBIGUOUS.has(String(word).replace(/[\s\-'.]+/g, ' ').trim());
+
+/**
+ * The distinct VeRO words found in a text (lowercase).
+ * hardOnly: leave out the words that are also ordinary language (apple, ring, switch, ...).
+ */
+function findVeroTerms(text, { hardOnly = false } = {}) {
+  const words = findMatches(text).map((f) => f.word).filter((w) => !hardOnly || !isAmbiguous(w));
+  return [...new Set(words)];
 }
 
-/** The text with every VeRO word cut out and the leftovers (double spaces, empty brackets, dangling dashes) tidied. */
-function stripVeroTerms(text) {
+/**
+ * The text with every VeRO word cut out and the leftovers (double spaces, empty brackets, dangling dashes) tidied.
+ * keepAmbiguous: leave the words that are also ordinary language where they are (the AI decides those by context).
+ */
+function stripVeroTerms(text, { keepAmbiguous = false } = {}) {
   const original = String(text ?? '');
-  const matches = findMatches(original);
+  const matches = findMatches(original).filter((m) => !keepAmbiguous || !isAmbiguous(m.word));
   if (!matches.length) return original;
   let out = '';
   let pos = 0;
@@ -113,7 +124,8 @@ function scanListing(listing = {}) {
     asList(values).forEach((v) => add('aspects', v));
   });
   add('brand', listing.brand);
-  return { terms: [...new Set(Object.values(fields).flat())], fields };
+  const terms = [...new Set(Object.values(fields).flat())];
+  return { terms, hardTerms: terms.filter((t) => !isAmbiguous(t)), fields };
 }
 
 const BRAND_NAMES = new Set(['brand', 'brand name', 'brand/manufacturer']);
@@ -126,33 +138,36 @@ const norm = (v) => stripInvisible(v).trim().toLowerCase().replace(/\s+/g, ' ');
  */
 function cleanSpecificsAndAspects({ specifications, aspects }) {
   const removed = new Set();
-  const note = (text) => findVeroTerms(stripInvisible(text)).forEach((t) => removed.add(t));
+  const brandLike = (name) => BRAND_NAMES.has(norm(name)) || MAKER_NAMES.has(norm(name));
+  // A Brand / Manufacturer value is a brand name, so apple, coach, ... count there; elsewhere only the words that
+  // cannot be ordinary language do ("Type: Ring" stays).
+  const hits = (name, text) => findVeroTerms(stripInvisible(text), { hardOnly: !brandLike(name) });
+  const note = (name, text) => hits(name, text).forEach((t) => removed.add(t));
 
   const cleanedSpecs = [];
   for (const s of asList(specifications)) {
     if (!s || typeof s !== 'object') continue;
     const name = String(s.name ?? '');
     const value = String(s.value ?? '');
-    if (!findVeroTerms(stripInvisible(name)).length && !findVeroTerms(stripInvisible(value)).length) { cleanedSpecs.push(s); continue; }
-    note(name); note(value);
-    if (BRAND_NAMES.has(norm(name)) && findVeroTerms(value).length) { cleanedSpecs.push({ ...s, value: 'Unbranded' }); continue; }
-    if (MAKER_NAMES.has(norm(name)) && findVeroTerms(value).length) continue;
-    const newName = stripVeroTerms(name);
-    const newValue = stripVeroTerms(value);
+    if (!hits('', name).length && !hits(name, value).length) { cleanedSpecs.push(s); continue; }
+    note('', name); note(name, value);
+    if (BRAND_NAMES.has(norm(name)) && hits(name, value).length) { cleanedSpecs.push({ ...s, value: 'Unbranded' }); continue; }
+    if (MAKER_NAMES.has(norm(name)) && hits(name, value).length) continue;
+    const newName = stripVeroTerms(name, { keepAmbiguous: true });
+    const newValue = stripVeroTerms(value, { keepAmbiguous: true });
     if (newName && newValue) cleanedSpecs.push({ ...s, name: newName, value: newValue });
   }
 
   const cleanedAspects = {};
   for (const [name, raw] of Object.entries(aspects && typeof aspects === 'object' ? aspects : {})) {
     const values = asList(raw).map((v) => String(v ?? ''));
-    const nameHit = findVeroTerms(stripInvisible(name)).length > 0;
-    if (nameHit) { note(name); continue; }
+    if (hits('', name).length) { note('', name); continue; }
     const out = [];
     for (const v of values) {
-      if (!findVeroTerms(stripInvisible(v)).length) { out.push(v); continue; }
-      note(v);
+      if (!hits(name, v).length) { out.push(v); continue; }
+      note(name, v);
       if (BRAND_NAMES.has(norm(name))) out.push('Unbranded');
-      else if (!MAKER_NAMES.has(norm(name))) { const cut = stripVeroTerms(v); if (cut) out.push(cut); }
+      else if (!MAKER_NAMES.has(norm(name))) { const cut = stripVeroTerms(v, { keepAmbiguous: true }); if (cut) out.push(cut); }
     }
     const unique = [...new Set(out)];
     if (unique.length) cleanedAspects[name] = unique;

@@ -17,8 +17,18 @@ assert.deepStrictEqual(findVeroTerms('Pokémon cards'), ['pokémon'.normalize('N
 assert.deepStrictEqual(findVeroTerms('Polo Ralph Lauren shirt'), ['polo ralph lauren']);
 // claim words
 assert.ok(findVeroTerms('Replica watch, inspired by Rolex').includes('replica'));
-// ordinary words that are also brands are not flagged
-assert.deepStrictEqual(findVeroTerms('Apple pie, coach seat, jordan almonds, supreme quality, 5 hp motor, 3m cable'), []);
+// words that are also ordinary language ARE flagged (apple, ring, ram, ...) - but only as "ambiguous"
+assert.deepStrictEqual(findVeroTerms('Apple pie, coach seat, jordan almonds, supreme quality, 5 hp motor, 3m cable'), ['apple', 'coach', 'jordan', 'supreme', 'hp']);
+assert.deepStrictEqual(findVeroTerms('Apple pie, coach seat, jordan almonds, supreme quality, 5 hp motor', { hardOnly: true }), []);
+assert.ok(findVeroTerms('Diamond ring, 8GB RAM, toggle switch, Apple Watch').includes('ring'));
+assert.deepStrictEqual(scanListing({ title: 'Diamond ring with Nike box' }).hardTerms, ['nike']);
+// the words of the owner's screening list, including accents, symbols and hyphens
+for (const word of ['Hermès', 'Tiffany & Co', "L'Oréal", 'Black+Decker', 'B&O', 'Mercedes-Benz', 'SK-II', 'Bang & Olufsen', 'K&N', 'Pokémon', 'Stone Island', 'Formula 1', 'Le Creuset', 'Baby Bjorn']) {
+  assert.strictEqual(findVeroTerms('Cheap ' + word + ' item').length, 1, word + ' is flagged');
+}
+// the cleaner's rule sweep leaves ordinary-language words alone
+assert.strictEqual(stripVeroTerms('Diamond ring by Nike', { keepAmbiguous: true }), 'Diamond ring');
+assert.strictEqual(stripVeroTerms('Diamond ring by Nike'), 'Diamond');
 
 // removal keeps the rest readable
 assert.strictEqual(stripVeroTerms('Nike Running Shoes for Men'), 'Running Shoes for Men');
