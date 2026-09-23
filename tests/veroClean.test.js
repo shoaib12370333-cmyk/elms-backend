@@ -46,5 +46,21 @@ const { scanListing } = require('../services/veroService');
   out = await cleanVeroTerms({ title: 'Plain table', description: 'A table.', bulletPoints: [], specifications: [], aspects: { Brand: ['Adidas'] }, brand: '' });
   assert.strictEqual(prompts.length, 0);
   assert.deepStrictEqual(out.data.aspects, { Brand: ['Unbranded'] });
+
+  // a word that is also ordinary language ("ring") is left to the AI's judgement and stays where it means a ring
+  prompts = [];
+  answer = JSON.stringify({ title: 'Diamond Ring gift box' });
+  out = await cleanVeroTerms({ title: 'Diamond Ring by Nike gift box', description: '', bulletPoints: [], specifications: [{ name: 'Type', value: 'Ring' }], aspects: { Type: ['Ring'], Brand: ['Apple'] }, brand: '' });
+  assert.strictEqual(out.data.title, 'Diamond Ring gift box');
+  assert.match(prompts[0], /ALSO ordinary language: ring/);
+  assert.deepStrictEqual(out.data.specifications, [{ name: 'Type', value: 'Ring' }], 'a Type value keeps "Ring"');
+  assert.deepStrictEqual(out.data.aspects, { Type: ['Ring'], Brand: ['Unbranded'] }, 'but a Brand of Apple becomes Unbranded');
+  assert.deepStrictEqual(out.data.removed.sort(), ['apple', 'nike']);
+  assert.deepStrictEqual(out.data.kept.sort(), ['ring']);
+
+  // the rule sweep still removes clear-cut words the AI left, but not ordinary-language ones
+  answer = JSON.stringify({ title: 'Nike Ring box' });
+  out = await cleanVeroTerms({ title: 'Nike Ring box', description: '', bulletPoints: [], specifications: [], aspects: {}, brand: '' });
+  assert.strictEqual(out.data.title, 'Ring box');
   console.log('vero clean tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
