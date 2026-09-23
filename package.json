@@ -29,6 +29,7 @@
     "test:package-category": "node tests/packageAndCategory.test.js",
     "test:support-inbox": "node tests/supportInbox.test.js",
     "test:support-assistant": "node tests/supportAssistant.test.js",
+    "test:support-chat": "node tests/supportChatRoutes.test.js",
     "test:transient-publish": "node tests/transientPublish.test.js",
     "test:listing-ids": "node tests/listingSerializeIds.test.js",
     "test:item-specifics": "node tests/itemSpecifics.test.js",
