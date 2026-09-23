@@ -70,9 +70,15 @@ const userSchema = new mongoose.Schema(
     // Unique credential for the ELMS browser extension. The plaintext key is
     // never stored; it is encrypted at rest and its SHA-256 hash is used for lookup.
     extensionKeyEncrypted: { type: String, default: null },
-    extensionKeyHash: { type: String, default: null, unique: true, sparse: true },
+    // No default: users without a key must have the field MISSING, not null. A unique index treats
+    // every explicit null as the same value, so `default: null` made the second signup ever fail
+    // with E11000 (a sparse index still indexes explicit nulls).
+    extensionKeyHash: { type: String, default: undefined },
   },
   { timestamps: true }
 );
+
+// Unique only among users that actually have a key.
+userSchema.index({ extensionKeyHash: 1 }, { unique: true, partialFilterExpression: { extensionKeyHash: { $type: 'string' } } });
 
 module.exports = mongoose.model('User', userSchema);

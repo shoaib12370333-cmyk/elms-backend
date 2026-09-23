@@ -24,7 +24,8 @@
     "test:product-cache": "node tests/productCache.test.js",
     "test:draft-save": "node tests/draftSave.test.js",
     "test:category-query": "node tests/categoryQuery.test.js",
-    "test:message-extras": "node tests/messageExtras.test.js"
+    "test:message-extras": "node tests/messageExtras.test.js",
+    "test:user-extension-key": "node tests/userExtensionKey.test.js"
   },
   "engines": {
     "node": "22.13.0"

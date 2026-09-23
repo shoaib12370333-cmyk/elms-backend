@@ -16,6 +16,30 @@ async function connectDB() {
   await migrateListingIndex();
   await migrateOrderIndex();
   await migrateProductCacheTtl();
+  await migrateUserExtensionKeyIndex();
+}
+
+/**
+ * users.extensionKeyHash used to be `default: null` + unique/sparse, so every user without an
+ * extension key stored an explicit null and the second signup failed with
+ * "E11000 duplicate key ... index: extensionKeyHash_1 dup key: { extensionKeyHash: null }".
+ * Remove the stored nulls and swap the index for a partial one that only covers real hashes.
+ */
+async function migrateUserExtensionKeyIndex() {
+  try {
+    const User = require('./models/schemas/User');
+    const indexes = await User.collection.indexes().catch(() => []);
+    const old = indexes.find((i) => i.name === 'extensionKeyHash_1');
+    if (old && !old.partialFilterExpression) {
+      await User.collection.dropIndex('extensionKeyHash_1');
+      console.log('Dropped old users index extensionKeyHash_1 (not partial).');
+    }
+    const cleared = await User.collection.updateMany({ extensionKeyHash: null }, { $unset: { extensionKeyHash: '' } });
+    if (cleared.modifiedCount) console.log(`Cleared null extensionKeyHash on ${cleared.modifiedCount} user(s).`);
+    await User.createIndexes();
+  } catch (err) {
+    console.warn('User extension key index migration skipped:', err.message);
+  }
 }
 
 /**
