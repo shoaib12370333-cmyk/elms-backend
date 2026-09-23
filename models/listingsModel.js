@@ -136,6 +136,16 @@ async function claimListingForPublishing(userId, id) {
   return doc ? serialize(doc) : null;
 }
 
+/** Atomically takes a due scheduled listing for publishing (scheduled -> publishing). Null if it is no longer scheduled. */
+async function claimScheduledForPublishing(userId, id) {
+  const doc = await Listing.findOneAndUpdate(
+    { _id: id, userId, status: 'scheduled' },
+    { $set: { status: 'publishing', publishStartedAt: new Date(), publishCompletedAt: null, errorMessage: null }, $inc: { publishAttempts: 1 } },
+    { new: true }
+  );
+  return doc ? serialize(doc) : null;
+}
+
 async function getListingBySku(userId, sku) {
   const doc = await Listing.findOne({ sku, userId });
   return doc ? serialize(doc) : null;
@@ -635,6 +645,7 @@ module.exports = {
   upsertDraft,
   getListingById,
   claimListingForPublishing,
+  claimScheduledForPublishing,
   markPublishCreditCharged,
   listPublishingListings,
   listStalePublishingListings,

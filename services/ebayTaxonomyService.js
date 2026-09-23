@@ -157,4 +157,34 @@ async function getItemAspectsForCategory(refreshToken, categoryId, marketplaceId
   return result;
 }
 
-module.exports = { suggestCategories, getItemAspectsForCategory, buildCategoryQuery };
+const categoryInfoCache = {};
+
+/**
+ * Name and leaf-status of one category on a marketplace's tree. eBay only accepts listings in a LEAF
+ * category (the most specific level); a parent category such as "Cell Phones & Accessories" fails
+ * the publish. Throws with statusCode 400/404 when eBay does not know the id on this marketplace.
+ * @returns {Promise<{ categoryId: string, name: string, isLeaf: boolean, childNames: string[] }>}
+ */
+async function getCategoryInfo(refreshToken, categoryId, marketplaceId = 'EBAY_US') {
+  if (!categoryId) throw new Error('A categoryId is required.');
+  const treeId = await getCategoryTreeId(refreshToken, marketplaceId);
+  const cacheKey = `${marketplaceId}:${treeId}:${categoryId}`;
+  if (categoryInfoCache[cacheKey]) return categoryInfoCache[cacheKey];
+
+  const data = await ebayGet(refreshToken,
+    `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(treeId)}/get_category_subtree?category_id=${encodeURIComponent(categoryId)}`,
+    marketplaceId
+  );
+  const node = data?.categorySubtreeNode || {};
+  const children = Array.isArray(node.childCategoryTreeNodes) ? node.childCategoryTreeNodes : [];
+  const info = {
+    categoryId: String(categoryId),
+    name: node.category?.categoryName || '',
+    isLeaf: node.leafCategoryTreeNode === true || children.length === 0,
+    childNames: children.map((c) => c.category?.categoryName).filter(Boolean).slice(0, 6),
+  };
+  categoryInfoCache[cacheKey] = info;
+  return info;
+}
+
+module.exports = { suggestCategories, getItemAspectsForCategory, getCategoryInfo, buildCategoryQuery };
