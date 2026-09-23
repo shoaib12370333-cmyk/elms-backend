@@ -107,7 +107,8 @@ async function listOrders(userId, accountId) {
   const docs = await Order.find(query)
     .populate({ path: 'listingId', populate: { path: 'importId' } })
     .populate('ebayAccountId')
-    .sort({ ebayCreatedAt: -1, createdAt: -1 });
+    .sort({ ebayCreatedAt: -1, createdAt: -1 })
+    .lean();
 
   return docs.map((doc) => {
     const serialized = serialize(doc);
@@ -195,7 +196,10 @@ async function setSellerNote(userId, id, note) {
 }
 
 function serialize(doc) {
-  const obj = doc.toObject();
+  // Accepts either a real Mongoose document or a plain object from .lean()
+  // (listOrders uses .lean() - skips document hydration, much faster for a
+  // user with a lot of order history).
+  const obj = typeof doc.toObject === 'function' ? doc.toObject() : doc;
   return {
     id: obj._id.toString(),
     userId: obj.userId ? obj.userId.toString() : null,
