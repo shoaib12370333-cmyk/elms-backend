@@ -177,6 +177,7 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null) {
 function withImportFallback(serialized, doc) {
   const p = doc.importId?.product;
   if (!p) return serialized;
+  serialized.brand = String(p.brand || '');
   if (!serialized.description) serialized.description = String(p.description || '');
   if (!Array.isArray(serialized.bullet_points) || !serialized.bullet_points.length) serialized.bullet_points = Array.isArray(p.bulletPoints) ? p.bulletPoints : [];
   if (!Array.isArray(serialized.specifications) || !serialized.specifications.length) serialized.specifications = Array.isArray(p.specifications) ? p.specifications : [];
