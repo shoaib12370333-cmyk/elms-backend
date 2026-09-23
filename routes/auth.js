@@ -13,13 +13,26 @@ const {
   getUserByExtensionKey,
 } = require('../models/usersModel');
 const { issueSessionToken } = require('../services/sessionService');
-const { startSession, recordFailedLogin } = require('../services/sessionTracker');
+const { startSession, recordFailedLogin, requestContext } = require('../services/sessionTracker');
 const { requireAuth } = require('../middleware/requireAuth');
 const { getSettings } = require('../models/settingsModel');
 const PasswordResetOtp = require('../models/schemas/PasswordResetOtp');
 const { sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail } = require('../services/emailService');
 const crypto = require('crypto');
 const { hashPassword } = require('../services/passwordService');
+const accessGuard = require('../services/accessGuard');
+const UserModel = require('../models/schemas/User');
+
+// A blocked address / suspended account comes back as 403 with `blocked: { kind, reason }` so the site can show the blocked screen and the appeal form.
+function sendAuthError(res, err) {
+  res.status(err.statusCode || 500).json({ success: false, error: err.message, ...(err.blocked ? { blocked: err.blocked } : {}) });
+}
+
+// New accounts cannot be created from a blocked address or browser (nobody new can be one of the accounts the admin let through).
+async function assertNewAccountAllowed(req) {
+  const denied = await accessGuard.checkNewAccount(requestContext(req));
+  if (denied) throw accessGuard.blockedError(denied);
+}
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -91,13 +104,14 @@ router.post('/google', async (req, res) => {
 
   try {
     const profile = await verifyGoogleToken(credential);
+    if (!(await UserModel.exists({ email: String(profile.email || '').toLowerCase() }))) await assertNewAccountAllowed(req);
     const user = await findOrCreateUser(profile);
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'google'));
 
     res.json({ success: true, sessionToken, user });
   } catch (err) {
     console.error('google auth error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    sendAuthError(res, err);
   }
 });
 
@@ -127,12 +141,13 @@ router.post('/register', registerLimiter, async (req, res) => {
   }
 
   try {
+    await assertNewAccountAllowed(req);
     const user = await registerWithPassword({ username: username.trim(), email: email.trim().toLowerCase(), password });
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'register'));
     res.json({ success: true, sessionToken, user });
   } catch (err) {
     console.error('register error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    sendAuthError(res, err);
   }
 });
 
@@ -250,7 +265,7 @@ router.post('/login', loginLimiter, async (req, res) => {
   } catch (err) {
     recordFailedLogin(req, email);
     console.error('login error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    sendAuthError(res, err);
   }
 });
 
@@ -284,7 +299,7 @@ router.post('/admin-login', adminLoginLimiter, async (req, res) => {
   } catch (err) {
     recordFailedLogin(req, email);
     console.error('admin-login error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    sendAuthError(res, err);
   }
 });
 

@@ -31,6 +31,11 @@ const userSchema = new mongoose.Schema(
 
     // Messages page: how ELMS answers new buyer messages. off = never, draft = AI writes a draft for you
     // to review, auto = AI also sends it (only for simple, low-risk messages).
+    // Set by an admin (Admin -> Users / Security): the account cannot sign in or use the site. The reason is shown to the
+    // person, who can appeal from the blocked screen.
+    suspendedAt: { type: Date, default: null },
+    suspendedReason: { type: String, default: null },
+    suspendedNote: { type: String, default: null }, // private, for the admins
     // Security: tokens issued before this moment are rejected ("log out everywhere"), and the new-device email switch.
     sessionsValidFrom: { type: Date, default: null },
     notifyNewDevice: { type: Boolean, default: true },

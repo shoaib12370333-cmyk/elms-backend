@@ -423,6 +423,8 @@ function serialize(doc) {
     orderSyncIntervalMinutes: obj.orderSyncIntervalMinutes ?? 15,
     autoOrderMode: obj.autoOrderMode || 'disabled',
     fullAutoConfirmedAt: obj.fullAutoConfirmedAt || null,
+    suspendedAt: obj.suspendedAt || null,
+    suspendedReason: obj.suspendedReason || null,
     createdAt: obj.createdAt,
   };
 }

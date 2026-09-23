@@ -133,6 +133,7 @@ async function handleCustomerMessage(ticketId, { followUp = false } = {}) {
   const SupportTicket = require('../models/schemas/SupportTicket');
   const ticket = await SupportTicket.findById(ticketId).lean();
   if (!ticket) return { action: 'skipped', reason: 'missing' };
+  if (ticket.source === 'appeal') return { action: 'skipped', reason: 'appeal' }; // appeals are only ever answered by an admin
 
   if (ticket.escalated) {
     // A person already owns this ticket; a new customer message only re-alerts them.
@@ -185,4 +186,4 @@ function kickAssistant(ticketId, opts) {
   });
 }
 
-module.exports = { handleCustomerMessage, kickAssistant, SERIOUS, parseDecision, HOLDING_REPLY, MAX_AI_REPLIES };
+module.exports = { alertAdmin, handleCustomerMessage, kickAssistant, SERIOUS, parseDecision, HOLDING_REPLY, MAX_AI_REPLIES };

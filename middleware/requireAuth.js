@@ -1,5 +1,5 @@
 const { verifySessionPayload } = require('../services/sessionService');
-const { assertSessionActive } = require('../services/sessionTracker');
+const { assertSessionActive, requestContext } = require('../services/sessionTracker');
 
 /**
  * Protects a route: requires a valid "Authorization: Bearer <token>" header whose session has not been
@@ -12,12 +12,12 @@ async function requireAuth(req, res, next) {
 
   try {
     const payload = verifySessionPayload(token);
-    await assertSessionActive(payload);
+    await assertSessionActive(payload, requestContext(req));
     req.userId = payload.userId;
     req.sid = payload.sid;
     next();
   } catch (err) {
-    res.status(err.statusCode || 401).json({ success: false, error: err.message });
+    res.status(err.statusCode || 401).json({ success: false, error: err.message, ...(err.blocked ? { blocked: err.blocked } : {}) });
   }
 }
 
