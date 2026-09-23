@@ -40,6 +40,7 @@ const {
 } = require('../models/ebayAccountsModel');
 
 const { getImportById } = require('../models/importsModel');
+const { prepareAspects } = require('../services/publishPreflightService');
 
 const { requireAuth } = require('../middleware/requireAuth');
 
@@ -837,6 +838,17 @@ router.post(
         });
       }
 
+      // `listing` is the serialised (snake_case) record, so its fields are sell_price / category_id /
+      // ebay_aspects - reading camelCase names from it gave undefined.
+      const categoryId = req.body?.categoryId || listing.category_id;
+      const marketplaceId = req.body?.marketplaceId || listing.marketplace_id || 'EBAY_US';
+      let aspects = req.body?.aspects ?? req.body?.ebayAspects ?? null;
+      if (aspects && typeof aspects === 'object' && categoryId) {
+        // Same check as a first publish: match eBay's allowed values, fill "does not apply", name what is missing.
+        const prepared = await prepareAspects({ categoryId, marketplaceId, product: { ebayAspects: aspects } });
+        if (prepared.aspects) aspects = prepared.aspects;
+      }
+
       const result =
         await reviseActiveListing(
           refreshToken,
@@ -859,21 +871,17 @@ router.post(
               req.body?.images ??
               listing.images,
 
-            aspects:
-              req.body?.aspects ??
-              listing.ebayAspects,
+            aspects: aspects || undefined,
 
             sellPrice:
               req.body?.sellPrice ??
-              listing.sellPrice,
+              listing.sell_price,
 
             quantity:
               req.body?.quantity ??
               listing.quantity,
 
-            categoryId:
-              req.body?.categoryId ??
-              listing.categoryId,
+            categoryId,
           }
         );
 

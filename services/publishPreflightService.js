@@ -1,7 +1,9 @@
 const { getItemAspectsForCategory } = require('./ebayTaxonomyService');
 const { buildAspects } = require('./ebayListingService');
 
-const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+// Amazon pastes invisible direction marks (U+200E etc.) in front of many values; they must not break matching.
+const { stripInvisible } = require('./textCleanService');
+const norm = (v) => stripInvisible(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 /**
  * Makes the item specifics of a listing acceptable to eBay BEFORE anything is sent:
@@ -35,8 +37,9 @@ async function prepareAspects({ categoryId, marketplaceId, product }) {
   for (const [name, values] of Object.entries(merged)) {
     const def = byName.get(norm(name));
     let vals = values.slice();
-    if (def && def.mode === 'SELECTION_ONLY' && def.values.length) {
-      const allowed = new Map(def.values.map((v) => [norm(v), v]));
+    const choices = def ? (def.allValues || def.values || []) : [];
+    if (def && def.mode === 'SELECTION_ONLY' && choices.length) {
+      const allowed = new Map(choices.map((v) => [norm(v), v]));
       const kept = vals.map((v) => allowed.get(norm(v))).filter(Boolean);
       if (!kept.length) notes.push('dropped "' + name + '" (' + vals.join(', ') + ' is not one of eBay\'s allowed values)');
       vals = kept;
@@ -48,12 +51,14 @@ async function prepareAspects({ categoryId, marketplaceId, product }) {
   const missing = [];
   for (const def of defs) {
     if (!def.required || final[def.name]) continue;
-    const list = def.values || [];
+    const list = def.allValues || def.values || [];
     const pick = (wanted) => list.find((v) => norm(v) === norm(wanted));
     const isBrand = norm(def.name) === 'brand';
+    // "Does not apply" is text: it is not an acceptable value for a number or date aspect.
+    const textAspect = !def.dataType || def.dataType === 'STRING';
     let value = null;
     if (list.length) value = (isBrand && pick('Unbranded')) || pick('Does not apply') || null;
-    else value = isBrand ? 'Unbranded' : 'Does not apply';
+    else if (textAspect) value = isBrand ? 'Unbranded' : 'Does not apply';
     if (value) { final[def.name] = [value]; notes.push('"' + def.name + '" was empty, set to ' + value); }
     else missing.push(def.name);
   }

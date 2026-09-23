@@ -1,4 +1,5 @@
 const { requireAsinSku } = require('./skuService');
+const { stripInvisible } = require('./textCleanService');
 const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
 const { EBAY_API_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnvironment');
@@ -1287,17 +1288,23 @@ function buildAspects(product) {
   // listing. Keep the category-aware values first because these are the
   // values the ELMS UI collected against eBay's taxonomy for the selected
   // category. Extra Amazon specifications are only used while there is room.
+  // Amazon pastes invisible direction marks (U+200E ...) into names and values, and eBay rejects < and >.
+  const tidy = (v) => stripInvisible(v).replace(/<[^>]*>/g, ' ').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
+  // Amazon page facts that mean nothing as an eBay item specific.
+  const USELESS_NAMES = new Set(['asin', 'best sellers rank', 'customer reviews', 'date first available', 'is discontinued by manufacturer']);
+
   const addAspect = (name, value) => {
-    const cleanName = String(name ?? '').trim();
-    if (!cleanName || aspects[cleanName]) return false;
+    const cleanName = tidy(name);
+    // eBay item specific names are at most 65 characters.
+    if (!cleanName || cleanName.length > 65 || aspects[cleanName]) return false;
 
     const normalizedName = cleanName.toLowerCase();
-    if (seenNames.has(normalizedName)) return false;
+    if (seenNames.has(normalizedName) || USELESS_NAMES.has(normalizedName)) return false;
     if (Object.keys(aspects).length >= MAX_EBAY_ITEM_SPECIFICS) return false;
 
     const values = Array.isArray(value) ? value : [value];
     const cleanValues = values
-      .map((v) => String(v ?? '').trim().slice(0, 65))
+      .map((v) => tidy(v).slice(0, 65).trim())
       .filter(Boolean)
       .slice(0, 30);
 
