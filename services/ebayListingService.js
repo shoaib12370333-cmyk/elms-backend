@@ -73,9 +73,20 @@ async function ebayRequest(refreshToken, method, path, body, options = {}) {
   } catch (err) {
     const ebayErrors = err.response?.data?.errors;
 
+    // eBay's generic errors ("A system error has occurred", "Invalid value") only say what is wrong in
+    // their `parameters` (field name/value) or `longMessage`, so include those instead of hiding them.
+    const describe = (e) => {
+      const extra = [];
+      if (e.longMessage && e.longMessage !== e.message) extra.push(e.longMessage);
+      if (Array.isArray(e.parameters) && e.parameters.length) {
+        extra.push(e.parameters.map((p) => `${p.name}: ${String(p.value).slice(0, 80)}`).join(', '));
+      }
+      const base = e.errorId ? `${e.message} (eBay error ${e.errorId})` : e.message;
+      return extra.length ? `${base} [${extra.join(' | ')}]` : base;
+    };
     const message =
       ebayErrors && ebayErrors.length
-        ? ebayErrors.map((e) => (e.errorId ? `${e.message} (eBay error ${e.errorId})` : e.message)).join('; ')
+        ? ebayErrors.map(describe).join('; ')
         : err.message || 'The eBay API request failed.';
 
     const wrapped = new Error(message);
