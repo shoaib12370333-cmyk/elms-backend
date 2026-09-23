@@ -151,7 +151,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       success: true,
       conversation,
       detail,
-      context: order ? { type: 'order', order_id: order._id.toString(), ebay_order_id: order.ebayOrderId, buyer_username: order.buyerUsername, sale_price: order.salePrice, quantity: order.quantity, fulfillment_status: order.fulfillmentStatus, listing_id: listing?._id?.toString() || null, listing_title: listing?.title || null, main_image: listing?.mainImage || null } : listing ? { type: 'listing', listing_id: listing._id.toString(), listing_title: listing.title, main_image: listing.mainImage || null, ebay_item_id: listing.ebayItemId || referenceId } : null,
+      context: order ? { type: 'order', order_id: order._id.toString(), ebay_order_id: order.ebayOrderId, buyer_username: order.buyerUsername, sale_price: order.salePrice, currency: order.currency || null, quantity: order.quantity, fulfillment_status: order.fulfillmentStatus, listing_id: listing?._id?.toString() || null, listing_title: listing?.title || null, main_image: listing?.mainImage || order.itemImage || null } : listing ? { type: 'listing', listing_id: listing._id.toString(), listing_title: listing.title, main_image: listing.mainImage || null, ebay_item_id: listing.ebayItemId || referenceId } : null,
     });
   } catch (err) {
     console.error('notification-detail error:', err.message);
