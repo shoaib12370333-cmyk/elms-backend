@@ -30,8 +30,9 @@ router.use(requireAuth, requireAdmin);
  * Returns every user, for the Admin Panel's user list.
  */
 router.get('/users', async (req, res) => {
-  const users = await listAllUsers();
-  res.json({ success: true, users });
+  // Each user also carries: online / minutes since they left, paid or free plan, last sign-in IP + place, suspended.
+  const { users, summary } = await require('../services/adminUserStatsService').enrichUsers(await listAllUsers());
+  res.json({ success: true, users, summary });
 });
 
 /**

@@ -170,10 +170,15 @@ app.use('/api/orders', ordersRoute);
 app.use('/api/stock-check', stockCheckRoute);
 
 // Admin Panel (users, credits, stock-check intervals, tickets)
+// Security (login IPs, blocks, suspensions, pop-up messages) has its own admin router; it must come before the general one.
+app.use('/api/admin/security', require('./routes/adminSecurity'));
 app.use('/api/admin', adminRoute);
 
 // Support tickets (user-facing: create/view own tickets)
 app.use('/api/support-tickets', supportTicketsRoute);
+app.use('/api/notices', require('./routes/notices'));
+app.use('/api/presence', require('./routes/presence'));
+app.use('/api/appeals', require('./routes/appeals'));
 app.use('/api/tools', researchToolsRoute);
 app.use('/api/notifications', notificationsRoute);
 app.use('/api/system-notifications', systemNotificationsRoute);

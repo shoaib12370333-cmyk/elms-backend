@@ -14,7 +14,7 @@ const supportTicketSchema = new mongoose.Schema(
     resolvedAt: { type: Date, default: null },
 
     // Where the ticket came from: the in-app form, or a mail sent to the support address.
-    source: { type: String, enum: ['app', 'email'], default: 'app' },
+    source: { type: String, enum: ['app', 'email', 'appeal'], default: 'app' },
     fromEmail: { type: String, default: undefined },
     fromName: { type: String, default: undefined },
     // Short code put in reply subjects ("[Ticket #a1b2c3d4]") so a customer's answer finds its ticket again.
