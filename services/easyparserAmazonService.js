@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { retryWithBackoff } = require('./retryService');
 const { extractAsinFromUrl, detectCountryFromUrl } = require('./canopyAmazonService');
-const { currencyForAmazonUrl } = require('../config/amazonDomains');
+const { currencyForAmazonUrl, currencyForSuffix } = require('../config/amazonDomains');
 
 const BULK_URL = 'https://bulk.easyparser.com/v1/bulk';
 const DATA_URL = 'https://data.easyparser.com/v1/queries';
@@ -57,7 +57,10 @@ async function submitBulkDetail(itemsByDomain, callbackUrl) {
       platform: 'AMZ',
       operation: 'DETAIL',
       domain: group.domain,
-      payload: { asins: group.asins },
+      // Without "currency" Easyparser formats prices its own default way (USD): a 8.00 GBP product from amazon.co.uk came back as
+      // ~10.70 "USD" and ended up on eBay as 12 GBP. Localization settings belong inside the payload (see the Bulk Service Request
+      // page), and the price is asked for in the currency the Amazon site itself sells in.
+      payload: { asins: group.asins, ...(currencyForSuffix(group.domain) ? { currency: currencyForSuffix(group.domain) } : {}) },
       callback_url: callbackUrl || String(process.env.BACKEND_URL || process.env.RENDER_EXTERNAL_URL || 'https://elms-backend-1-tr5h.onrender.com').replace(/\/$/, '') + '/api/easyparser/callback',
     }));
   if (!jobObjects.length) return { accepted: [], rejected: [], meta: null };
