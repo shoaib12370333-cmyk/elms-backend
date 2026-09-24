@@ -28,6 +28,7 @@ stub('models/schemas/Session', {
   updateMany: async (f, update) => { db.sessions.filter((s) => String(s.userId) === String(f.userId) && !s.revokedAt && (!f.ip || s.ip === f.ip)).forEach((s) => Object.assign(s, update.$set)); },
   create: async (d) => { db.sessions.push(d); return d; },
 });
+require.cache[require.resolve('../models/schemas/Session')].exports.find = (f) => (f.deviceId !== undefined ? lean([]) : lean(db.sessions.filter((s) => (!f.ip || s.ip === f.ip) && (f.revokedAt === undefined || s.revokedAt === f.revokedAt))));
 stub('models/schemas/LoginEvent', {
   exists: async () => null, create: async (d) => { db.events.push(d); return d; }, updateOne: async () => ({}),
   aggregate: async () => {
