@@ -8,6 +8,8 @@ const { emailKey } = require('./signupBonusGuard');
  *
  *  - Everybody has a referral code (made when they first open Refer & Earn; an admin can give a custom one).
  *  - A friend who signs up with that code (?ref=CODE in the link, or typed at sign-up) is recorded as referred by that person.
+ *    A code is used at sign-up only, once per person: it cannot be added to an existing account later, so someone who has
+ *    referred people can never end up referred themselves.
  *  - The friend gets `discountPercent` off their first `discountUses` purchase(s), for `discountDays` days after signing up
  *    (0 = no limit). The percent is the admin's default, or the one the admin set for this referrer.
  *  - The referrer earns `rewardCredits` (default or per-referrer) once, when the friend makes their first purchase.
@@ -20,7 +22,6 @@ const CODE_LENGTH = 8;
 const CUSTOM_CODE_RE = /^[A-Z0-9]{4,20}$/;
 const MAX_DISCOUNT_PERCENT = 90;
 const MIN_CHARGE_CENTS = 50; // CashTap's smallest checkout is $0.50
-const LATE_CODE_DAYS = 30; // a code can still be added to an account this many days after sign-up, until its first purchase
 
 const frontendUrl = () => String(process.env.FRONTEND_URL || 'https://elmstool.com').replace(/\/+$/, '');
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
@@ -104,6 +105,8 @@ async function attachReferral({ user, code: rawCode, ip }) {
   if (!usable(referrer)) return { applied: false, reason: 'invalid_code' };
   if (referrer.id === String(user.id) || (referrer.emailKey || emailKey(referrer.email)) === emailKey(user.email)) return { applied: false, reason: 'self' };
   if (await model.findReferralByReferred(user.id)) return { applied: false, reason: 'already' };
+  // Someone who has referred people is never referred themselves.
+  if ((await model.referrerTotals(user.id)).signups > 0) return { applied: false, reason: 'referrer' };
   try {
     await model.createReferral({ referrerId: referrer.id, referredUserId: user.id, code, ip });
   } catch (err) {
@@ -167,22 +170,13 @@ async function afterPurchase({ userId, priceUsd, referralId }) {
   }
 }
 
-/** A code can be added later (Buy credits page) only by a recent account that has not bought anything and was not referred. */
-async function canAddCode(userId, { user, config, hasPurchases }) {
-  if (!config.enabled || hasPurchases) return false;
-  if (await model.findReferralByReferred(userId)) return false;
-  const created = user && user.createdAt ? new Date(user.createdAt).getTime() : 0;
-  return !!created && Date.now() - created <= LATE_CODE_DAYS * 86400000;
-}
-
 /** Everything the Refer & Earn page shows. */
 async function pageFor(userId) {
-  const { hasPurchases } = require('../models/purchasesModel');
   const config = await getReferralSettings();
   const me = await model.getUser(userId);
   if (!me) return null;
   const code = await ensureCode(userId);
-  const [totals, rows, mine, bought] = await Promise.all([model.referrerTotals(userId), model.listForReferrer(userId, 100), model.findReferralByReferred(userId), hasPurchases(userId)]);
+  const [totals, rows, mine] = await Promise.all([model.referrerTotals(userId), model.listForReferrer(userId, 100), model.findReferralByReferred(userId)]);
   const friends = await model.getUsersByIds(rows.map((r) => r.referredUserId));
   const discount = await discountFor(userId);
   return {
@@ -204,21 +198,7 @@ async function pageFor(userId) {
       rewardCredits: r.rewardCredits || 0,
     })),
     referredBy: mine ? { code: mine.code, discount: discount ? { percent: discount.percent, usesLeft: discount.usesLeft, expiresAt: discount.expiresAt } : null } : null,
-    canAddCode: await canAddCode(userId, { user: me, config, hasPurchases: bought }),
   };
-}
-
-/** Adds a code to an existing account (Buy credits page). Returns { applied, reason?, ... } like attachReferral. */
-async function addLateCode({ userId, code, ip }) {
-  const { hasPurchases } = require('../models/purchasesModel');
-  const config = await getReferralSettings();
-  if (!config.enabled) return { applied: false, reason: 'disabled' };
-  const me = await model.getUser(userId);
-  if (!me) return { applied: false, reason: 'no_user' };
-  if (await model.findReferralByReferred(userId)) return { applied: false, reason: 'already' };
-  if (await hasPurchases(userId)) return { applied: false, reason: 'has_purchases' };
-  if (!(await canAddCode(userId, { user: me, config, hasPurchases: false }))) return { applied: false, reason: 'too_late' };
-  return attachReferral({ user: me, code, ip });
 }
 
 /** Admin: gives someone a custom code (e.g. BILAL20). Throws with statusCode 409 when it is taken, 400 when it is not a valid code. */
@@ -235,7 +215,7 @@ async function setCustomCode(userId, rawCode) {
 
 module.exports = {
   normalizeCode, randomCode, clampPercent, priceAfterDiscount, maskEmail,
-  ensureCode, checkCode, attachReferral, discountFor, afterPurchase, pageFor, addLateCode, setCustomCode,
+  ensureCode, checkCode, attachReferral, discountFor, afterPurchase, pageFor, setCustomCode,
   percentFor, rewardFor, frontendUrl,
-  MAX_DISCOUNT_PERCENT, LATE_CODE_DAYS, CUSTOM_CODE_RE,
+  MAX_DISCOUNT_PERCENT, CUSTOM_CODE_RE,
 };

@@ -1,6 +1,7 @@
 const cashtap = require('./cashtapService');
 const { fulfillPurchase } = require('./purchaseFulfillmentService');
 const referrals = require('./referralService');
+const vouchers = require('./voucherService');
 
 /**
  * Buying a plan with CashTap.
@@ -29,17 +30,20 @@ function assertCashtapUrl(url) {
 }
 
 /**
- * @param {{ user: object, plan: object, discount?: { referralId: string, percent: number } | null }} p
+ * @param {{ user: object, plan: object, discount?: { referralId: string, percent: number } | null, voucher?: object | null }} p
  * discount: a referral discount the server already decided (services/referralService.js discountFor). The amount asked of the
  * buyer is the plan's price minus that percent; the percent travels in the session's metadata so the payment can be checked.
+ * voucher: a voucher of this user that the server already checked (services/voucherService.js usableForPurchase); it is used
+ * INSTEAD of the referral discount, and its id travels in the metadata.
  */
-async function startCheckout({ user, plan, discount = null }) {
+async function startCheckout({ user, plan, discount = null, voucher = null }) {
+  if (voucher) discount = null;
   const percent = discount ? referrals.clampPercent(discount.percent) : 0;
-  const amount = percent > 0 ? referrals.priceAfterDiscount(plan.priceUsd, percent) : plan.priceUsd;
+  const amount = voucher ? vouchers.priceWith(plan.priceUsd, voucher) : percent > 0 ? referrals.priceAfterDiscount(plan.priceUsd, percent) : plan.priceUsd;
   const session = await cashtap.createSession({
     amount,
     lineItems: [{
-      name: plan.name + (percent > 0 ? ' (' + percent + '% referral discount)' : ''),
+      name: plan.name + (voucher ? ' (voucher)' : percent > 0 ? ' (' + percent + '% referral discount)' : ''),
       description: plan.credits.toLocaleString('en-US') + ' credits' + (plan.maxEbayAccounts ? ' + ' + plan.maxEbayAccounts + ' eBay account' + (plan.maxEbayAccounts === 1 ? '' : 's') : ''),
       quantity: 1,
       unit_amount: amount,
@@ -51,6 +55,7 @@ async function startCheckout({ user, plan, discount = null }) {
       elms_user_id: String(user.id),
       elms_plan_id: String(plan.id),
       ...(percent > 0 ? { elms_discount_percent: String(percent), elms_referral_id: String(discount.referralId) } : {}),
+      ...(voucher ? { elms_voucher_id: String(voucher.id) } : {}),
     },
   });
   assertCashtapUrl(session.url);
@@ -89,9 +94,15 @@ async function grantForSession(session, { expectUserId } = {}) {
   // whose amount differs was not created by us.
   const discountPercent = referrals.clampPercent(meta.elms_discount_percent);
   const referralId = discountPercent > 0 && /^[a-f0-9]{24}$/i.test(String(meta.elms_referral_id || '')) ? String(meta.elms_referral_id) : null;
-  const expected = referralId ? referrals.priceAfterDiscount(plan.priceUsd, discountPercent) : Number(plan.priceUsd);
+  // A voucher: it must be this buyer's, a purchase discount, and valid for this plan; the price it gives is what was asked.
+  let voucher = null;
+  if (/^[a-f0-9]{24}$/i.test(String(meta.elms_voucher_id || ''))) {
+    const found = await require('../models/vouchersModel').getById(String(meta.elms_voucher_id));
+    if (found && found.userId === String(userId) && vouchers.appliesToPlan(found, plan)) voucher = found;
+  }
+  const expected = voucher ? vouchers.priceWith(plan.priceUsd, voucher) : referralId ? referrals.priceAfterDiscount(plan.priceUsd, discountPercent) : Number(plan.priceUsd);
   if (Math.abs(Number(session.amount) - expected) > 0.01) {
-    await alertAdmin('CashTap payment with an unexpected amount', ['Session: ' + session.id, 'Plan: ' + plan.name + ' ($' + plan.priceUsd + ')' + (referralId ? ' with ' + discountPercent + '% referral discount = $' + expected : ''), 'Session amount: $' + session.amount, 'Nobody was credited. Please check it by hand.']);
+    await alertAdmin('CashTap payment with an unexpected amount', ['Session: ' + session.id, 'Plan: ' + plan.name + ' ($' + plan.priceUsd + ')' + (referralId ? ' with ' + discountPercent + '% referral discount = $' + expected : '') + (voucher ? ' with voucher ' + voucher.id + ' = $' + expected : ''), 'Session amount: $' + session.amount, 'Nobody was credited. Please check it by hand.']);
     return { status: 'completed', granted: false, reason: 'amount_mismatch' };
   }
   const received = session.amount_received == null ? Number(session.amount) : Number(session.amount_received);
@@ -102,7 +113,10 @@ async function grantForSession(session, { expectUserId } = {}) {
 
   const done = await fulfillPurchase({
     userId, plan, provider: 'cashtap', transactionId: session.id, priceUsd: Number(session.amount),
-    listPriceUsd: Number(plan.priceUsd), discountPercent: referralId ? discountPercent : 0, referralId,
+    listPriceUsd: Number(plan.priceUsd),
+    discountPercent: voucher ? Math.round((1 - Number(session.amount) / Number(plan.priceUsd)) * 10000) / 100 : referralId ? discountPercent : 0,
+    referralId: voucher ? null : referralId,
+    voucherId: voucher ? voucher.id : null,
   });
   return { status: 'completed', ...done };
 }

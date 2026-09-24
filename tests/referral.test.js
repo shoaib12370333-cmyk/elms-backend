@@ -288,35 +288,24 @@ const paid = (session, over = {}) => ({ id: session.id, status: 'completed', amo
   assert.match(res.body.code, /^[A-Z0-9]{8}$/);
   assert.strictEqual(res.body.link, 'https://elmstool.com/signup?ref=' + res.body.code);
   assert.strictEqual(res.body.offer.friendDiscountPercent, 10);
-  assert.strictEqual(res.body.canAddCode, true, 'a new account that bought nothing may still add a code');
+  assert.strictEqual(res.body.canAddCode, undefined, 'a code is used at sign-up only: there is nothing to add later');
   assert.strictEqual(res.body.referredBy, null);
+  assert.ok(!referralRoutes.stack.some((l) => l.route && l.route.path === '/apply'), 'there is no route to add a code to an existing account');
 
-  // adding a code later
-  res = await call(referralRoutes, 'post', '/apply', { userId: 'friend', body: { code: 'friend0' } });
-  assert.strictEqual(res.statusCode, 400);
-  res = await call(referralRoutes, 'post', '/apply', { userId: 'friend', body: { code: (await referralsModel.getUser('friend')).referralCode } });
-  assert.strictEqual(res.body.reason, 'self');
-  res = await call(referralRoutes, 'post', '/apply', { userId: 'friend', body: { code: 'BOSS2024' } });
-  assert.strictEqual(res.body.success, true);
-  assert.strictEqual(res.body.discountPercent, 10);
-  res = await call(referralRoutes, 'post', '/apply', { userId: 'friend', body: { code: 'BOSS2024' } });
-  assert.strictEqual(res.body.reason, 'already');
+  // a person referred at sign-up: their page shows the discount that is left
+  assert.strictEqual((await referrals.attachReferral({ user: { id: 'friend', email: 'friend@x.com' }, code: 'BOSS2024' })).applied, true);
+  assert.strictEqual((await referrals.attachReferral({ user: { id: 'friend', email: 'friend@x.com' }, code: 'BOSS2024' })).reason, 'already', 'a code is used once per person');
   res = await call(referralRoutes, 'get', '/me', { userId: 'friend' });
   assert.strictEqual(res.body.referredBy.code, 'BOSS2024');
   assert.strictEqual(res.body.referredBy.discount.percent, 10);
-  assert.strictEqual(res.body.canAddCode, false);
+  // someone who has referred people cannot be referred themselves (they would need another person's code)
+  addUser('third', 'third@x.com', { referralCode: 'THIRD222' });
+  assert.strictEqual((await referrals.attachReferral({ user: { id: 'boss', email: 'boss@gmail.com' }, code: 'THIRD222' })).reason, 'referrer');
   // the referrer sees the friend, masked
   res = await call(referralRoutes, 'get', '/me', { userId: 'boss' });
   assert.strictEqual(res.body.stats.signups, 1);
   assert.strictEqual(res.body.referrals[0].who, 'f***d@x.com');
   assert.strictEqual(res.body.referrals[0].status, 'signed_up');
-  // too late: an old account, or one that already bought
-  reset(); db.users.get('friend').createdAt = new Date(Date.now() - 45 * 86400000);
-  res = await call(referralRoutes, 'post', '/apply', { userId: 'friend', body: { code: 'BOSS2024' } });
-  assert.strictEqual(res.body.reason, 'too_late');
-  reset(); bought = true;
-  res = await call(referralRoutes, 'post', '/apply', { userId: 'friend', body: { code: 'BOSS2024' } });
-  assert.strictEqual(res.body.reason, 'has_purchases');
 
   // ---------- sign-up hooks ----------
   reset();

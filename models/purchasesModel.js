@@ -7,7 +7,7 @@ const Purchase = require('./schemas/Purchase');
  * re-sends the same webhook (which it does by design - "at least once"
  * delivery).
  */
-async function recordPurchase({ userId, planId, provider, providerTransactionId, priceUsd, creditsGranted, listPriceUsd = null, discountPercent = 0, referralId = null }) {
+async function recordPurchase({ userId, planId, provider, providerTransactionId, priceUsd, creditsGranted, listPriceUsd = null, discountPercent = 0, referralId = null, voucherId = null }) {
   const existing = await Purchase.findOne({ providerTransactionId });
   if (existing) return null; // already processed - caller should skip crediting again
 
@@ -21,6 +21,7 @@ async function recordPurchase({ userId, planId, provider, providerTransactionId,
     listPriceUsd,
     discountPercent,
     referralId,
+    voucherId,
   });
   return serialize(doc);
 }

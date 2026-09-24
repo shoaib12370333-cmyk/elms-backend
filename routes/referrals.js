@@ -3,7 +3,6 @@ const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { requireAuth } = require('../middleware/requireAuth');
 const referrals = require('../services/referralService');
-const { requestContext } = require('../services/sessionTracker');
 
 // The sign-up form asks whether a code is good before the account exists: no sign-in, but limited so codes cannot be guessed.
 const checkLimiter = rateLimit({
@@ -19,8 +18,6 @@ const REASONS = {
   invalid_code: 'That referral code is not valid.',
   self: 'You cannot use your own referral code.',
   already: 'A referral code is already on your account.',
-  has_purchases: 'A referral code can only be added before your first purchase.',
-  too_late: 'A referral code can only be added in the first ' + referrals.LATE_CODE_DAYS + ' days after signing up.',
   no_user: 'Account not found.',
 };
 
@@ -51,21 +48,6 @@ router.get('/me', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('referral page error:', err.message);
     res.status(500).json({ success: false, error: 'Could not load your referral page right now.' });
-  }
-});
-
-/**
- * POST /api/referrals/apply   Body: { code }
- * Adds a code to an existing account (someone who signed up without one), before their first purchase.
- */
-router.post('/apply', requireAuth, async (req, res) => {
-  try {
-    const result = await referrals.addLateCode({ userId: req.userId, code: req.body && req.body.code, ip: requestContext(req).ip });
-    if (!result.applied) return res.status(400).json({ success: false, reason: result.reason, error: REASONS[result.reason] || REASONS.invalid_code });
-    res.json({ success: true, discountPercent: result.discountPercent, discountUses: result.discountUses, discountDays: result.discountDays });
-  } catch (err) {
-    console.error('referral apply error:', err.message);
-    res.status(500).json({ success: false, error: 'Could not add the code right now.' });
   }
 });
 

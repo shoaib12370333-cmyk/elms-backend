@@ -175,6 +175,7 @@ app.use('/api/stock-check', stockCheckRoute);
 // Security (login IPs, blocks, suspensions, pop-up messages) has its own admin router; it must come before the general one.
 app.use('/api/admin/security', require('./routes/adminSecurity'));
 app.use('/api/admin/referrals', require('./routes/adminReferrals'));
+app.use('/api/admin/vouchers', require('./routes/adminVouchers'));
 app.use('/api/admin', adminRoute);
 
 // Support tickets (user-facing: create/view own tickets)
@@ -189,6 +190,7 @@ app.use('/api/system-notifications', systemNotificationsRoute);
 app.use('/api/dashboard', dashboardRoute);
 app.use('/api/security', require('./routes/security'));
 app.use('/api/referrals', require('./routes/referrals'));
+app.use('/api/vouchers', require('./routes/vouchers'));
 app.use('/api/unsubscribe', require('./routes/unsubscribe'));
 app.use('/api/easyparser/callback', require('./routes/easyparserCallback'));
 app.use('/api/message-snippets', messageSnippetsRoute);

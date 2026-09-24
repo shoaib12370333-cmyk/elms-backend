@@ -231,6 +231,24 @@ async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, 
 // inReplyTo: Message-ID of the mail that opened the ticket, so mail apps keep it in one conversation.
 // ai: the reply was written by the support assistant; holding: it only says a person will look at the ticket;
 // viaEmail: the customer can answer by replying to this mail (otherwise they are pointed to a new ticket).
+/** Tells a user an admin gave them a voucher. */
+async function sendVoucherEmail({ to, what, note, expiresAt, redeem }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const lines = [
+    'You have a new voucher: ' + what + '.',
+    note ? note : null,
+    expiresAt ? 'It is valid until ' + new Date(expiresAt).toUTCString().slice(0, 16) + '.' : null,
+    redeem ? 'Open Vouchers in ' + appName + ' and press Redeem to use it.' : 'Choose it on the Buy credits page to take it off the price.',
+    frontendUrl('/vouchers'),
+  ].filter(Boolean);
+  return sendFrom('billing', {
+    to,
+    subject: appName + ': you have a new voucher',
+    text: lines.join('\n\n'),
+    html: wrapHtml('You have a new voucher', paragraphsHtml(lines.join('\n\n'))),
+  }, 'Voucher');
+}
+
 async function sendTicketReplyEmail({ to, subject, reply, ref, inReplyTo, ai = false, holding = false, viaEmail = true }) {
   const appName = process.env.APP_NAME || 'ELMS';
   let text;
@@ -368,4 +386,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendPurchaseReceiptEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
