@@ -24,6 +24,13 @@ A chip on every Amazon product page ("Profit £2.42 · 4 warnings"); click it fo
 - The panel's checks with ELMS are free and use no credit. If ELMS cannot be reached (a sleeping server) the profit and page checks still work.
 - The floating button now imports at the markup shown in the panel (it used to ignore the popup's markup and import at 0%).
 
+## Bulk import (v3.5)
+On a search-results or bestseller page every product gets a small **+ ELMS** badge. Tick the ones you want, open the **Bulk import** chip and press *Import N products*.
+- A product ELMS already has in the chosen store shows **In Drafts** or **In ELMS** and cannot be ticked (up to 100 products at a time).
+- The products go to the chosen store at the markup in the panel. ELMS fetches them itself (1 credit each, `POST /api/fetch-product/bulk-job` in the background - you can close the page - or, without background imports, a few at a time through `/bulk`). Variant pictures are not part of this fetch: import a product that has variants from its own page.
+- A product that cannot be imported (already live, paused, scheduled ...) is skipped **without spending a credit**; the website's bulk import and Import page follow the same rule now.
+- A background import is saved into the store it was started for (it used to use whichever store was active when the product was saved).
+
 ## Options (popup)
 - *Open the draft in ELMS after an import.*
 - *Import only the option shown*: does not read the other colours / sizes (use it when Amazon asks for a captcha).
@@ -39,4 +46,4 @@ The ELMS wordmark is the extension's logo everywhere: the toolbar icon, the popu
 
 ## Files
 - `content.js` reads the page and draws the panel; `logic.js` is the maths and the checks (no page access, tested in `tests/extensionLogic.test.js`); `background.js` talks to ELMS (renews an expired session, opens ELMS pages, the shortcut); `popup.html` / `popup.js` connect, choose the store and set the options.
-- Server side: `POST /api/extension/check` (free: credits, stores, what you already have, VeRO words) and `POST /api/browser-import` (accepts `ebayAccountId`).
+- Server side: `POST /api/extension/check` (free: credits, stores, what you already have, VeRO words), `POST /api/extension/known` (free: what you already have for up to 100 ASINs) and `POST /api/browser-import` (accepts `ebayAccountId`; so do `/api/fetch-product/bulk` and `/bulk-job`).

@@ -40,4 +40,19 @@ router.post('/check', requireAuth, limiter, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/extension/known
+ * Body: { asins: string[] } (at most 100)
+ * Free. For a page with many products (search results): what the user already has for each ASIN, in any store and state.
+ */
+router.post('/known', requireAuth, limiter, async (req, res) => {
+  try {
+    const asins = Array.isArray(req.body && req.body.asins) ? req.body.asins.slice(0, extension.MAX_KNOWN_ASINS).map((a) => text(a, 16)) : [];
+    res.json({ success: true, known: await extension.knownFor(req.userId, asins) });
+  } catch (err) {
+    console.error('extension known error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not check these products right now.' });
+  }
+});
+
 module.exports = router;

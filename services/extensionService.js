@@ -13,6 +13,7 @@ const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
  */
 
 const MAX_EXISTING = 10;
+const MAX_KNOWN_ASINS = 100;
 const ASIN_RE = /^[A-Z0-9]{10}$/;
 
 const frontendUrl = () => String(process.env.FRONTEND_URL || 'https://elmstool.com').replace(/\/+$/, '');
@@ -44,10 +45,11 @@ function storesOf(accounts, amazonUrl) {
 }
 
 /** The listing rows the panel needs (never the whole listing). */
-function existingOf(listings, accounts) {
+function existingOf(listings, accounts, limit = MAX_EXISTING) {
   const labels = new Map((accounts || []).map((a) => [a.id, a.label]));
-  return (listings || []).slice(0, MAX_EXISTING).map((l) => ({
+  return (listings || []).slice(0, limit).map((l) => ({
     id: l.id,
+    asin: l.sku || null,
     status: l.status,
     storeId: l.ebay_account_id || null,
     storeLabel: l.ebay_account_id ? labels.get(l.ebay_account_id) || null : null,
@@ -89,4 +91,41 @@ async function panelInfo(input) {
   return out;
 }
 
-module.exports = { panelInfo, creditsOf, storesOf, existingOf, amazonFit, frontendUrl };
+/** For product lists (search results): what the user already has for each of these ASINs, in any store. */
+async function knownFor(userId, asins) {
+  const { listEbayAccounts } = require('../models/ebayAccountsModel');
+  const { listListingsBySkus } = require('../models/listingsModel');
+  const list = [...new Set((Array.isArray(asins) ? asins : []).map((a) => String(a || '').trim().toUpperCase()).filter((a) => ASIN_RE.test(a)))].slice(0, MAX_KNOWN_ASINS);
+  if (!list.length) return [];
+  const [accounts, rows] = await Promise.all([listEbayAccounts(userId), listListingsBySkus(userId, list)]);
+  return existingOf(rows, accounts, 1000);
+}
+
+/** The store an import goes to: the one the extension chose (it must be the user's own), else the active store. */
+async function storeForImport(userId, ebayAccountId) {
+  const { getActiveEbayAccount, getEbayAccountById } = require('../models/ebayAccountsModel');
+  const { isValidObjectIdString } = require('./validationService');
+  if (ebayAccountId === undefined || ebayAccountId === null || ebayAccountId === '') return getActiveEbayAccount(userId);
+  const store = isValidObjectIdString(String(ebayAccountId)) ? await getEbayAccountById(userId, String(ebayAccountId)) : null;
+  if (!store) throw Object.assign(new Error('That eBay store was not found. Pick your store again in the extension.'), { statusCode: 404 });
+  return store;
+}
+
+// A listing that is no longer a draft is never changed by an import, so importing over it would only spend a credit.
+const ALREADY = {
+  published: 'is already live on eBay',
+  paused: 'is already on eBay (paused)',
+  publishing: 'is being published right now',
+  scheduled: 'is already scheduled to publish',
+  error: 'is already in your Drafts with a publish error - open it there and press Retry',
+  ended: 'was ended on eBay - republish it from Live Listings',
+};
+
+/** The message for an import that would land on a listing that is not a draft, or null when the import can go ahead. */
+function alreadyListedMessage(listing, store) {
+  if (!listing || listing.status === 'draft') return null;
+  const where = store && store.label ? ' in ' + store.label : '';
+  return 'This product ' + (ALREADY[listing.status] || 'already exists as a ' + listing.status + ' listing') + where + '. Nothing was imported and no credit was used.';
+}
+
+module.exports = { panelInfo, knownFor, storeForImport, alreadyListedMessage, creditsOf, storesOf, existingOf, amazonFit, frontendUrl, MAX_KNOWN_ASINS };

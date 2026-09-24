@@ -79,10 +79,24 @@ async function openInElms(url) {
   await chrome.tabs.create({ url: target.href });
 }
 
+// The few ELMS calls the page's script may make through this script (a page cannot call ELMS itself: it is another origin).
+const API_ALLOWED = [
+  /^POST \/api\/extension\/known$/,
+  /^GET \/api\/fetch-product\/limits$/,
+  /^POST \/api\/fetch-product\/bulk$/,
+  /^POST \/api\/fetch-product\/bulk-job$/,
+  /^GET \/api\/fetch-product\/bulk-job\/[a-f0-9]{24}$/,
+];
+
 const routes = {
   ELMS_IMPORT_PRODUCT: (m) => api('/api/browser-import', { method: 'POST', body: { amazonUrl: m.amazonUrl, product: m.product, markupPercent: m.markupPercent, ebayAccountId: m.ebayAccountId || undefined } }),
   ELMS_CHECK: (m) => api('/api/extension/check', { method: 'POST', body: m.payload || {}, timeoutMs: 60000 }),
   ELMS_OPEN_URL: (m) => openInElms(m.url),
+  ELMS_API: (m) => {
+    const method = String(m.method || 'GET').toUpperCase();
+    if (!API_ALLOWED.some((re) => re.test(method + ' ' + m.path))) return Promise.reject(new Error('That call is not allowed.'));
+    return api(m.path, { method, body: m.body, timeoutMs: Math.min(Number(m.timeoutMs) || 120000, 180000) });
+  },
 };
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
