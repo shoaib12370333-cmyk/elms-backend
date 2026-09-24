@@ -287,6 +287,12 @@ async function setStockCheckInterval(userId, days) {
 /**
  * Admin-only: sets how many eBay accounts a user is allowed to connect.
  */
+/** Raises the number of eBay accounts a user may connect by n (a voucher). */
+async function addEbayAccountSlots(userId, n) {
+  const user = await User.findByIdAndUpdate(userId, { $inc: { maxEbayAccounts: n } }, { new: true });
+  return user ? serialize(user) : null;
+}
+
 async function setMaxEbayAccounts(userId, max) {
   const user = await User.findByIdAndUpdate(userId, { maxEbayAccounts: max }, { new: true });
   return user ? serialize(user) : null;
@@ -448,6 +454,7 @@ module.exports = {
   setCreditBalance,
   setStockCheckInterval,
   setMaxEbayAccounts,
+  addEbayAccountSlots,
   setOrderSyncSettings,
   setAutoOrderSettings,
   getOrCreateExtensionKey,

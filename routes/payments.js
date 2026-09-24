@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/requireAuth');
 const { listActivePlans, getPlanById } = require('../models/plansModel');
 const { listPurchasesForUser } = require('../models/purchasesModel');
 const referrals = require('../services/referralService');
+const vouchers = require('../services/voucherService');
 const { getUserById } = require('../models/usersModel');
 const { createTransaction } = require('../services/paddleService');
 const cashtapPayments = require('../services/cashtapPaymentService');
@@ -35,6 +36,21 @@ router.get('/public-plans', async (req, res) => {
 router.get('/plans', requireAuth, async (req, res) => {
   const provider = cashtapPayments.activeProvider();
   const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId);
+  // A voucher the buyer picked on the page: the plans show the price with it (CashTap checkout only).
+  if (req.query.voucherId && provider === 'cashtap') {
+    try {
+      const v = await vouchers.usableForPurchase(req.userId, String(req.query.voucherId), null);
+      return res.json({
+        success: true,
+        provider,
+        plans: plans.map((p) => (vouchers.appliesToPlan(v, p) ? { ...p, discountedPriceUsd: vouchers.priceWith(p.priceUsd, v) } : { ...p, voucherNotValid: true })),
+        referralDiscount: null,
+        voucher: { id: v.id, description: vouchers.describe(v, (plans.find((p) => p.id === v.planId) || {}).name), expiresAt: v.expiresAt },
+      });
+    } catch (err) {
+      return res.status(err.userFacing ? err.statusCode : 500).json({ success: false, error: err.userFacing ? err.message : 'Could not use that voucher.' });
+    }
+  }
   // A friend who signed up with a referral code gets a discount on the plans (CashTap checkout; Paddle prices are fixed in Paddle).
   let discount = null;
   if (provider === 'cashtap') {
@@ -87,9 +103,11 @@ router.post('/checkout', requireAuth, async (req, res) => {
   const provider = cashtapPayments.activeProvider();
   try {
     if (provider === 'cashtap') {
-      const discount = await referrals.discountFor(req.userId).catch((err) => { console.error('referral discount lookup failed:', err.message); return null; });
-      const { sessionId, url } = await cashtapPayments.startCheckout({ user, plan, discount });
-      return res.json({ success: true, provider, sessionId, url, discountPercent: discount ? discount.percent : 0 });
+      // A voucher the buyer chose is used instead of the referral discount.
+      const voucher = req.body.voucherId ? await vouchers.usableForPurchase(req.userId, String(req.body.voucherId), plan) : null;
+      const discount = voucher ? null : await referrals.discountFor(req.userId).catch((err) => { console.error('referral discount lookup failed:', err.message); return null; });
+      const { sessionId, url } = await cashtapPayments.startCheckout({ user, plan, discount, voucher });
+      return res.json({ success: true, provider, sessionId, url, discountPercent: discount ? discount.percent : 0, voucherApplied: !!voucher });
     }
     if (!plan.paddlePriceId) return res.status(404).json({ success: false, error: 'This plan is not available.' });
     const { transactionId } = await createTransaction({
@@ -100,6 +118,7 @@ router.post('/checkout', requireAuth, async (req, res) => {
 
     res.json({ success: true, provider, transactionId });
   } catch (err) {
+    if (err.userFacing) return res.status(err.statusCode).json({ success: false, error: err.message }); // a voucher that cannot be used
     console.error(provider + ' checkout creation error:', err.message, err.requestId || '');
     res.status(500).json({ success: false, error: 'Could not start checkout. Please try again.' });
   }

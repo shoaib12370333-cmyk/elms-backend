@@ -65,7 +65,8 @@
     "test:order-import": "node tests/orderImport.test.js",
     "test:message-thread": "node tests/messageThread.test.js",
     "test:referral": "node tests/referral.test.js",
-    "test:referral-settings": "node tests/referralSettings.test.js"
+    "test:referral-settings": "node tests/referralSettings.test.js",
+    "test:voucher": "node tests/voucher.test.js"
   },
   "engines": {
     "node": "22.13.0"
