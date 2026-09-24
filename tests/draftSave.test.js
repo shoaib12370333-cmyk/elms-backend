@@ -74,6 +74,24 @@ function fakeRes() {
   assert.deepStrictEqual(updateListingCalls[0].bulletPoints, ['One', 'Two']);
   assert.deepStrictEqual(updateListingCalls[0].specifications, [{ name: 'A', value: 'b' }]);
 
+  // The Price Calculator page saves a price with only the cost beside it: the margin is stored, nothing else is touched.
+  updateListingCalls = [];
+  res = fakeRes();
+  await handler({ userId: 'u1', params: { id: 'l1' }, body: { sellPrice: 13.05, markupPercent: 63.13, amazonPrice: 8 } }, res);
+  assert.strictEqual(res.body.success, true);
+  assert.strictEqual(updateListingCalls[0].sellPrice, 13.05);
+  assert.strictEqual(updateListingCalls[0].amazonPrice, 8);
+  assert.strictEqual(updateListingCalls[0].marginAmount, 5.05);
+  assert.strictEqual(updateListingCalls[0].title, undefined, 'title and the rest are left alone');
+  res = fakeRes();
+  await handler({ userId: 'u1', params: { id: 'l1' }, body: { sellPrice: 13.05, amazonPrice: -3 } }, res);
+  assert.strictEqual(res.statusCode, 400);
+  // A full save still takes the cost from the edited product
+  updateListingCalls = [];
+  res = fakeRes();
+  await handler({ userId: 'u1', params: { id: 'l1' }, body: { sellPrice: 12, draftProduct: { price: 7.5, title: 'T' } } }, res);
+  assert.strictEqual(updateListingCalls[0].marginAmount, 4.5);
+
   // An unrelated error thrown deeper (e.g. from updateListing) is now caught and reported
   // cleanly too, instead of the generic 500.
   updateListingImpl = async () => { throw new Error('eBay does not recognise category 9355 on EBAY_GB.'); };

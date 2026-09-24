@@ -385,6 +385,9 @@ router.put('/:id', requireAuth, async (req, res) => {
   if (quantity !== undefined && quantity !== null && !isPositiveNumber(quantity)) {
     return res.status(400).json({ success: false, error: 'quantity must be a positive number.' });
   }
+  if (req.body.amazonPrice !== undefined && req.body.amazonPrice !== null && !isPositiveNumber(req.body.amazonPrice)) {
+    return res.status(400).json({ success: false, error: 'amazonPrice must be a positive number.' });
+  }
   if (accountId !== undefined && accountId !== null && accountId !== '' && !isValidObjectIdString(accountId)) {
     return res.status(400).json({ success: false, error: 'That does not look like a valid eBay account.' });
   }
@@ -406,6 +409,7 @@ router.put('/:id', requireAuth, async (req, res) => {
         }
       : null;
 
+    const cost = productToSave?.price != null ? productToSave.price : (req.body.amazonPrice != null ? Number(req.body.amazonPrice) : undefined);
     const updated = await updateListing(req.userId, id, {
       title,
       mainImage,
@@ -434,8 +438,9 @@ router.put('/:id', requireAuth, async (req, res) => {
       priceMonitoring: req.body.priceMonitoring,
       // The editor sends the item specifics at the top level (no draftProduct); they used to be dropped.
       ebayAspects: ebayAspects && typeof ebayAspects === 'object' ? ebayAspects : productToSave?.ebayAspects,
-      amazonPrice: productToSave?.price,
-      marginAmount: productToSave?.price != null && sellPrice != null ? Number((Number(sellPrice) - Number(productToSave.price)).toFixed(2)) : undefined,
+      // The cost behind this price: the edited product's, or (the Price Calculator page saving a price without the whole product) the one sent alone.
+      amazonPrice: cost,
+      marginAmount: cost != null && sellPrice != null ? Number((Number(sellPrice) - Number(cost)).toFixed(2)) : undefined,
     });
 
     if (!updated) {
