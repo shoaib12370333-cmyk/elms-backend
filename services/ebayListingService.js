@@ -4,6 +4,8 @@ const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
 const { EBAY_API_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnvironment');
 const { getMarketplaceConfig, getMarketplaceLocale, assertSupportedMarketplace } = require('../config/ebayMarketplaces');
+const { normalizeLive, mergeAspects, firstValue } = require('./liveListingSync');
+const { convertAmount } = require('./currencyService');
 
 /**
  * Maps an eBay marketplace ID to its expected listing currency. eBay
@@ -694,11 +696,28 @@ async function withdrawListing(
  */
 
 /**
- * Revises an active Inventory-API listing using the listing values already
- * stored by ELMS. The Inventory API requires full replacement payloads for
- * inventory items/offers, so we first read the current eBay objects and then
- * merge only fields ELMS owns. This keeps the Live Listings Save button
- * synchronized with eBay instead of only changing MongoDB.
+ * Reads what eBay really holds for a live listing (the offer and its inventory item) as one plain object - see
+ * liveListingSync.normalizeLive. This is the truth the ELMS editor should show and the answer to "did eBay take my change".
+ */
+async function fetchLiveListing(refreshToken, { offerId, sku, deadlineAt = null }) {
+  if (!offerId || !sku) throw new Error('An eBay offer ID and SKU are required to read a live listing.');
+  const [offer, item] = await Promise.all([
+    ebayRequest(refreshToken, 'GET', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, undefined, { deadlineAt, timeoutMessage: 'eBay timed out while loading the offer.' }),
+    ebayRequest(refreshToken, 'GET', `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, undefined, { deadlineAt, timeoutMessage: 'eBay timed out while loading the inventory item.' }),
+  ]);
+  return normalizeLive(offer, item);
+}
+
+/**
+ * Revises an active Inventory-API listing. The Inventory API requires full replacement payloads for
+ * inventory items/offers, so the current eBay objects are read first and only the fields that were sent are changed:
+ *  - item specifics are MERGED with the ones eBay already holds (the editor only shows the category's own, and sending
+ *    just those used to wipe every other one); `clearAspects` names are taken off;
+ *  - the description goes on the offer as well as the inventory item (the offer's listingDescription wins on eBay, so a
+ *    description that was only put on the inventory item never showed);
+ *  - Brand / MPN stay in step with the item specifics when the item also carries them as product fields;
+ *  - `policies` and `merchantLocationKey` change the offer's business policies / item location.
+ * Afterwards eBay is read again (`live`), so the caller can tell what eBay actually kept.
  */
 async function reviseActiveListing(
   refreshToken,
@@ -709,228 +728,146 @@ async function reviseActiveListing(
     description,
     images,
     aspects,
+    clearAspects,
     sellPrice,
+    priceCurrency,
     quantity,
     categoryId,
+    policies,
+    merchantLocationKey,
     deadlineAt = null,
   }
 ) {
   if (!offerId) {
-    throw new Error(
-      'An eBay offer ID is required to revise a live listing.'
-    );
+    throw new Error('An eBay offer ID is required to revise a live listing.');
   }
-
   if (!sku) {
-    throw new Error(
-      'An eBay SKU is required to revise a live listing.'
-    );
+    throw new Error('An eBay SKU is required to revise a live listing.');
+  }
+  if (!Number.isFinite(Number(sellPrice)) || Number(sellPrice) <= 0) {
+    throw new Error('A valid selling price is required.');
+  }
+  if (!Number.isFinite(Number(quantity)) || Number(quantity) <= 0) {
+    throw new Error('A valid quantity is required.');
   }
 
-  if (
-    !Number.isFinite(Number(sellPrice)) ||
-    Number(sellPrice) <= 0
-  ) {
-    throw new Error(
-      'A valid selling price is required.'
-    );
+  const currentOffer = await ebayRequest(refreshToken, 'GET', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, undefined, {
+    deadlineAt,
+    timeoutMessage: 'eBay timed out while loading the current offer.',
+  });
+
+  const { offerId: _offerId, listing: _listing, ...offerEditable } = currentOffer || {};
+
+  // The offer is always priced in its own marketplace currency: a price given in another one (priceCurrency) is converted first.
+  let pushPrice = Number(sellPrice);
+  const offerCurrency = offerEditable.pricingSummary?.price?.currency;
+  if (priceCurrency && offerCurrency && String(priceCurrency).toUpperCase() !== String(offerCurrency).toUpperCase()) {
+    pushPrice = (await convertAmount(pushPrice, priceCurrency, offerCurrency)).amount;
   }
 
-  if (
-    !Number.isFinite(Number(quantity)) ||
-    Number(quantity) <= 0
-  ) {
-    throw new Error(
-      'A valid quantity is required.'
-    );
-  }
+  const currentInventory = await ebayRequest(refreshToken, 'GET', `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, undefined, {
+    deadlineAt,
+    timeoutMessage: 'eBay timed out while loading the current inventory item.',
+  });
 
-  const currentOffer =
-    await ebayRequest(
-      refreshToken,
-      'GET',
-      `/sell/inventory/v1/offer/${encodeURIComponent(
-        offerId
-      )}`,
-      undefined,
-      {
-        deadlineAt,
-        timeoutMessage:
-          'eBay timed out while loading the current offer.',
-      }
-    );
-
-  const {
-    offerId: _offerId,
-    listing: _listing,
-    ...offerEditable
-  } = currentOffer || {};
+  const inventoryProduct = currentInventory?.product || {};
+  const newDescription = typeof description === 'string' && description.trim() ? description : null;
 
   const offerUpdate = {
     ...offerEditable,
-
     sku,
-
-    availableQuantity:
-      Number(quantity),
-
-    categoryId:
-      categoryId ||
-      offerEditable.categoryId,
-
+    availableQuantity: Number(quantity),
+    categoryId: categoryId || offerEditable.categoryId,
     pricingSummary: {
       ...offerEditable.pricingSummary,
-
       price: {
         ...(offerEditable.pricingSummary?.price || {}),
-
-        value:
-          Number(sellPrice).toFixed(2),
+        value: pushPrice.toFixed(2),
       },
     },
+    ...(newDescription ? { listingDescription: newDescription } : {}),
   };
+  const wantedPolicies = Object.fromEntries(Object.entries(policies || {}).filter(([, v]) => v));
+  if (Object.keys(wantedPolicies).length) {
+    offerUpdate.listingPolicies = { ...(offerEditable.listingPolicies || {}), ...wantedPolicies };
+  }
+  if (merchantLocationKey) offerUpdate.merchantLocationKey = merchantLocationKey;
 
-  const currentInventory =
-    await ebayRequest(
-      refreshToken,
-      'GET',
-      `/sell/inventory/v1/inventory_item/${encodeURIComponent(
-        sku
-      )}`,
-      undefined,
-      {
-        deadlineAt,
-        timeoutMessage:
-          'eBay timed out while loading the current inventory item.',
-      }
-    );
+  const cleanImages = Array.from(
+    new Set(
+      (Array.isArray(images) ? images : inventoryProduct.imageUrls || [])
+        .map((u) => String(u || '').trim())
+        .filter((u) => /^https?:\/\//i.test(u))
+    )
+  ).slice(0, 24);
 
-  const inventoryProduct =
-    currentInventory?.product || {};
+  let mergedAspects = null;
+  if ((aspects && typeof aspects === 'object') || (Array.isArray(clearAspects) && clearAspects.length)) {
+    mergedAspects = mergeAspects(inventoryProduct.aspects || {}, buildAspects({ ebayAspects: aspects || {} }), clearAspects);
+  }
 
-  const cleanImages =
-    Array.from(
-      new Set(
-        (
-          Array.isArray(images)
-            ? images
-            : inventoryProduct.imageUrls || []
-        )
-          .map((u) =>
-            String(u || '').trim()
-          )
-          .filter((u) =>
-            /^https?:\/\//i.test(u)
-          )
-      )
-    ).slice(0, 24);
+  const product = {
+    ...inventoryProduct,
+    title: String(title || inventoryProduct.title || '').slice(0, 80),
+    description: newDescription || inventoryProduct.description || offerEditable.listingDescription || title || '',
+    ...(cleanImages.length ? { imageUrls: cleanImages } : {}),
+    ...(mergedAspects ? { aspects: mergedAspects } : {}),
+  };
+  // Brand / MPN that the item also holds as product fields must not keep the old value next to the new item specific.
+  if (mergedAspects) {
+    for (const [field, aspect] of [['brand', 'Brand'], ['mpn', 'MPN']]) {
+      if (!Object.prototype.hasOwnProperty.call(inventoryProduct, field)) continue;
+      const value = firstValue(mergedAspects, aspect);
+      if (value) product[field] = value;
+      else if ((clearAspects || []).some((n) => String(n).trim().toLowerCase() === aspect.toLowerCase())) delete product[field];
+    }
+  }
 
   const inventoryUpdate = {
     availability: {
       ...(currentInventory?.availability || {}),
-
       shipToLocationAvailability: {
-        ...(currentInventory?.availability
-          ?.shipToLocationAvailability || {}),
-
-        quantity:
-          Number(quantity),
+        ...(currentInventory?.availability?.shipToLocationAvailability || {}),
+        quantity: Number(quantity),
       },
     },
-
-    condition:
-      currentInventory?.condition ||
-      'NEW',
-
-    ...(currentInventory?.conditionDescription
-      ? {
-          conditionDescription:
-            currentInventory.conditionDescription,
-        }
-      : {}),
-
-    ...(currentInventory?.packageWeightAndSize
-      ? {
-          packageWeightAndSize:
-            currentInventory.packageWeightAndSize,
-        }
-      : {}),
-
-    product: {
-      ...inventoryProduct,
-
-      title:
-        String(
-          title ||
-          inventoryProduct.title ||
-          ''
-        ).slice(0, 80),
-
-      description:
-        description ||
-        inventoryProduct.description ||
-        title ||
-        '',
-
-      ...(cleanImages.length
-        ? {
-            imageUrls:
-              cleanImages,
-          }
-        : {}),
-
-      ...(aspects &&
-      typeof aspects === 'object'
-        ? {
-            aspects:
-              buildAspects({
-                ebayAspects:
-                  aspects,
-              }),
-          }
-        : {}),
-    },
+    condition: currentInventory?.condition || 'NEW',
+    ...(currentInventory?.conditionDescription ? { conditionDescription: currentInventory.conditionDescription } : {}),
+    ...(currentInventory?.packageWeightAndSize ? { packageWeightAndSize: currentInventory.packageWeightAndSize } : {}),
+    product,
   };
 
-  await ebayRequest(
-    refreshToken,
-    'PUT',
-    `/sell/inventory/v1/inventory_item/${encodeURIComponent(
-      sku
-    )}`,
-    inventoryUpdate,
-    {
-      deadlineAt,
-      timeoutMessage:
-        'eBay timed out while updating the inventory item.',
-    }
-  );
+  await ebayRequest(refreshToken, 'PUT', `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryUpdate, {
+    deadlineAt,
+    timeoutMessage: 'eBay timed out while updating the inventory item.',
+  });
 
-  await ebayRequest(
-    refreshToken,
-    'PUT',
-    `/sell/inventory/v1/offer/${encodeURIComponent(
-      offerId
-    )}`,
-    offerUpdate,
-    {
-      marketplaceId: currentOffer?.marketplaceId || null,
-      deadlineAt,
-      timeoutMessage:
-        'eBay timed out while updating the live offer.',
-    }
-  );
+  await ebayRequest(refreshToken, 'PUT', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, offerUpdate, {
+    marketplaceId: currentOffer?.marketplaceId || null,
+    deadlineAt,
+    timeoutMessage: 'eBay timed out while updating the live offer.',
+  });
+
+  // Read it back: what eBay holds now is the truth (a catalog-matched item, for example, keeps its own Brand).
+  let live = null;
+  let liveError = null;
+  try {
+    live = await fetchLiveListing(refreshToken, { offerId, sku, deadlineAt });
+  } catch (err) {
+    liveError = err.message;
+  }
 
   return {
     offerId,
     sku,
-    sellPrice:
-      Number(sellPrice),
-    quantity:
-      Number(quantity),
-    categoryId:
-      offerUpdate.categoryId ||
-      null,
+    sellPrice: Number(sellPrice),
+    pushedPrice: pushPrice,
+    quantity: Number(quantity),
+    categoryId: offerUpdate.categoryId || null,
+    sentAspects: mergedAspects,
+    imageCount: cleanImages.length,
+    live,
+    liveError,
   };
 }
 
@@ -1344,6 +1281,7 @@ module.exports = {
   updateOfferPrice,
   updateOfferQuantity,
   reviseActiveListing,
+  fetchLiveListing,
   fetchBusinessPolicies,
   createOrGetCustomLocation,
   fulfillmentPolicyUsesCalculatedShipping,

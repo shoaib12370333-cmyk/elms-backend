@@ -50,6 +50,8 @@
     "test:amazon-currency": "node tests/amazonCurrency.test.js",
     "test:import-currency": "node tests/importCurrency.test.js",
     "test:easyparser-bulk-request": "node tests/easyparserBulkRequest.test.js",
+    "test:live-listing-sync": "node tests/liveListingSync.test.js",
+    "test:live-listing-route": "node tests/liveListingRoute.test.js",
     "test:order-profit-currency": "node tests/orderProfitCurrency.test.js",
     "test:stock-monitor-marketplace": "node tests/stockMonitorMarketplace.test.js",
     "test:research-country": "node tests/researchCountry.test.js",
