@@ -92,6 +92,13 @@ function fakeRes() {
   await handler({ userId: 'u1', params: { id: 'l1' }, body: { sellPrice: 12, draftProduct: { price: 7.5, title: 'T' } } }, res);
   assert.strictEqual(updateListingCalls[0].marginAmount, 4.5);
 
+  // The draft editor: a draft whose product has no price gets the cost typed in the editor, so its margin is stored too.
+  updateListingCalls = [];
+  res = fakeRes();
+  await handler({ userId: 'u1', params: { id: 'l1' }, body: { sellPrice: 15.98, amazonPrice: 9.99, draftProduct: { price: null, title: 'T' } } }, res);
+  assert.strictEqual(updateListingCalls[0].amazonPrice, 9.99);
+  assert.strictEqual(updateListingCalls[0].marginAmount, 5.99);
+
   // An unrelated error thrown deeper (e.g. from updateListing) is now caught and reported
   // cleanly too, instead of the generic 500.
   updateListingImpl = async () => { throw new Error('eBay does not recognise category 9355 on EBAY_GB.'); };
