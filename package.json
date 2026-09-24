@@ -43,6 +43,7 @@
     "test:vero-settings": "node tests/veroSettings.test.js",
     "test:specifics-fallback": "node tests/itemSpecificsFallback.test.js",
     "test:order-images": "node tests/orderImages.test.js",
+    "test:order-profit": "node tests/orderProfit.test.js",
     "test:message-thread": "node tests/messageThread.test.js"
   },
   "engines": {

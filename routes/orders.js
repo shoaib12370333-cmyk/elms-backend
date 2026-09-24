@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote } = require('../models/ordersModel');
+const { listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice } = require('../models/ordersModel');
 const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
@@ -186,6 +186,21 @@ router.get('/:id', requireAuth, async (req, res) => {
   const order = await getOrderById(req.userId, req.params.id);
   if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
   res.json({ success: true, order });
+});
+
+/**
+ * PUT /api/orders/:id/buy-price  { price }
+ * What one unit cost the seller (null / empty clears it). Profit uses it when the order's listing has no Amazon price.
+ * Returns the order as the list shows it (with profit).
+ */
+router.put('/:id/buy-price', requireAuth, async (req, res) => {
+  try {
+    const saved = await setBuyPrice(req.userId, req.params.id, req.body?.price);
+    if (!saved) return res.status(404).json({ success: false, error: 'Order not found.' });
+    res.json({ success: true, order: await getOrderById(req.userId, req.params.id) });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
 });
 
 /**
