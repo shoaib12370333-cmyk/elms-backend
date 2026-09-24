@@ -66,11 +66,12 @@ async function prepareAspects(args) {
 /**
  * The same work as prepareAspects, but a required item specific that cannot be filled is REPORTED (missing) instead of
  * thrown, so the AI filler can save everything else and tell the seller exactly what is left.
+ * fillRequired: false stops after matching the passed-in values (no "Unbranded" / "Does not apply" / product-text fill for the rest).
  * aspectsOnly: keep only the item specifics that were passed in (product.ebayAspects) - the Amazon specifications and
  * brand are still read as facts, but are not turned into item specifics (that is what publishing does).
  * @returns {Promise<{ aspects: Object<string,string[]>|null, notes: string[], missing: string[] }>}
  */
-async function checkAspects({ categoryId, marketplaceId, product, aspectsOnly = false }) {
+async function checkAspects({ categoryId, marketplaceId, product, aspectsOnly = false, fillRequired = true }) {
   const notes = [];
   const merged = buildAspects(aspectsOnly ? { ebayAspects: product.ebayAspects } : product);
   let defs;
@@ -104,6 +105,9 @@ async function checkAspects({ categoryId, marketplaceId, product, aspectsOnly = 
     if (def && def.cardinality !== 'MULTI') vals = vals.slice(0, 1);
     if (vals.length) final[def ? def.name : name] = vals;
   }
+
+  // fillRequired: false = only match what was passed in (a partial edit of a live listing must not fill the other required ones).
+  if (!fillRequired) return { aspects: final, notes, missing: [] };
 
   const missing = [];
   for (const def of defs) {

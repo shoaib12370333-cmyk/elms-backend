@@ -28,8 +28,11 @@ const {
   deleteOffer,
   withdrawListing,
   reviseActiveListing,
+  fetchLiveListing,
   createOrGetCustomLocation,
 } = require('../services/ebayListingService');
+const { aspectsForListing, compareLive } = require('../services/liveListingSync');
+const { sourceCurrency } = require('../config/amazonDomains');
 
 const {
   processOneQueuedListing,
@@ -42,7 +45,7 @@ const {
 } = require('../models/ebayAccountsModel');
 
 const { getImportById } = require('../models/importsModel');
-const { prepareAspects } = require('../services/publishPreflightService');
+const { checkAspects } = require('../services/publishPreflightService');
 
 const { requireAuth } = require('../middleware/requireAuth');
 const { enqueuePublish } = require('../services/publishRunner');
@@ -876,133 +879,200 @@ router.post(
   }
 );
 
+/** The eBay side of a live listing, or a reason it cannot be read: { listing, refreshToken } or { error, status }. */
+async function liveListingContext(userId, id) {
+  const listing = await getListingById(userId, id);
+  if (!listing) return { status: 404, error: 'Listing not found.' };
+  if (!listing.ebay_offer_id) return { status: 400, error: 'This listing does not have an eBay offer ID.' };
+  if (!listing.ebay_account_id) return { status: 400, error: 'No eBay account is associated with this listing.' };
+  const refreshToken = await getEbayAccountRefreshToken(userId, listing.ebay_account_id);
+  if (!refreshToken) return { status: 400, error: 'The connected eBay account is missing a refresh token.' };
+  return { listing, refreshToken };
+}
+
+const POLICY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * GET /api/listings/:id/live
+ *
+ * What eBay really holds for this live listing (title, price, quantity, category, item specifics, description, pictures,
+ * business policies). The editor of a live listing shows this, not ELMS' older copy, and ELMS' copy is brought in step
+ * (never the price: ELMS may keep it in the currency the draft was made in).
+ */
+router.get('/:id/live', requireAuth, async (req, res) => {
+  try {
+    const ctx = await liveListingContext(req.userId, req.params.id);
+    if (ctx.error) return res.status(ctx.status).json({ success: false, error: ctx.error });
+    const { listing, refreshToken } = ctx;
+
+    const live = await fetchLiveListing(refreshToken, { offerId: listing.ebay_offer_id, sku: listing.sku });
+
+    const changes = {};
+    if (live.title && live.title !== listing.title) changes.title = live.title;
+    if (live.quantity !== null && live.quantity !== Number(listing.quantity)) changes.quantity = live.quantity;
+    if (live.categoryId && live.categoryId !== String(listing.category_id || '')) changes.categoryId = live.categoryId;
+    const ebayAspects = aspectsForListing(live.aspects);
+    if (JSON.stringify(ebayAspects) !== JSON.stringify(listing.ebay_aspects || {})) changes.ebayAspects = ebayAspects;
+    let saved = listing;
+    if (Object.keys(changes).length) {
+      try {
+        saved = (await updateListing(req.userId, listing.id, { ...changes, markDraftCustomized: false })) || listing;
+      } catch (saveErr) {
+        console.warn('live listing sync: could not save ELMS copy:', saveErr.message);
+      }
+    }
+    return res.json({ success: true, live, listing: saved });
+  } catch (err) {
+    console.error('listing live error:', err.message);
+    return res.status(Number(err.statusCode) >= 400 ? Number(err.statusCode) : 500).json({ success: false, error: err.message || 'Could not read the live listing from eBay.' });
+  }
+});
+
 /**
  * POST /api/listings/:id/revise
  *
- * Updates a live eBay listing.
+ * Updates a live eBay listing with what the seller changed in the editor, reads the listing back from eBay, and keeps
+ * ELMS' copy the same as eBay's (so nothing goes back to an older value after a refresh). `notApplied` names every change
+ * eBay did not take, with the reason.
+ *
+ * Body (all optional): title, description, images, aspects (only the ones that changed), clearAspects, sellPrice, quantity,
+ * categoryId, marketplaceId, paymentPolicyId / fulfillmentPolicyId / returnPolicyId (blank = the account's default),
+ * countryLocation + postalCode (item location), useDynamicPolicies.
  */
-router.post(
-  '/:id/revise',
-  requireAuth,
-  async (req, res) => {
-    try {
-      const listing =
-        await getListingById(
-          req.userId,
-          req.params.id
-        );
+router.post('/:id/revise', requireAuth, async (req, res) => {
+  try {
+    const ctx = await liveListingContext(req.userId, req.params.id);
+    if (ctx.error) return res.status(ctx.status).json({ success: false, error: ctx.error });
+    const { listing, refreshToken } = ctx;
+    const body = req.body || {};
 
-      if (!listing) {
-        return res.status(404).json({
-          success: false,
-          error: 'Listing not found.',
-        });
+    // `listing` is the serialised (snake_case) record, so its fields are sell_price / category_id / ...
+    const categoryId = body.categoryId || listing.category_id;
+    const marketplaceId = body.marketplaceId || listing.marketplace_id || 'EBAY_US';
+
+    // Item specifics: only the ones that changed are sent; their values are matched to eBay's allowed values like a publish does
+    // (without filling the required ones that were not touched - eBay already holds those).
+    const requestedAspects = body.aspects && typeof body.aspects === 'object' ? body.aspects : (body.ebayAspects && typeof body.ebayAspects === 'object' ? body.ebayAspects : null);
+    let aspects = requestedAspects;
+    let notes = [];
+    const droppedAspects = [];
+    if (requestedAspects && Object.keys(requestedAspects).length && categoryId) {
+      const checked = await checkAspects({ categoryId, marketplaceId, product: { ebayAspects: requestedAspects }, aspectsOnly: true, fillRequired: false });
+      if (checked.aspects) {
+        aspects = checked.aspects;
+        notes = checked.notes || [];
+        const kept = new Set(Object.keys(aspects).map((n) => n.toLowerCase()));
+        for (const name of Object.keys(requestedAspects)) if (!kept.has(String(name).toLowerCase())) droppedAspects.push(name);
       }
-
-      if (!listing.ebay_offer_id) {
-        return res.status(400).json({
-          success: false,
-          error:
-            'This listing does not have an eBay offer ID.',
-        });
-      }
-
-      const accountId = listing.ebay_account_id;
-
-      if (!accountId) {
-        return res.status(400).json({
-          success: false,
-          error:
-            'No eBay account is associated with this listing.',
-        });
-      }
-
-      const refreshToken =
-        await getEbayAccountRefreshToken(
-          req.userId,
-          accountId
-        );
-
-      if (!refreshToken) {
-        return res.status(400).json({
-          success: false,
-          error:
-            'The connected eBay account is missing a refresh token.',
-        });
-      }
-
-      // `listing` is the serialised (snake_case) record, so its fields are sell_price / category_id /
-      // ebay_aspects - reading camelCase names from it gave undefined.
-      const categoryId = req.body?.categoryId || listing.category_id;
-      const marketplaceId = req.body?.marketplaceId || listing.marketplace_id || 'EBAY_US';
-      let aspects = req.body?.aspects ?? req.body?.ebayAspects ?? null;
-      if (aspects && typeof aspects === 'object' && categoryId) {
-        // Same check as a first publish: match eBay's allowed values, fill "does not apply", name what is missing.
-        const prepared = await prepareAspects({ categoryId, marketplaceId, product: { ebayAspects: aspects } });
-        if (prepared.aspects) aspects = prepared.aspects;
-      }
-
-      const result =
-        await reviseActiveListing(
-          refreshToken,
-          {
-            offerId:
-              listing.ebay_offer_id,
-
-            sku:
-              listing.sku,
-
-            title:
-              req.body?.title ??
-              listing.title,
-
-            description:
-              req.body?.description ??
-              listing.description,
-
-            images:
-              req.body?.images ??
-              listing.images,
-
-            aspects: aspects || undefined,
-
-            sellPrice:
-              req.body?.sellPrice ??
-              listing.sell_price,
-
-            quantity:
-              req.body?.quantity ??
-              listing.quantity,
-
-            categoryId,
-          }
-        );
-
-      return res.json({
-        success: true,
-        result,
-      });
-    } catch (err) {
-      console.error(
-        'listing revise error:',
-        err.message
-      );
-
-      return res.status(
-        Number(err.statusCode) >= 400
-          ? Number(err.statusCode)
-          : 500
-      ).json({
-        success: false,
-        error:
-          err.message ||
-          'Could not revise the eBay listing.',
-        ebayErrors:
-          err.ebayErrors || undefined,
-      });
     }
+    const clearAspects = Array.isArray(body.clearAspects) ? body.clearAspects.map((n) => String(n).slice(0, 65)).slice(0, 60) : [];
+
+    // Business policies: a blank one means "the account's default".
+    let policies;
+    if (body.useDynamicPolicies !== true && ['paymentPolicyId', 'fulfillmentPolicyId', 'returnPolicyId'].some((k) => body[k] !== undefined)) {
+      const account = await getEbayAccountById(req.userId, listing.ebay_account_id);
+      const policyOf = (key) => {
+        if (body[key] === undefined) return undefined;
+        const v = String(body[key] || '').trim();
+        if (v && !POLICY_ID.test(v)) return undefined;
+        return v || account?.[key] || undefined;
+      };
+      policies = { paymentPolicyId: policyOf('paymentPolicyId'), fulfillmentPolicyId: policyOf('fulfillmentPolicyId'), returnPolicyId: policyOf('returnPolicyId') };
+    }
+
+    // Item location: a country + postal code saved on the product becomes an eBay inventory location.
+    let merchantLocationKey;
+    const country = String(body.countryLocation || '').trim().toUpperCase().replace(/^UK$/, 'GB');
+    const postalCode = String(body.postalCode || '').trim();
+    if (country && postalCode) merchantLocationKey = await createOrGetCustomLocation(refreshToken, country, postalCode);
+
+    // The price is in the currency of the Amazon site it was read from (or the draft's) - eBay's offer is in the store's.
+    const importRecord = listing.import_id ? await getImportById(req.userId, listing.import_id).catch(() => null) : null;
+    const priceCurrency = sourceCurrency(importRecord?.amazon_url, listing.currency);
+    const sellPrice = body.sellPrice ?? listing.sell_price;
+    const quantity = body.quantity ?? listing.quantity;
+    const descriptionSent = typeof body.description === 'string' && body.description.trim() ? body.description : null;
+    const imagesSent = Array.isArray(body.images) && body.images.length
+      ? Array.from(new Set(body.images.map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u)))).slice(0, 24)
+      : null;
+
+    const result = await reviseActiveListing(refreshToken, {
+      offerId: listing.ebay_offer_id,
+      sku: listing.sku,
+      title: body.title,
+      description: descriptionSent,
+      images: imagesSent || undefined,
+      aspects: aspects || undefined,
+      clearAspects,
+      sellPrice,
+      priceCurrency,
+      quantity,
+      categoryId,
+      policies,
+      merchantLocationKey,
+    });
+
+    // What did eBay keep?
+    const live = result.live;
+    const notApplied = compareLive({
+      ...(body.title !== undefined ? { title: body.title } : {}),
+      price: result.pushedPrice,
+      quantity: result.quantity,
+      categoryId: body.categoryId || undefined,
+      aspects: aspects || undefined,
+      clearAspects,
+      ...(descriptionSent ? { description: descriptionSent } : {}),
+      ...(imagesSent ? { imageCount: imagesSent.length } : {}),
+      policies,
+      merchantLocationKey,
+    }, live);
+    for (const name of droppedAspects) {
+      const k = live && Object.keys(live.aspects).find((n) => n.toLowerCase() === String(name).toLowerCase());
+      notApplied.push({ field: 'aspect:' + name, label: name, sent: [].concat(requestedAspects[name]).join(', '), ebay: k ? [].concat(live.aspects[k]).join(', ') : '', reason: 'That value is not one of eBay\'s allowed values for this category.' });
+    }
+    const refused = new Set(notApplied.map((n) => n.field));
+
+    // ELMS keeps what eBay holds now.
+    const amazonPrice = Number(listing.amazon_price);
+    const priceNumber = Number(sellPrice);
+    const save = {
+      ...(body.title !== undefined ? { title: live?.title || String(body.title).slice(0, 80) } : {}),
+      sellPrice: priceNumber,
+      ...(Number.isFinite(amazonPrice) && amazonPrice > 0 && Number.isFinite(priceNumber) ? { marginAmount: Number((priceNumber - amazonPrice).toFixed(2)) } : {}),
+      quantity: live?.quantity ?? result.quantity,
+      categoryId: live?.categoryId || result.categoryId || categoryId,
+      ebayAspects: live ? aspectsForListing(live.aspects) : (result.sentAspects ? aspectsForListing(result.sentAspects) : undefined),
+      ...(descriptionSent ? { description: descriptionSent } : {}),
+      ...(imagesSent ? { images: imagesSent } : {}),
+      markDraftCustomized: false,
+    };
+    if (policies) for (const key of ['paymentPolicyId', 'fulfillmentPolicyId', 'returnPolicyId']) if (body[key] !== undefined && !refused.has('policy:' + key)) save[key] = body[key];
+    if (merchantLocationKey && !refused.has('location')) { save.countryLocation = country; save.postalCode = postalCode; if (body.locationCity !== undefined) save.locationCity = body.locationCity; }
+
+    let saved = null;
+    try {
+      saved = await updateListing(req.userId, listing.id, save);
+    } catch (saveErr) {
+      console.warn('revise: eBay was updated but ELMS could not save its copy:', saveErr.message);
+    }
+
+    return res.json({
+      success: true,
+      listing: saved,
+      result: { offerId: result.offerId, sku: result.sku, sellPrice: result.sellPrice, quantity: result.quantity, categoryId: result.categoryId },
+      verified: !!live,
+      notApplied,
+      notes,
+    });
+  } catch (err) {
+    console.error('listing revise error:', err.message);
+    return res.status(Number(err.statusCode) >= 400 ? Number(err.statusCode) : 500).json({
+      success: false,
+      error: err.message || 'Could not revise the eBay listing.',
+      ebayErrors: err.ebayErrors || undefined,
+    });
   }
-);
+});
 
 /**
  * PATCH /api/listings/:id/settings
