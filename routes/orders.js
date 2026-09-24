@@ -5,6 +5,7 @@ const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebay
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
 const { syncAccountOrders } = require('../services/orderSyncService');
+const { backfillOrderImagesForUser, fillMissingOrderImages } = require('../services/orderImageService');
 const { convertTracking } = require('../services/trackingConversionService');
 const { requireAuth } = require('../middleware/requireAuth');
 
@@ -18,6 +19,7 @@ const { requireAuth } = require('../middleware/requireAuth');
 router.get('/', requireAuth, async (req, res) => {
   const orders = await listOrders(req.userId, req.query.accountId);
   res.json({ success: true, orders });
+  backfillOrderImagesForUser(req.userId); // orders without a picture get theirs from eBay in the background; the next load shows them
 });
 
 
@@ -209,7 +211,9 @@ router.post('/:id/refresh', requireAuth, async (req, res) => {
     const refreshToken = await getEbayAccountRefreshToken(req.userId, order.ebay_account_id);
     if (!refreshToken) return res.status(400).json({ success: false, error: 'The eBay account for this order is no longer connected.' });
     const raw = await fetchOrderById(refreshToken, order.ebay_order_id);
-    for (const lineItem of normalizeOrderLineItems(raw)) await upsertOrder(req.userId, lineItem, order.ebay_account_id);
+    const lineItems = normalizeOrderLineItems(raw);
+    for (const lineItem of lineItems) await upsertOrder(req.userId, lineItem, order.ebay_account_id);
+    await fillMissingOrderImages(req.userId, order.ebay_account_id, refreshToken, { legacyItemIds: lineItems.map((l) => l.legacyItemId).filter(Boolean), force: true }).catch(() => {});
     res.json({ success: true, order: await getOrderById(req.userId, req.params.id) });
   } catch (err) {
     res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not refresh this order from eBay.' });
