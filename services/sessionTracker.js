@@ -18,6 +18,33 @@ function placeText(e) {
   return [e.city, e.region, e.country].filter(Boolean).join(', ') || 'Unknown location';
 }
 
+// A browser that has an id of its own is one device. Without one we only know the browser type, so the address must match too.
+function deviceKey(s) {
+  if (!s.deviceId) return 's:' + s.sid;
+  return s.deviceId.startsWith('ua-') ? s.deviceId + '|' + (s.ip || '') : s.deviceId;
+}
+
+/** One row per device: signing in again from the same browser is the same device, not a new one. Prefers the current session, then the newest. */
+function oneSessionPerDevice(sessions, currentSid) {
+  const byDevice = new Map();
+  for (const s of sessions) {
+    const key = deviceKey(s);
+    const kept = byDevice.get(key);
+    if (!kept || (s.sid === currentSid && kept.sid !== currentSid) || (kept.sid !== currentSid && new Date(s.lastSeenAt) > new Date(kept.lastSeenAt))) byDevice.set(key, s);
+  }
+  return [...byDevice.values()];
+}
+
+/** A new sign-in from a browser replaces that browser's earlier sessions (it holds only one token anyway). */
+async function retireSameDevice(userId, deviceId, ip) {
+  const filter = { userId, deviceId, revokedAt: null };
+  if (deviceId.startsWith('ua-')) filter.ip = ip;
+  const rows = await Session.find(filter, { sid: 1 }).lean();
+  if (!rows.length) return;
+  await Session.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { revokedAt: new Date(), revokedReason: 'replaced_by_new_sign_in' } });
+  rows.forEach((r) => forgetCache(r.sid, String(userId)));
+}
+
 /**
  * Records a successful sign-in and starts a session. Returns the sid to put in the token.
  * A device the account has never signed in from (once it has signed in before) raises a new-device alert.
@@ -36,6 +63,7 @@ async function startSession(req, userId, method = 'password') {
     LoginEvent.exists({ userId, success: true, deviceId }),
   ]);
   const isNewDevice = !!hadAny && !knownDevice;
+  await retireSameDevice(userId, deviceId, ip);
   await Promise.all([
     Session.create({ userId, sid, deviceId, ...info, ip, method, expiresAt: new Date(Date.now() + SESSION_TTL_MS) }),
     LoginEvent.create({ userId, success: true, method, deviceId, ...info, ip, isNewDevice, sid }),
@@ -125,4 +153,4 @@ function forgetCache(sidOrNull, userId) {
   if (!sidOrNull) cache.clear();
 }
 
-module.exports = { startSession, recordFailedLogin, assertSessionActive, requestContext, forgetCache, placeText };
+module.exports = { startSession, recordFailedLogin, assertSessionActive, requestContext, forgetCache, placeText, oneSessionPerDevice };

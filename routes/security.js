@@ -4,7 +4,7 @@ const { requireAuth } = require('../middleware/requireAuth');
 const Session = require('../models/schemas/Session');
 const LoginEvent = require('../models/schemas/LoginEvent');
 const User = require('../models/schemas/User');
-const { forgetCache, placeText } = require('../services/sessionTracker');
+const { forgetCache, placeText, oneSessionPerDevice } = require('../services/sessionTracker');
 
 router.use(requireAuth);
 
@@ -25,7 +25,7 @@ router.get('/overview', async (req, res) => {
   res.json({
     success: true,
     notifyNewDevice: user?.notifyNewDevice !== false,
-    sessions: sessions.map((s) => serializeSession(s, req.sid)),
+    sessions: oneSessionPerDevice(sessions, req.sid).map((s) => serializeSession(s, req.sid)),
     activity: events.map((e) => ({
       id: String(e._id), success: e.success, method: e.method, device: (e.browser || 'Unknown browser') + ' on ' + (e.os || 'Unknown system'),
       device_type: e.deviceType, ip: e.ip, location: placeText(e), is_new_device: !!e.isNewDevice, created_at: e.createdAt, current: !!req.sid && e.sid === req.sid,
