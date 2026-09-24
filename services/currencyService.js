@@ -26,4 +26,22 @@ async function convertAmount(amount, from, to) {
   return { amount: Number((Number(amount) * rate).toFixed(2)), rate: Number(rate.toFixed(6)), converted: true };
 }
 
-module.exports = { convertAmount };
+/** Loads the exchange rates now (never throws), so that convertCached can be used in code that cannot wait. */
+async function warmRates() {
+  try { await getRates(); return true; } catch (_) { return false; }
+}
+
+/**
+ * Converts with the exchange rates that are already loaded (of any age); null when they are not loaded or a currency is
+ * unknown. Same currency: the amount as it is.
+ */
+function convertCached(amount, from, to) {
+  const a = String(from || '').toUpperCase();
+  const b = String(to || '').toUpperCase();
+  if (!a || !b || a === b) return Number(amount);
+  const rates = cache && cache.rates;
+  if (!rates || !rates[a] || !rates[b]) return null;
+  return Number((Number(amount) * (rates[b] / rates[a])).toFixed(2));
+}
+
+module.exports = { convertAmount, warmRates, convertCached };

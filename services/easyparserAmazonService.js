@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { retryWithBackoff } = require('./retryService');
 const { extractAsinFromUrl, detectCountryFromUrl } = require('./canopyAmazonService');
+const { currencyForAmazonUrl } = require('../config/amazonDomains');
 
 const BULK_URL = 'https://bulk.easyparser.com/v1/bulk';
 const DATA_URL = 'https://data.easyparser.com/v1/queries';
@@ -230,7 +231,7 @@ function normalizeDetail(raw, sourceUrl) {
     bulletPoints,
     images: allImages,
     price,
-    currency: currency || 'USD',
+    currency: currency || currencyForAmazonUrl(sourceUrl || raw.link) || 'USD',
     availability: inStock === false ? 'Out of Stock' : inStock === true ? 'In Stock' : availText || null,
     rating: raw.rating != null ? Number(raw.rating) : null,
     ratingsTotal: raw.ratings_total || null,
