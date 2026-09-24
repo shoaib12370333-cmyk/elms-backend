@@ -761,6 +761,17 @@
   const DELIVERY_SELECTOR = '#mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE, #mir-layout-DELIVERY_BLOCK-slot-DELIVERY_MESSAGE, #deliveryBlockMessage, #delivery-message, #ddmDeliveryMessage, [data-csa-c-content-id="DEXUnifiedCXPDM"]';
   const asCount = (v) => { const n = parseInt(String(v == null ? '' : v).replace(/[^0-9]/g, ''), 10); return Number.isFinite(n) ? n : 0; };
   const variantCounts = new Map();
+  const gtinCache = new Map();
+
+  // The product's barcode (EAN / UPC / ISBN) when the page shows one: it finds the very same product on eBay.
+  function readGtin(json) {
+    let value = json.gtin13 || json.gtin12 || json.gtin14 || json.gtin8 || json.gtin || null;
+    if (!value) {
+      try { const info = collectProductInformation([]); value = info.ean || info.upc || info.isbn || null; } catch (_) { value = null; }
+    }
+    const m = String(value == null ? '' : value).match(/[0-9]{8,14}/);
+    return m ? m[0] : null;
+  }
 
   // A product page (not a search or list page, where [data-asin] belongs to the first result).
   const isProductPage = () => /\/(?:dp|gp\/product|product)\/[A-Z0-9]{10}/i.test(location.pathname) || !!document.querySelector('#productTitle');
@@ -795,8 +806,11 @@
       try { variantCount = collectVariantsQuick().length; } catch (_) { variantCount = 0; }
       variantCounts.set(asin, variantCount);
     }
+    let gtin = gtinCache.get(asin);
+    if (gtin === undefined) { gtin = readGtin(json); gtinCache.set(asin, gtin); }
     return {
       asin,
+      gtin,
       title: extractProductTitle(json),
       brand: clean(json.brand?.name || text(document.querySelector('#bylineInfo, #brand'), 300), 300),
       bullets: unique([...document.querySelectorAll('#feature-bullets li, #feature-bullets .a-list-item')].map((el) => cleanHighlight(el.textContent)).filter(Boolean)).slice(0, 20),
@@ -945,6 +959,9 @@
     .go2{width:100%;height:36px;margin-top:8px;border:1.5px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;font:700 12.5px/1 Inter,-apple-system,"Segoe UI",Arial,sans-serif;cursor:pointer}
     .foot{font-size:11px;color:#94a3b8;margin-top:9px;text-align:center}
     .note{background:#f1f5f9;border-radius:9px;padding:8px 10px;font-size:12px;color:#334155}
+    .mk-link{display:block;font-size:12px;color:#0064d2;text-decoration:none;padding:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    a.mk-link:hover{text-decoration:underline}
+    div.mk-link{color:#475569}
     .bulk-stats{font-size:13px;color:#334155;margin:0 0 8px}
     .bulk-row{display:flex;gap:8px}
     .bulk-row .use{flex:1}
@@ -978,12 +995,14 @@
     const useBtn = h('button', { class: 'use', type: 'button' });
     const markupHint = h('div', { class: 'hint' });
     const markupSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'Your markup %' }), h('div', { class: 'mk' }, markupInput, useBtn), markupHint);
+    const marketBody = h('div');
+    const marketSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'Market on eBay' }), marketBody);
     const checksList = h('ul', { class: 'checks' });
     const checksSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'Checks' }), checksList);
     const goBtn = h('button', { class: 'go', type: 'button' });
     const openBtn = h('button', { class: 'go2', type: 'button', text: 'Open in ELMS' });
     const foot = h('div', { class: 'foot' });
-    const panel = h('div', { class: 'panel' }, h('div', { class: 'ph' }, h('span', { text: 'ELMS · Profit check' }), closeBtn), h('div', { class: 'pb' }, storeSec, moneyBox, markupSec, checksSec, h('div', { class: 'sec' }, goBtn, openBtn, foot)));
+    const panel = h('div', { class: 'panel' }, h('div', { class: 'ph' }, h('span', { text: 'ELMS · Profit check' }), closeBtn), h('div', { class: 'pb' }, storeSec, moneyBox, markupSec, marketSec, checksSec, h('div', { class: 'sec' }, goBtn, openBtn, foot)));
     // ----- bulk mode parts (search / bestseller pages) -----
     const bulkClose = h('button', { type: 'button', 'aria-label': 'Close', text: '×' });
     const bulkStoreSelect = h('select');
@@ -1095,7 +1114,7 @@
       out.cannotImport = !!here && here.status !== 'draft';
       // Already live on eBay: what it earns at the price it is listed at, not at the markup of a new import.
       if (here && LOGIC.LIVE.has(here.status) && here.sellPrice && (!here.currency || here.currency === p.currency)) out.live = here;
-      out.checks = LOGIC.buildChecks({ page: p, server: S.server, storeId: S.storeId, settings: S.fees, markup: S.markup, now: new Date() });
+      out.checks = LOGIC.buildChecks({ page: p, server: S.server, storeId: S.storeId, settings: S.fees, markup: S.markup, now: new Date(), market: currentMarket() });
       out.level = LOGIC.worstLevel(out.checks);
       if (p.price != null) {
         out.sell = out.live ? out.live.sellPrice : LOGIC.priceAtMarkup(p.price, S.markup);
@@ -1184,8 +1203,10 @@
       panel.className = 'panel' + (S.open ? ' open' : '');
       renderStores();
       renderMoney(c);
+      renderMarket();
       renderChecks(c);
       renderActions();
+      if (S.open) loadMarket();
     }
 
     // A page with a list of products: the chip and the bulk panel.
@@ -1394,6 +1415,60 @@
         render();
         loadListInfo().then(() => loadKnown(asins));
       }
+    }
+
+    // ----- the market on eBay (asked for when the panel is opened) -----
+    const marketCache = new Map(); // "asin|store" -> { state: 'loading' | 'ok' | 'error', data?, error?, at }
+    const EBAY_LINK = /^https:\/\/([a-z0-9-]+\.)*ebay\.[a-z.]+\//i;
+
+    function marketKey() {
+      const { store } = locate();
+      return (S.page ? S.page.asin : '') + '|' + (store ? store.id : '');
+    }
+
+    function currentMarket() {
+      const entry = S.page ? marketCache.get(marketKey()) : null;
+      return entry && entry.state === 'ok' ? entry.data : null;
+    }
+
+    async function loadMarket() {
+      if (!S.connected || !S.page || !S.server || S.mode !== 'product') return;
+      const key = marketKey();
+      const hit = marketCache.get(key);
+      if (hit && (hit.state !== 'error' || Date.now() - hit.at < 60000)) return;
+      marketCache.set(key, { state: 'loading', at: Date.now() });
+      render();
+      const { store } = locate();
+      const r = await send({ type: 'ELMS_API', method: 'POST', path: '/api/extension/market', body: { storeId: store ? store.id : undefined, title: S.page.title, gtin: S.page.gtin || undefined }, timeoutMs: 40000 });
+      marketCache.set(key, r.success ? { state: 'ok', data: r.result.market, at: Date.now() } : { state: 'error', error: r.error || 'ELMS could not be reached.', at: Date.now() });
+      render();
+    }
+
+    function renderMarket() {
+      const visible = !!(S.page && S.connected && S.server);
+      marketSec.style.display = visible ? 'block' : 'none';
+      if (!visible) return;
+      const entry = marketCache.get(marketKey());
+      const line = (label, value) => h('div', { class: 'row' }, h('span', { text: label }), h('span', { text: value }));
+      const kids = [];
+      if (!entry || entry.state === 'loading') kids.push(h('div', { class: 'hint', text: 'Looking at eBay…' }));
+      else if (entry.state === 'error') kids.push(h('div', { class: 'hint', text: 'Could not look at eBay: ' + entry.error }));
+      else if (!entry.data.available) kids.push(h('div', { class: 'hint', text: entry.data.message || 'eBay prices are not available right now.' }));
+      else if (!entry.data.count) kids.push(h('div', { class: 'hint', text: 'No similar listing found on eBay.' }));
+      else {
+        const m = entry.data;
+        const fm = (n) => LOGIC.formatMoney(n, m.currency);
+        kids.push(line('Similar listings', m.total + (m.sellers ? ' · ' + m.sellers + (m.sellers === 1 ? ' seller' : ' sellers') : '')));
+        kids.push(line('Lowest', fm(m.min)));
+        kids.push(line('Typical', fm(m.median)));
+        kids.push(line('Highest', fm(m.max)));
+        (m.cheapest || []).forEach((c) => {
+          const label = fm(c.price + (c.shipping || 0)) + ' · ' + (c.seller || 'seller') + ' · ' + c.title;
+          kids.push(c.url && EBAY_LINK.test(c.url) ? h('a', { class: 'mk-link', href: c.url, target: '_blank', rel: 'noopener noreferrer', text: label }) : h('div', { class: 'mk-link', text: label }));
+        });
+        kids.push(h('div', { class: 'hint', text: m.exact ? 'Matched by barcode: the same product. Prices include delivery when the seller charges it.' : 'Matched by title words: similar products can be included, so open the listings to check.' }));
+      }
+      marketBody.replaceChildren(...kids);
     }
 
     // ----- the import -----

@@ -55,4 +55,37 @@ router.post('/known', requireAuth, limiter, async (req, res) => {
   }
 });
 
+// eBay's search is asked for on request only (the panel opens), never more than a few times an hour per person.
+const marketLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 40,
+  keyGenerator: (req) => 'user:' + req.userId,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'You have looked at many eBay prices this hour. Please try again a little later.' },
+});
+
+/**
+ * POST /api/extension/market
+ * Body: { storeId?, title, gtin? }
+ * Free. What the product sells for on eBay in the marketplace of the chosen store (lowest, typical, highest, number of listings,
+ * the cheapest few). { market: { available: false, reason, message } } when eBay cannot be asked right now.
+ */
+router.post('/market', requireAuth, marketLimiter, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const store = await extension.storeForImport(req.userId, body.storeId || undefined);
+    const market = await require('../services/ebayMarketService').marketFor({
+      marketplaceId: (store && store.marketplaceId) || 'EBAY_US',
+      title: text(body.title, 300),
+      gtin: text(body.gtin, 40),
+    });
+    res.json({ success: true, market });
+  } catch (err) {
+    if (err.statusCode && err.statusCode < 500) return res.status(err.statusCode).json({ success: false, error: err.message });
+    console.error('extension market error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not look at eBay right now.' });
+  }
+});
+
 module.exports = router;

@@ -24,6 +24,14 @@ A chip on every Amazon product page ("Profit £2.42 · 4 warnings"); click it fo
 - The panel's checks with ELMS are free and use no credit. If ELMS cannot be reached (a sleeping server) the profit and page checks still work.
 - The floating button now imports at the markup shown in the panel (it used to ignore the popup's markup and import at 0%).
 
+## Market on eBay (v3.6)
+Open the panel and it shows what the product sells for on eBay in the marketplace of the chosen store: the number of similar listings and sellers, the lowest / typical / highest price (delivery included when the seller charges it) and the three cheapest listings (links to eBay).
+- Asked only when the panel is opened, never on page load. It is free (no credit), kept for 20 minutes per product and marketplace, and limited (40 looks per person per hour, a daily budget for all of ELMS).
+- Matched by the product's **barcode** (EAN / UPC / ISBN on the Amazon page) when there is one - the same product - else by the first words of the title (similar products can be included; the panel says which).
+- Prices far from the middle (accessories, multi-packs) are left out when there are enough listings; only Buy It Now listings in the store's currency are compared.
+- The checks use it: *your price is N% above the typical eBay price*, *the typical price is below your break-even* (flat "The..." only for a barcode match, "Probably..." for a title match), *crowded*, *no similar listing*.
+- Server: `POST /api/extension/market` (eBay Browse API with ELMS's application token; nothing is listed or changed). If eBay cannot be asked the panel says so and everything else works.
+
 ## Bulk import (v3.5)
 On a search-results or bestseller page every product gets a small **+ ELMS** badge. Tick the ones you want, open the **Bulk import** chip and press *Import N products*.
 - A product ELMS already has in the chosen store shows **In Drafts** or **In ELMS** and cannot be ticked (up to 100 products at a time).
