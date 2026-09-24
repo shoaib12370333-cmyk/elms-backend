@@ -1,4 +1,5 @@
 const Conversation = require('./schemas/Conversation');
+const { accountLabel, publicUsername } = require('../services/accountLabel');
 
 /**
  * Creates or updates one conversation from an eBay sync, matched by the
@@ -53,10 +54,11 @@ async function listConversations(userId, accountId, options = {}) {
     const rx = new RegExp(String(options.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     query.$or = [{ subject: rx }, { otherPartyUsername: rx }, { lastMessageSnippet: rx }];
   }
-  const docs = await Conversation.find(query).populate('ebayAccountId', 'ebayUserId displayName').sort({ lastMessageDate: -1 }).lean();
+  const docs = await Conversation.find(query).populate('ebayAccountId', 'ebayUserId displayName storeName storeNumber').sort({ lastMessageDate: -1 }).lean();
   return docs.map((doc) => {
     const serialized = serialize(doc);
-    serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
+    serialized.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
+    serialized.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
     serialized.ebay_account_display_name = doc.ebayAccountId?.displayName || null;
     return serialized;
   });

@@ -45,7 +45,7 @@ async function context(userId, conversation, account) {
     const l = await Listing.findOne({ userId, ebayListingId: String(itemId) }, { title: 1 }).lean();
     listingTitle = l?.title || null;
   }
-  return { listingTitle, storeName: account?.displayName || account?.ebayUserId || null };
+  return { listingTitle, storeName: account?.displayName || account?.storeName || require('./accountLabel').publicUsername(account?.ebayUserId) || null };
 }
 
 /**

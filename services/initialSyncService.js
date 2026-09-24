@@ -16,7 +16,7 @@ async function runInitialSync(userId, account) {
   );
   if (!fresh) return { skipped: true };
 
-  const label = account.displayName || account.ebayUserId;
+  const label = require('./accountLabel').accountLabel(account);
   const summary = { orders: 0, conversations: 0, errors: [] };
   try {
     const o = await syncAccountOrders(userId, account.id, { full: true });

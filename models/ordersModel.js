@@ -3,6 +3,7 @@ const Listing = require('./schemas/Listing');
 const Import = require('./schemas/Import');
 const { warmRates, convertCached } = require('../services/currencyService');
 const { sourceCurrency } = require('../config/amazonDomains');
+const { accountLabel, publicUsername } = require('../services/accountLabel');
 
 /**
  * Creates or updates one order line item from an eBay sync, matched by
@@ -182,7 +183,8 @@ function enrichOrder(serialized, doc) {
   // when the order has no linked ELMS listing - the common case for orders
   // synced straight from eBay that were never imported/published via ELMS.
   serialized.main_image = listing?.mainImage || doc.itemImage || null;
-  serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
+  serialized.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
+  serialized.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
   serialized.buy_price = savedAmazonPrice;
 
   // The sale is in the eBay site's currency and the cost in the Amazon site's. They are usually the same (a UK store sells

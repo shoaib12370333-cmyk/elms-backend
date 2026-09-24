@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { buildAuthorizationUrl, exchangeCodeForToken } = require('../services/ebayUserAuthService');
 const { fetchBusinessPolicies } = require('../services/ebayListingService');
-const { fetchEbayUsername } = require('../services/ebayIdentityService');
+const { fetchSellerIdentity } = require('../services/ebayIdentityService');
 const { syncConversationsForUser } = require('../jobs/conversationSync');
 const { runInitialSync } = require('../services/initialSyncService');
 const { addEbayAccount, updateEbayAccountSettings, removeEbayAccount, getEbayAccountById, getAccountLimitStatus } = require('../models/ebayAccountsModel');
@@ -103,9 +103,16 @@ router.get('/callback', async (req, res) => {
     const { refreshToken, expiresIn } = await exchangeCodeForToken(code);
     const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
 
-    const ebayUserId = (await fetchEbayUsername(refreshToken)) || `eBay Account ${Date.now()}`;
+    // Who is behind this account: the eBay username and the eBay Store name (remembered, so ELMS shows a real name). When eBay gives no
+    // username the account is saved under a stand-in name that is never shown (it is called "Store 1", "Store 2" ... instead).
+    const identity = await fetchSellerIdentity(refreshToken, marketplaceId).catch(() => null);
+    const ebayUserId = identity?.username || `eBay Account ${Date.now()}`;
 
-    const account = await addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, marketplaceId });
+    const account = await addEbayAccount(userId, {
+      ebayUserId, refreshToken, expiresAt, marketplaceId,
+      storeName: identity && identity.storeName !== null ? identity.storeName : null,
+      identityCheckedAt: new Date(),
+    });
 
     // Auto-fetch this account's eBay Business Policies and Inventory
     // Location right away, so the Settings page's dropdowns are already

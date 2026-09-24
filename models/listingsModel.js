@@ -1,5 +1,6 @@
 const Listing = require('./schemas/Listing');
 const { normalizeAsinSku, requireAsinSku } = require('../services/skuService');
+const { accountLabel, publicUsername } = require('../services/accountLabel');
 
 // Amazon product prices are positive monetary values. Treat null/undefined/empty
 // values (and the legacy 0 created by Number(null)) as missing so the UI can
@@ -165,7 +166,8 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null) {
     const serialized = serialize(doc);
     serialized.amazon_url = doc.importId?.amazonUrl || null;
     serialized.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);
-    serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
+    serialized.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
+    serialized.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
     serialized.asin = doc.importId?.asin || null;
     serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
     serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
@@ -279,7 +281,8 @@ async function listListings(userId, status, accountId = null) {
     const serialized = serialize(doc);
     serialized.amazon_url = doc.importId?.amazonUrl || null;
     serialized.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);
-    serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
+    serialized.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
+    serialized.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
     serialized.asin = doc.importId?.asin || null;
     serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
     serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
