@@ -49,6 +49,8 @@
     "test:order-profit-currency": "node tests/orderProfitCurrency.test.js",
     "test:stock-monitor-marketplace": "node tests/stockMonitorMarketplace.test.js",
     "test:research-country": "node tests/researchCountry.test.js",
+    "test:browser-import": "node tests/browserImport.test.js",
+    "test:extension-variants": "node tests/extensionVariants.test.js",
     "test:public-plans": "node tests/publicPlans.test.js",
     "test:order-images": "node tests/orderImages.test.js",
     "test:order-profit": "node tests/orderProfit.test.js",
