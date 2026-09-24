@@ -17,7 +17,7 @@ let credits = true;
 
 const fakes = {
   '../models/importsModel': { createImport: async () => ({ id: 'imp1' }), updateImportImages: async () => {} },
-  '../models/listingsModel': { upsertDraft: async (userId, draft) => { drafts.push(draft); return { id: 'd' + drafts.length }; } },
+  '../models/listingsModel': { findListingInStore: async () => null, upsertDraft: async (userId, draft) => { drafts.push(draft); return { id: 'd' + drafts.length }; } },
   '../models/usersModel': { hasCredits: async () => credits },
   '../services/creditService': { withCredits: async (userId, cost, fn) => { charges.push(cost); return fn(); } },
   '../middleware/requireAuth': { requireAuth: (req, res, next) => next() },

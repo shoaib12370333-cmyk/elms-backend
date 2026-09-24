@@ -69,7 +69,8 @@
     "test:voucher": "node tests/voucher.test.js",
     "test:extension-logic": "node tests/extensionLogic.test.js",
     "test:extension-panel": "node tests/extensionPanel.test.js",
-    "test:extension-background": "node tests/extensionBackground.test.js"
+    "test:extension-background": "node tests/extensionBackground.test.js",
+    "test:extension-bulk": "node tests/extensionBulk.test.js"
   },
   "engines": {
     "node": "22.13.0"

@@ -160,6 +160,14 @@ async function listListingsBySku(userId, sku) {
   return docs.map(serialize);
 }
 
+/** The listings of the user for several ASINs at once (a light row each): { id, sku, status, ebay_account_id }. */
+async function listListingsBySkus(userId, skus) {
+  const list = [...new Set((Array.isArray(skus) ? skus : []).map(normalizeAsinSku).filter(Boolean))].slice(0, 200);
+  if (!list.length) return [];
+  const docs = await Listing.find({ userId, sku: { $in: list } }).select('sku status ebayAccountId').limit(1000).lean();
+  return docs.map((d) => ({ id: String(d._id), sku: d.sku, status: d.status, ebay_account_id: d.ebayAccountId ? String(d.ebayAccountId) : null }));
+}
+
 /**
  * The listing this ASIN already has in ONE store - the row an import would land on (see upsertDraft: a legacy listing with
  * no store counts for the first store that asks). null when there is none.
@@ -719,6 +727,7 @@ module.exports = {
   getListingStatuses,
   getListingBySku,
   listListingsBySku,
+  listListingsBySkus,
   findListingInStore,
   listListings,
   listListingsByStatuses,

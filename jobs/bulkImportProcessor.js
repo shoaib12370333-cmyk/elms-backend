@@ -121,7 +121,13 @@ async function trySave(job, item, saveProductAsDraft) {
     return;
   }
   try {
-    const saved = await saveProductAsDraft(job.userId, item.product, job.markupPercent, item.amazonUrl, FAKE_REQ);
+    // Into the store the job was made for (not whichever store happens to be active when the item is saved).
+    let store;
+    if (job.ebayAccountId) {
+      store = await require('../models/ebayAccountsModel').getEbayAccountById(job.userId, String(job.ebayAccountId));
+      if (!store) throw new Error('The eBay store of this import is no longer connected.');
+    }
+    const saved = await saveProductAsDraft(job.userId, item.product, job.markupPercent, item.amazonUrl, FAKE_REQ, store);
     item.status = 'done';
     item.draftId = saved.draft?.id || null;
     item.outOfCredits = false;

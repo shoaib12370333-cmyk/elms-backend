@@ -115,6 +115,24 @@ const EXCHANGE = { status: 200, body: { success: true, sessionToken: 'fresh-toke
   r = await env.message({ type: 'ELMS_OPEN_URL', url: 'https://app.example.test/draft' });
   assert.strictEqual(r.success, true, 'the address ELMS itself gave is fine too');
 
+  // ---- the page may use only a few ELMS calls (bulk import) ----
+  env = boot({ respond: (c) => (c.url.endsWith('/extension-settings') ? SETTINGS : { status: 200, body: { success: true, known: [], jobId: 'J1' } }) });
+  const jobId = 'a'.repeat(24);
+  for (const [method, p] of [['POST', '/api/extension/known'], ['GET', '/api/fetch-product/limits'], ['POST', '/api/fetch-product/bulk'], ['POST', '/api/fetch-product/bulk-job'], ['GET', '/api/fetch-product/bulk-job/' + jobId]]) {
+    r = await env.message({ type: 'ELMS_API', method, path: p, body: p.endsWith('known') ? { asins: ['B0TEST0001'] } : undefined });
+    assert.strictEqual(r.success, true, method + ' ' + p);
+  }
+  const sentKnown = env.fetches.find((c) => c.url.endsWith('/api/extension/known'));
+  assert.deepStrictEqual(sentKnown.body, { asins: ['B0TEST0001'] });
+  assert.strictEqual(sentKnown.auth, 'Bearer old-token');
+  const before = env.fetches.length;
+  for (const [method, p] of [['GET', '/api/auth/me'], ['POST', '/api/admin/users'], ['DELETE', '/api/fetch-product/bulk-job/' + jobId], ['GET', '/api/fetch-product/bulk-job/../../auth/me'], ['GET', '/api/fetch-product/bulk-job/xyz'], ['POST', '/api/browser-import'], ['GET', 'https://evil.example/api/extension/known']]) {
+    r = await env.message({ type: 'ELMS_API', method, path: p });
+    assert.strictEqual(r.success, false, method + ' ' + p);
+    assert.strictEqual(r.error, 'That call is not allowed.');
+  }
+  assert.strictEqual(env.fetches.length, before, 'a call that is not allowed never reaches ELMS');
+
   // ---- other messages are not ours; the keyboard shortcut reaches the page ----
   assert.strictEqual(env.listeners.message({ type: 'SOMETHING_ELSE' }, {}, () => {}), false);
   await env.listeners.command('import-product');

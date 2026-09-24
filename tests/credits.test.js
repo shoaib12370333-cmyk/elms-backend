@@ -28,7 +28,7 @@ const fetched = [];
 canopy.fetchProductByUrl = async (url) => { fetched.push(url); const asin = canopy.extractAsinFromUrl(url); return { asin, title: 'Lamp ' + asin, price: 5, currency: 'USD', images: [], bulletPoints: [], specifications: [] }; };
 stub('models/importsModel', { createImport: async () => ({ id: 'imp' }), updateImportImages: async () => null });
 let failSave = false;
-stub('models/listingsModel', { upsertDraft: async () => { if (failSave) throw new Error('save failed'); return { id: 'draft' }; } });
+stub('models/listingsModel', { findListingInStore: async () => null, upsertDraft: async () => { if (failSave) throw new Error('save failed'); return { id: 'draft' }; } });
 stub('models/ebayAccountsModel', { getActiveEbayAccount: async () => null });
 stub('services/imageStorageService', { materializeImageUrls: async () => [] });
 stub('services/productCacheService', { getCachedProduct: async () => null, setCachedProduct: async () => null });

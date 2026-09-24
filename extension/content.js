@@ -851,6 +851,52 @@
     return el;
   }
 
+  // ---------- bulk import: product lists (search results, bestsellers ...) ----------
+  const CARD_SELECTOR = '[data-component-type="s-search-result"][data-asin], #gridItemRoot, .zg-grid-general-faceout, li.zg-item-immersion, [data-asin]:not([data-asin=""])';
+  const PRODUCT_LINK = 'a[href*="/dp/"], a[href*="/gp/product/"]';
+  const MAX_PICK = 100;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function cardAsin(el) {
+    const direct = String(el.getAttribute('data-asin') || '').toUpperCase();
+    if (ASIN_RE.test(direct)) return direct;
+    try {
+      const holder = el.getAttribute('data-p13n-asin-metadata') ? el : el.querySelector('[data-p13n-asin-metadata]');
+      const meta = holder ? JSON.parse(holder.getAttribute('data-p13n-asin-metadata')) : null;
+      const asin = meta ? String(meta.asin || '').toUpperCase() : '';
+      if (ASIN_RE.test(asin)) return asin;
+    } catch (_) { /* the link tells */ }
+    const link = el.querySelector(PRODUCT_LINK);
+    return link ? asinFromUrl(link.getAttribute('href')) : null;
+  }
+
+  // The product cards of a list page: the outermost element of each product that shows a picture and links to it.
+  function findCards() {
+    const candidates = [...document.querySelectorAll(CARD_SELECTOR)].filter((el) => el.offsetParent !== null && el.querySelector('img') && el.querySelector(PRODUCT_LINK));
+    const set = new Set(candidates);
+    const seen = new Set();
+    const cards = [];
+    for (const el of candidates) {
+      let nested = false;
+      for (let p = el.parentElement; p; p = p.parentElement) { if (set.has(p)) { nested = true; break; } }
+      if (nested) continue;
+      const asin = cardAsin(el);
+      if (asin && !seen.has(asin)) { seen.add(asin); cards.push({ el, asin }); }
+    }
+    return cards;
+  }
+
+  // The little "+ ELMS" badge on a product card lives in the page itself, so its style does too.
+  function ensurePickStyle() {
+    if (document.getElementById('__elms-pick-style')) return;
+    const st = document.createElement('style');
+    st.id = '__elms-pick-style';
+    st.textContent = '.elms-pick{position:absolute;top:6px;left:6px;z-index:40;background:#0f172a;color:#fff;border-radius:8px;padding:5px 9px;font:700 11px/1 Arial,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.35);user-select:none;letter-spacing:.02em}.elms-pick:hover{background:#172554}.elms-pick.on{background:#0064d2}.elms-pick.draft{background:#3f7d0b;cursor:default}.elms-pick.live{background:#64748b;cursor:default}';
+    document.head.appendChild(st);
+  }
+
+  const removePicks = () => document.querySelectorAll('.elms-pick').forEach((el) => el.remove());
+
   const PANEL_CSS = `
     :host{all:initial}
     *{box-sizing:border-box}
@@ -899,6 +945,14 @@
     .go2{width:100%;height:36px;margin-top:8px;border:1.5px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;font:700 12.5px/1 Inter,-apple-system,"Segoe UI",Arial,sans-serif;cursor:pointer}
     .foot{font-size:11px;color:#94a3b8;margin-top:9px;text-align:center}
     .note{background:#f1f5f9;border-radius:9px;padding:8px 10px;font-size:12px;color:#334155}
+    .bulk-stats{font-size:13px;color:#334155;margin:0 0 8px}
+    .bulk-row{display:flex;gap:8px}
+    .bulk-row .use{flex:1}
+    .use:disabled{opacity:.5;cursor:not-allowed}
+    .prog{background:#f1f5f9;border-radius:9px;padding:9px 10px;font-size:12px;color:#334155;white-space:pre-line}
+    .prog:empty{display:none}
+    .bar{height:6px;border-radius:4px;background:#e2e8f0;margin-top:7px;overflow:hidden}
+    .bar i{display:block;height:100%;background:linear-gradient(90deg,#0064d2,#4f46e5);width:0;transition:width .3s}
   `;
 
   function installFloatingImporter() {
@@ -930,13 +984,32 @@
     const openBtn = h('button', { class: 'go2', type: 'button', text: 'Open in ELMS' });
     const foot = h('div', { class: 'foot' });
     const panel = h('div', { class: 'panel' }, h('div', { class: 'ph' }, h('span', { text: 'ELMS · Profit check' }), closeBtn), h('div', { class: 'pb' }, storeSec, moneyBox, markupSec, checksSec, h('div', { class: 'sec' }, goBtn, openBtn, foot)));
-    const stack = h('div', { class: 'stack' }, panel, chip);
+    // ----- bulk mode parts (search / bestseller pages) -----
+    const bulkClose = h('button', { type: 'button', 'aria-label': 'Close', text: '×' });
+    const bulkStoreSelect = h('select');
+    const bulkStoreSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'eBay store' }), bulkStoreSelect);
+    const bulkMarkup = h('input', { type: 'number', step: '0.01', min: '0', placeholder: '0', 'aria-label': 'Markup percent' });
+    const bulkMarkupSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'Your markup %' }), bulkMarkup, h('div', { class: 'hint', text: 'Each product is priced at its Amazon price plus this markup. A small markup loses money after eBay fees: open one product to see what you keep.' }));
+    const bulkStats = h('div', { class: 'bulk-stats' });
+    const bulkAll = h('button', { class: 'use', type: 'button', text: 'Select all here' });
+    const bulkClear = h('button', { class: 'use', type: 'button', text: 'Clear' });
+    const bulkProgress = h('div', { class: 'prog' });
+    const bulkBarFill = h('i');
+    const bulkBar = h('div', { class: 'bar' }, bulkBarFill);
+    const bulkGo = h('button', { class: 'go', type: 'button' });
+    const bulkFoot = h('div', { class: 'foot' });
+    const bulkPanel = h('div', { class: 'panel' }, h('div', { class: 'ph' }, h('span', { text: 'ELMS · Bulk import' }), bulkClose), h('div', { class: 'pb' },
+      bulkStoreSec, bulkMarkupSec,
+      h('div', { class: 'sec' }, bulkStats, h('div', { class: 'bulk-row' }, bulkAll, bulkClear)),
+      h('div', { class: 'sec' }, bulkProgress, bulkBar),
+      h('div', { class: 'sec' }, bulkGo, bulkFoot)));
+    const stack = h('div', { class: 'stack' }, panel, bulkPanel, chip);
     const wrap = h('div', { class: 'wrap' }, logo, dot, toast, stack);
     shadow.append(style, wrap);
     document.documentElement.appendChild(host);
 
     // ----- state -----
-    const S = { ...{ connected: false, hasSession: false, markup: '', storeId: null, fees: LOGIC.normalizeSettings({}), autoOpen: false, skipVariants: false }, page: null, server: null, serverState: 'idle', serverError: '', busy: false, open: false, confirmUntil: 0 };
+    const S = { ...{ connected: false, hasSession: false, markup: '', storeId: null, fees: LOGIC.normalizeSettings({}), autoOpen: false, skipVariants: false }, page: null, server: null, serverState: 'idle', serverError: '', busy: false, open: false, confirmUntil: 0, mode: null, bulk: { running: false, total: 0, done: 0, failed: 0, lines: [], note: '' } };
     const cache = new Map(); // asin -> { at, data }: ELMS's answer for a product, kept for a minute and a half
     let toastTimer = null;
     let checkSeq = 0;
@@ -976,7 +1049,14 @@
     }
 
     async function refresh(force) {
-      if (!isProductPage()) { if (S.page) { S.page = null; render(); } return; }
+      if (!isProductPage()) {
+        if (S.page) { S.page = null; lastSig = ''; S.server = null; S.serverState = 'idle'; }
+        S.mode = findCards().length >= 2 ? 'list' : null; // a page with a list of products (search results, bestsellers ...)
+        if (S.mode === 'list') { scanCards(); loadListInfo(); } else removePicks();
+        render();
+        return;
+      }
+      if (S.mode !== 'product') { S.mode = 'product'; removePicks(); }
       let page;
       try { page = snapshot(); } catch (_) { return; }
       if (!page.asin) return;
@@ -989,6 +1069,7 @@
       render();
       if (changed || force) await loadServer(!!force && !changed);
     }
+
 
     // ----- what to show -----
     function locate() { return LOGIC.locate(S.server, S.storeId); }
@@ -1026,18 +1107,19 @@
       return out;
     }
 
-    let storeSig = '';
-    function renderStores() {
+// Fills a store <select> (the product panel's or the bulk panel's) from ELMS's list of stores.
+    function fillStores(select, sec) {
       const stores = (S.server && S.server.stores) || [];
       const sig = JSON.stringify(stores.map((s) => [s.id, s.label, s.amazonOk]));
       const { store } = locate();
-      if (sig !== storeSig) {
-        storeSig = sig;
-        storeSelect.replaceChildren(...stores.map((s) => h('option', { value: s.id, text: s.label + (s.amazonOk === false ? ' (other Amazon site)' : '') })));
+      if (select.dataset.sig !== sig) {
+        select.dataset.sig = sig;
+        select.replaceChildren(...stores.map((s) => h('option', { value: s.id, text: s.label + (s.amazonOk === false ? ' (other Amazon site)' : '') })));
       }
-      if (store) storeSelect.value = store.id;
-      storeSec.style.display = stores.length > 1 ? 'block' : 'none';
+      if (store) select.value = store.id;
+      sec.style.display = stores.length > 1 ? 'block' : 'none';
     }
+    const renderStores = () => fillStores(storeSelect, storeSec);
 
     function renderMoney(c) {
       const rows = [];
@@ -1090,9 +1172,11 @@
     }
 
     function render() {
+      if (S.mode === 'list') { renderList(); return; }
       const p = S.page;
-      stack.style.display = p ? 'flex' : 'none';
-      if (!p) return;
+      stack.style.display = S.mode === 'product' && p ? 'flex' : 'none';
+      bulkPanel.className = 'panel';
+      if (!p || S.mode !== 'product') return;
       const c = compute();
       const bad = c.checks.filter((k) => k.level === 'bad' || k.level === 'warn').length;
       chip.className = 'chip ' + (S.connected ? c.level : '');
@@ -1104,9 +1188,218 @@
       renderActions();
     }
 
+    // A page with a list of products: the chip and the bulk panel.
+    function renderList() {
+      stack.style.display = 'flex';
+      panel.className = 'panel';
+      const n = picked.size;
+      chip.className = 'chip ' + (n ? 'ok' : '');
+      chip.textContent = n ? n + (n === 1 ? ' product selected' : ' products selected') : 'Bulk import';
+      bulkPanel.className = 'panel' + (S.open ? ' open' : '');
+      fillStores(bulkStoreSelect, bulkStoreSec);
+      renderBulk();
+    }
+
+    // ----- bulk import: pick products on a list page -----
+    const picked = new Set();      // ASINs ticked
+    const knownRows = new Map();   // ASIN -> what ELMS already has for it (rows of listings)
+    const askedAsins = new Set();
+    let knownRetryAt = 0;
+
+    // A card's state for the chosen store: off / on, or draft / live when ELMS already has the product there.
+    function pickState(asin) {
+      const { here } = LOGIC.locate({ stores: (S.server && S.server.stores) || [], existing: knownRows.get(asin) || [] }, S.storeId);
+      if (!here) return picked.has(asin) ? 'on' : 'off';
+      return here.status === 'draft' ? 'draft' : 'live';
+    }
+    const PICK_TEXT = { off: '+ ELMS', on: '✓ ELMS', draft: 'In Drafts', live: 'In ELMS' };
+    const PICK_TITLE = { off: 'Select this product for bulk import', on: 'Selected: click to remove', draft: 'Already in your ELMS Drafts', live: 'Already on eBay (or on its way) in ELMS' };
+
+    function paintPicks() {
+      document.querySelectorAll('.elms-pick').forEach((pick) => {
+        const st = pickState(pick.dataset.asin);
+        if (pick.dataset.state === st) return; // write only what changed: the page is watched for changes
+        pick.dataset.state = st;
+        pick.className = 'elms-pick ' + st;
+        pick.textContent = PICK_TEXT[st];
+        pick.title = PICK_TITLE[st];
+        pick.setAttribute('aria-checked', String(st === 'on'));
+      });
+    }
+
+    async function loadKnown(asins) {
+      if (!S.connected || Date.now() < knownRetryAt) return;
+      asins.forEach((a) => askedAsins.add(a));
+      for (let i = 0; i < asins.length; i += 100) {
+        const chunk = asins.slice(i, i + 100);
+        const r = await send({ type: 'ELMS_API', method: 'POST', path: '/api/extension/known', body: { asins: chunk } });
+        if (!r.success) { chunk.forEach((a) => askedAsins.delete(a)); knownRetryAt = Date.now() + 30000; return; }
+        const rows = new Map();
+        (r.result.known || []).forEach((k) => { if (!rows.has(k.asin)) rows.set(k.asin, []); rows.get(k.asin).push(k); });
+        chunk.forEach((a) => knownRows.set(a, rows.get(a) || []));
+      }
+      picked.forEach((a) => { const st = pickState(a); if (st === 'draft' || st === 'live') picked.delete(a); }); // what ELMS has is not imported again
+      paintPicks();
+      render();
+    }
+
+    function scanCards() {
+      ensurePickStyle();
+      const fresh = [];
+      for (const { el, asin } of findCards()) {
+        let pick = el.querySelector(':scope > .elms-pick');
+        if (!pick) {
+          if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+          pick = document.createElement('div');
+          pick.className = 'elms-pick';
+          pick.setAttribute('role', 'checkbox');
+          pick.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); togglePick(pick.dataset.asin); }, true);
+          el.prepend(pick);
+        }
+        pick.dataset.asin = asin;
+        if (!askedAsins.has(asin)) fresh.push(asin);
+      }
+      paintPicks();
+      if (fresh.length) loadKnown(fresh);
+    }
+
+    // Credits and stores for a list page (no product to ask about).
+    async function loadListInfo() {
+      if (!S.connected || S.server || S.serverState === 'loading') return;
+      S.serverState = 'loading';
+      const r = await send({ type: 'ELMS_CHECK', payload: { amazonUrl: location.href } });
+      if (r.success) {
+        S.server = r.result;
+        S.serverState = 'ok';
+        try { chrome.storage.local.set({ appUrl: r.result.appUrl }); } catch (_) { /* only remembered for opening ELMS pages */ }
+      } else {
+        S.serverState = 'error';
+        S.serverError = r.error || 'ELMS could not be reached.';
+      }
+      paintPicks();
+      render();
+    }
+
+    function togglePick(asin) {
+      if (S.bulk.running) return;
+      const st = pickState(asin);
+      if (st === 'draft' || st === 'live') { show(PICK_TITLE[st] + '.', 'busy'); return; }
+      if (picked.has(asin)) picked.delete(asin);
+      else if (picked.size >= MAX_PICK) { show('Up to ' + MAX_PICK + ' products at a time.', 'err'); return; }
+      else picked.add(asin);
+      paintPicks();
+      render();
+    }
+
+    // Why the selection cannot be imported (or null).
+    function bulkBlock() {
+      if (!S.connected) return 'Connect your ELMS account first: click the ELMS icon in the Chrome toolbar and paste your Extension Key.';
+      if (!picked.size) return 'Tick the products you want with the + ELMS badge on each one.';
+      if (!S.server) return null;
+      const { store } = locate();
+      if (!S.server.stores.length) return 'Connect an eBay store in ELMS first.';
+      if (store && store.amazonOk === false) return store.amazonMessage || 'This Amazon site does not match your store.';
+      const c = S.server.credits;
+      const need = picked.size * ((c && c.bulkImportCost) || 1);
+      if (c && !c.unlimited && c.balance < need) return 'These ' + picked.size + ' products need ' + need + ' credits and you have ' + c.balance + '.';
+      return null;
+    }
+
+    function renderBulk() {
+      const n = picked.size;
+      const c = S.server && S.server.credits;
+      const per = (c && c.bulkImportCost) || 1;
+      const b = S.bulk;
+      if (document.activeElement !== bulkMarkup && shadow.activeElement !== bulkMarkup) bulkMarkup.value = S.markup;
+      bulkStats.textContent = n ? n + (n === 1 ? ' product' : ' products') + ' selected · ' + n * per + (n * per === 1 ? ' credit' : ' credits') : 'Tick the products you want with the + ELMS badge on each one.';
+      bulkGo.disabled = b.running || !!bulkBlock();
+      bulkGo.textContent = b.running ? 'Importing…' : n ? 'Import ' + n + (n === 1 ? ' product' : ' products') + ' · ' + n * per + (n * per === 1 ? ' credit' : ' credits') : 'Import selected products';
+      bulkGo.title = b.running ? '' : (n ? bulkBlock() || '' : '');
+      bulkAll.disabled = b.running;
+      bulkClear.disabled = b.running || !n;
+      const lines = [];
+      if (b.total) {
+        const finished = b.done + b.failed;
+        lines.push(b.running ? finished + ' of ' + b.total + ' done' + (b.failed ? ' · ' + b.failed + ' failed' : '') : b.done + ' saved to your Drafts' + (b.failed ? ', ' + b.failed + ' failed' : '') + '.');
+        if (b.note) lines.push(b.note);
+        b.lines.slice(0, 5).forEach((l) => lines.push('• ' + l));
+        if (b.lines.length > 5) lines.push('• and ' + (b.lines.length - 5) + ' more');
+      }
+      bulkProgress.textContent = lines.join('\n');
+      bulkBarFill.style.width = b.total ? Math.min(100, Math.round(((b.done + b.failed) / b.total) * 100)) + '%' : '0';
+      bulkBar.style.display = b.total ? 'block' : 'none';
+      bulkFoot.textContent = c ? (c.unlimited ? 'Unlimited credits' : 'You have ' + c.balance + ' credit' + (c.balance === 1 ? '' : 's')) + ' · ELMS fetches the products (variant pictures are not included: import products with variants from their own page)' : '';
+    }
+
+    async function runBulk() {
+      if (S.bulk.running) return;
+      const block = bulkBlock();
+      if (block) { show(block, 'err'); S.open = true; render(); return; }
+      const asins = [...picked];
+      const urls = asins.map((a) => location.origin + '/dp/' + a);
+      const { store } = locate();
+      const markup = S.markup === '' ? undefined : Number(S.markup);
+      const common = { markupPercent: Number.isFinite(markup) ? markup : undefined, ebayAccountId: store ? store.id : undefined };
+      const b = (S.bulk = { running: true, total: urls.length, done: 0, failed: 0, lines: [], note: 'Sending the products to ELMS…' });
+      render();
+      try {
+        const limits = await send({ type: 'ELMS_API', method: 'GET', path: '/api/fetch-product/limits' });
+        if (!limits.success) throw new Error(limits.error || 'ELMS could not be reached.');
+        if (limits.result.easyparserConfigured) {
+          // Many products: ELMS fetches them in the background, so this page can be closed.
+          const made = await send({ type: 'ELMS_API', method: 'POST', path: '/api/fetch-product/bulk-job', body: { amazonUrls: urls, ...common } });
+          if (!made.success) throw new Error(made.error || 'The import could not be started.');
+          const skipped = made.result.skipped || [];
+          skipped.forEach((s) => b.lines.push(s.error));
+          b.failed = skipped.length;
+          b.note = 'ELMS is fetching the products. You can close this page: the import goes on.';
+          render();
+          const started = Date.now();
+          for (;;) {
+            await sleep(4000);
+            const st = await send({ type: 'ELMS_API', method: 'GET', path: '/api/fetch-product/bulk-job/' + made.result.jobId });
+            if (!st.success) { if (Date.now() - started > 120000) throw new Error(st.error || 'ELMS could not be reached.'); continue; }
+            const job = st.result.job;
+            b.done = job.done;
+            b.failed = job.failed + skipped.length;
+            b.lines = skipped.map((s) => s.error).concat((job.items || []).filter((i) => i.status === 'error').map((i) => i.error || 'A product could not be imported.'));
+            render();
+            if (job.status === 'done' || job.status === 'cancelled' || Date.now() - started > 30 * 60 * 1000) break;
+          }
+        } else {
+          // A few products at a time, each request answered when its products are saved.
+          const size = Math.max(1, Math.min(5, limits.result.bulkImportMax || 5));
+          for (let i = 0; i < urls.length; i += size) {
+            const r = await send({ type: 'ELMS_API', method: 'POST', path: '/api/fetch-product/bulk', body: { amazonUrls: urls.slice(i, i + size), ...common }, timeoutMs: 170000 });
+            if (!r.success) throw new Error(r.error || 'ELMS could not be reached.');
+            (r.result.results || []).forEach((x) => { if (x.success) b.done += 1; else { b.failed += 1; b.lines.push(x.error || 'A product could not be imported.'); } });
+            render();
+          }
+        }
+        b.note = '';
+        show('✓ ' + b.done + ' saved to ELMS Drafts' + (b.failed ? '\n' + b.failed + ' failed' : ''), b.done ? 'ok' : 'err');
+      } catch (e) {
+        b.note = '';
+        b.lines.push(e && e.message ? e.message : 'The import stopped.');
+        show(e && e.message ? e.message : 'The import stopped.', 'err');
+      } finally {
+        b.running = false;
+        // Ask ELMS again what it has now: what was saved shows as "In Drafts", what failed stays selectable.
+        picked.clear();
+        asins.forEach((a) => { askedAsins.delete(a); knownRows.delete(a); });
+        knownRetryAt = 0;
+        S.server = null;
+        S.serverState = 'idle';
+        paintPicks();
+        render();
+        loadListInfo().then(() => loadKnown(asins));
+      }
+    }
+
     // ----- the import -----
     async function runImport(source) {
       if (S.busy) return;
+      if (S.mode === 'list') { S.open = !S.open; render(); return; }
       if (!isProductPage()) { show('Open an Amazon product page to import it.', 'err'); return; }
       await refresh(false);
       const block = importBlock();
@@ -1180,6 +1473,26 @@
       if (c.recMarkup == null) return;
       S.markup = String(c.recMarkup);
       markupInput.value = S.markup;
+      try { chrome.storage.local.set({ markup: S.markup }); } catch (_) { /* kept for this page only */ }
+      render();
+    });
+
+    bulkClose.addEventListener('click', () => { S.open = false; render(); });
+    bulkGo.addEventListener('click', () => runBulk());
+    bulkAll.addEventListener('click', () => {
+      document.querySelectorAll('.elms-pick').forEach((pick) => { if (picked.size < MAX_PICK && pickState(pick.dataset.asin) === 'off') picked.add(pick.dataset.asin); });
+      paintPicks();
+      render();
+    });
+    bulkClear.addEventListener('click', () => { picked.clear(); paintPicks(); render(); });
+    bulkStoreSelect.addEventListener('change', () => {
+      S.storeId = bulkStoreSelect.value;
+      try { chrome.storage.local.set({ storeId: S.storeId }); } catch (_) { /* kept for this page only */ }
+      paintPicks();
+      render();
+    });
+    bulkMarkup.addEventListener('input', () => {
+      S.markup = bulkMarkup.value.trim();
       try { chrome.storage.local.set({ markup: S.markup }); } catch (_) { /* kept for this page only */ }
       render();
     });

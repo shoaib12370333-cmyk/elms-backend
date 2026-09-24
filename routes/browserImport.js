@@ -5,9 +5,9 @@ const { upsertDraft, findListingInStore } = require('../models/listingsModel');
 const { hasCredits, getUserById } = require('../models/usersModel');
 const { withCredits } = require('../services/creditService');
 const { requireAuth } = require('../middleware/requireAuth');
-const { isValidAmazonUrl, isValidObjectIdString, assertAmazonMatchesStore } = require('../services/validationService');
+const { isValidAmazonUrl, assertAmazonMatchesStore } = require('../services/validationService');
+const { storeForImport, alreadyListedMessage } = require('../services/extensionService');
 const { ACTION_COSTS } = require('../config/actionCosts');
-const { getActiveEbayAccount, getEbayAccountById } = require('../models/ebayAccountsModel');
 const { materializeImageUrls } = require('../services/imageStorageService');
 const { requireAsinSku } = require('../services/skuService');
 const { currencyForAmazonUrl } = require('../config/amazonDomains');
@@ -130,31 +130,6 @@ function cleanProduct(input, amazonUrl) {
       : [],
     variants,
   };
-}
-
-/** The store an import goes to: the one the extension chose (it must be the user's own), else the active store. */
-async function storeForImport(userId, ebayAccountId) {
-  if (ebayAccountId === undefined || ebayAccountId === null || ebayAccountId === '') return getActiveEbayAccount(userId);
-  const store = isValidObjectIdString(String(ebayAccountId)) ? await getEbayAccountById(userId, String(ebayAccountId)) : null;
-  if (!store) throw Object.assign(new Error('That eBay store was not found. Pick your store again in the extension.'), { statusCode: 404 });
-  return store;
-}
-
-// A listing that is no longer a draft is never changed by an import, so importing over it would only spend a credit.
-const ALREADY = {
-  published: 'is already live on eBay',
-  paused: 'is already on eBay (paused)',
-  publishing: 'is being published right now',
-  scheduled: 'is already scheduled to publish',
-  error: 'is already in your Drafts with a publish error - open it there and press Retry',
-  ended: 'was ended on eBay - republish it from Live Listings',
-};
-
-/** The message for an import that would land on a listing that is not a draft, or null when the import can go ahead. */
-function alreadyListedMessage(listing, store) {
-  if (!listing || listing.status === 'draft') return null;
-  const where = store && store.label ? ' in ' + store.label : '';
-  return 'This product ' + (ALREADY[listing.status] || 'already exists as a ' + listing.status + ' listing') + where + '. Nothing was imported and no credit was used.';
 }
 
 router.post('/', requireAuth, async (req, res) => {
