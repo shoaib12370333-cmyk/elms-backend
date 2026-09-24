@@ -53,7 +53,7 @@ async function listConversations(userId, accountId, options = {}) {
     const rx = new RegExp(String(options.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     query.$or = [{ subject: rx }, { otherPartyUsername: rx }, { lastMessageSnippet: rx }];
   }
-  const docs = await Conversation.find(query).populate('ebayAccountId').sort({ lastMessageDate: -1 }).lean();
+  const docs = await Conversation.find(query).populate('ebayAccountId', 'ebayUserId displayName').sort({ lastMessageDate: -1 }).lean();
   return docs.map((doc) => {
     const serialized = serialize(doc);
     serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
@@ -73,6 +73,15 @@ async function countUnreadConversations(userId, accountId = null) {
 async function getConversationById(userId, id) {
   const doc = await Conversation.findOne({ _id: id, userId });
   return doc ? serialize(doc) : null;
+}
+
+/**
+ * Opening a thread: the conversation plus its stored buyer profile (with the time it was fetched, which the
+ * serialized copy leaves out) in ONE lean read instead of a hydrated document and a second query.
+ */
+async function getConversationForThread(userId, id) {
+  const doc = await Conversation.findOne({ _id: id, userId }).lean();
+  return doc ? { conversation: serialize(doc), storedBuyerProfile: doc.buyerProfile || null } : null;
 }
 
 async function addInternalNote(userId, id, text) {
@@ -155,6 +164,7 @@ module.exports = {
   listConversations,
   countUnreadConversations,
   getConversationById,
+  getConversationForThread,
   markConversationRead,
   addInternalNote,
   updateConversationState,

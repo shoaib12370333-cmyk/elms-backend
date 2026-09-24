@@ -16,5 +16,6 @@ const messageSchema = new mongoose.Schema({
 
 messageSchema.index({ userId: 1, ebayAccountId: 1, ebayConversationId: 1, ebayMessageId: 1 }, { unique: true });
 messageSchema.index({ conversationId: 1, sentDate: 1 });
+messageSchema.index({ userId: 1, conversationId: 1, sentDate: 1 }); // opening a thread
 
 module.exports = mongoose.model('Message', messageSchema);

@@ -77,5 +77,6 @@ const orderSchema = new mongoose.Schema(
 orderSchema.index({ userId: 1, ebayOrderId: 1, sku: 1 }, { unique: true, sparse: true });
 orderSchema.index({ userId: 1, ebayAccountId: 1, createdAt: -1 });
 orderSchema.index({ userId: 1, ebayCreatedAt: -1 });
+orderSchema.index({ userId: 1, ebayLineItemId: 1 }); // a message thread finds its order by line item id
 
 module.exports = mongoose.model('Order', orderSchema);
