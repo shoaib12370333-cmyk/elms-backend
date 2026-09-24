@@ -82,6 +82,7 @@ async function openInElms(url) {
 // The few ELMS calls the page's script may make through this script (a page cannot call ELMS itself: it is another origin).
 const API_ALLOWED = [
   /^POST \/api\/extension\/known$/,
+  /^POST \/api\/extension\/market$/,
   /^GET \/api\/fetch-product\/limits$/,
   /^POST \/api\/fetch-product\/bulk$/,
   /^POST \/api\/fetch-product\/bulk-job$/,

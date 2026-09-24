@@ -128,7 +128,7 @@
    * Everything worth knowing before an import, as a list of { id, level: 'bad'|'warn'|'info'|'ok', text }.
    * @param {{ page: object, server?: object|null, storeId?: string|null, settings: object, markup?: number|string|null, now?: Date }} input
    */
-  function buildChecks({ page, server, storeId, settings, markup, now }) {
+  function buildChecks({ page, server, storeId, settings, markup, now, market }) {
     const out = [];
     const add = (id, level, text) => out.push({ id, level, text });
     const cur = page.currency || 'USD';
@@ -172,6 +172,20 @@
       const m = markup === '' || markup == null ? 0 : Number(markup) || 0;
       if (r.profit < 0) add('profit', 'bad', 'At ' + m + '% markup you lose ' + money(-r.profit) + ' on every sale after eBay fees.');
       else if (r.margin < 10) add('profit', 'warn', 'Thin margin: you keep ' + money(r.profit) + ' (' + r.margin.toFixed(1) + '%) after eBay fees.');
+    }
+
+    // ---- what eBay shows (asked for when the panel is opened) ----
+    if (market && market.available && !cannotImport) {
+      if (market.count === 0) add('market', 'info', 'No similar listing found on eBay: a niche nobody sells in yet, or the search did not match this product.');
+      else if (cost != null && settings && market.currency === cur) {
+        const sell = priceAtMarkup(cost, markup);
+        const even = breakEvenPrice(cost, settings);
+        const lead = market.exact ? 'The' : 'Probably: the';
+        if (even != null && even > market.median) add('market', market.exact ? 'bad' : 'warn', lead + ' typical eBay price (' + money(market.median) + ') is below your break-even price (' + money(even) + '), so this product cannot make money at market prices.');
+        else if (sell > market.median * 1.15) add('market', 'warn', 'Your price ' + money(sell) + ' is ' + Math.round((sell / market.median - 1) * 100) + '% above the typical eBay price (' + money(market.median) + '): it may not sell.');
+        else if (sell <= market.median) add('market', 'ok', 'Your price ' + money(sell) + ' is at or below the typical eBay price (' + money(market.median) + ').');
+        if (market.total >= 100) add('crowded', 'info', 'Crowded: eBay has about ' + market.total + ' similar listings.');
+      }
     }
 
     // ---- what ELMS knows ----

@@ -171,4 +171,37 @@ checks = L.buildChecks({ page: { ...PAGE, price: null }, server: null, storeId: 
 assert.deepStrictEqual(ids(checks).filter((i) => ['vero', 'existing', 'fit', 'credits'].includes(i)), []);
 assert.strictEqual(level(checks, 'price'), 'bad');
 
+// ---- what eBay shows (the market) ----
+const MARKET = { available: true, exact: false, total: 37, count: 30, currency: 'GBP', min: 9.99, median: 13.49, max: 24, sellers: 20, cheapest: [] };
+const withMarket = (market, markup, page) => L.buildChecks({ page: page || PAGE, server: SERVER, storeId: 'S1', settings: S, markup, market, now: new Date('2026-03-10T12:00:00') });
+const said = (id) => checks.find((c) => c.id === id).text;
+// 8.00 cost, markup 60 -> 12.80: at or below the typical 13.49
+checks = withMarket(MARKET, 60);
+assert.strictEqual(level(checks, 'market'), 'ok');
+assert.ok(said('market').includes('Your price £12.80 is at or below the typical eBay price (£13.49).'), said('market'));
+// 8.00 cost, markup 100 -> 16.00: 19% above typical
+checks = withMarket(MARKET, 100);
+assert.strictEqual(level(checks, 'market'), 'warn');
+assert.ok(said('market').includes('is 19% above the typical eBay price (£13.49)'), said('market'));
+// 14.00 cost: break-even 16.48 is above the typical price -> cannot make money; sure only when the same product was found
+checks = withMarket(MARKET, 60, { ...PAGE, price: 14 });
+assert.strictEqual(level(checks, 'market'), 'warn');
+assert.ok(said('market').startsWith('Probably: the typical eBay price (£13.49) is below your break-even price ('), said('market'));
+checks = withMarket({ ...MARKET, exact: true }, 60, { ...PAGE, price: 14 });
+assert.strictEqual(level(checks, 'market'), 'bad');
+assert.ok(said('market').startsWith('The typical eBay price'), 'a barcode match says it flatly');
+// crowded, empty, not available, another currency, already on eBay: what is said and what is not
+checks = withMarket({ ...MARKET, total: 240 }, 60);
+assert.strictEqual(level(checks, 'crowded'), 'info');
+checks = withMarket({ available: true, count: 0, total: 0 }, 60);
+assert.strictEqual(level(checks, 'market'), 'info');
+checks = withMarket({ available: false, reason: 'busy' }, 60);
+assert.ok(!ids(checks).includes('market'), 'no numbers, no market line');
+checks = withMarket({ ...MARKET, currency: 'USD' }, 100);
+assert.ok(!ids(checks).includes('market'), 'prices in another currency are not compared');
+checks = L.buildChecks({ page: PAGE, server: { ...SERVER, existing: [{ ...draftRow, status: 'published' }] }, storeId: 'S1', settings: S, markup: 100, market: MARKET, now: new Date('2026-03-10T12:00:00') });
+assert.ok(!ids(checks).includes('market'), 'a product that cannot be imported is not compared at a new markup');
+checks = L.buildChecks({ page: PAGE, server: SERVER, storeId: 'S1', settings: S, markup: 100, now: new Date('2026-03-10T12:00:00') });
+assert.ok(!ids(checks).includes('market'), 'the market not asked for yet: nothing');
+
 console.log('extension logic tests passed');

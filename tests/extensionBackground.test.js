@@ -118,7 +118,7 @@ const EXCHANGE = { status: 200, body: { success: true, sessionToken: 'fresh-toke
   // ---- the page may use only a few ELMS calls (bulk import) ----
   env = boot({ respond: (c) => (c.url.endsWith('/extension-settings') ? SETTINGS : { status: 200, body: { success: true, known: [], jobId: 'J1' } }) });
   const jobId = 'a'.repeat(24);
-  for (const [method, p] of [['POST', '/api/extension/known'], ['GET', '/api/fetch-product/limits'], ['POST', '/api/fetch-product/bulk'], ['POST', '/api/fetch-product/bulk-job'], ['GET', '/api/fetch-product/bulk-job/' + jobId]]) {
+  for (const [method, p] of [['POST', '/api/extension/known'], ['POST', '/api/extension/market'], ['GET', '/api/fetch-product/limits'], ['POST', '/api/fetch-product/bulk'], ['POST', '/api/fetch-product/bulk-job'], ['GET', '/api/fetch-product/bulk-job/' + jobId]]) {
     r = await env.message({ type: 'ELMS_API', method, path: p, body: p.endsWith('known') ? { asins: ['B0TEST0001'] } : undefined });
     assert.strictEqual(r.success, true, method + ' ' + p);
   }
