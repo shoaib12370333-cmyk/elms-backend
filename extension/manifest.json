@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ELMS Amazon Importer",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "Import clean product data from the current Amazon product page directly into ELMS Drafts.",
   "permissions": [
     "activeTab",
@@ -61,8 +61,20 @@
       ]
     }
   ],
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
   },
   "content_scripts": [
     {
