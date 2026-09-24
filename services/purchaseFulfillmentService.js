@@ -6,14 +6,14 @@
  * `transactionId` (the provider's payment id) makes it idempotent: the same payment reported twice
  * (a webhook retry, the return-page check racing the webhook) is credited once.
  */
-async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd }) {
+async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd, listPriceUsd = null, discountPercent = 0, referralId = null }) {
   const { recordPurchase } = require('../models/purchasesModel');
   const { addCredits, getUserById, setMaxEbayAccounts } = require('../models/usersModel');
   const User = require('../models/schemas/User');
 
   let purchase;
   try {
-    purchase = await recordPurchase({ userId, planId: plan.id, provider, providerTransactionId: transactionId, priceUsd, creditsGranted: plan.credits });
+    purchase = await recordPurchase({ userId, planId: plan.id, provider, providerTransactionId: transactionId, priceUsd, creditsGranted: plan.credits, listPriceUsd, discountPercent, referralId });
   } catch (err) {
     if (err && err.code === 11000) return { granted: false, duplicate: true }; // the other request won the race
     throw err;
@@ -26,13 +26,17 @@ async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd
   if (limit > 0 && buyer && (Number(buyer.maxEbayAccounts) || 0) < limit) await setMaxEbayAccounts(userId, limit);
   await User.updateOne({ _id: userId }, { $set: { planName: plan.name } }).catch(() => {});
 
+  // Referral programme: count a used discount, and reward the person who brought this buyer (once, for their first purchase).
+  // afterPurchase never throws - the buyer already has their credits.
+  await require('./referralService').afterPurchase({ userId, priceUsd, referralId });
+
   try {
     const { sendPurchaseReceiptEmail, sendAdminAlert } = require('./emailService');
     if (buyer && buyer.email) {
       sendPurchaseReceiptEmail({ to: buyer.email, credits: plan.credits, priceUsd, transactionId }).catch((e) => console.warn('receipt email failed:', e.message));
       sendAdminAlert({
         subject: 'New payment: $' + Number(priceUsd).toFixed(2),
-        lines: ['User: ' + buyer.email, 'Plan: ' + plan.name, 'Credits: ' + plan.credits, 'Amount: $' + Number(priceUsd).toFixed(2), 'Provider: ' + provider, 'Payment: ' + transactionId],
+        lines: ['User: ' + buyer.email, 'Plan: ' + plan.name, 'Credits: ' + plan.credits, 'Amount: $' + Number(priceUsd).toFixed(2) + (discountPercent > 0 && listPriceUsd ? ' (list price $' + Number(listPriceUsd).toFixed(2) + ', ' + discountPercent + '% referral discount)' : ''), 'Provider: ' + provider, 'Payment: ' + transactionId],
       }).catch(() => {});
     }
   } catch (mailErr) {

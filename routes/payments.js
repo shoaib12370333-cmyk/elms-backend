@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/requireAuth');
 const { listActivePlans, getPlanById } = require('../models/plansModel');
 const { listPurchasesForUser } = require('../models/purchasesModel');
+const referrals = require('../services/referralService');
 const { getUserById } = require('../models/usersModel');
 const { createTransaction } = require('../services/paddleService');
 const cashtapPayments = require('../services/cashtapPaymentService');
@@ -34,7 +35,17 @@ router.get('/public-plans', async (req, res) => {
 router.get('/plans', requireAuth, async (req, res) => {
   const provider = cashtapPayments.activeProvider();
   const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId);
-  res.json({ success: true, plans, provider });
+  // A friend who signed up with a referral code gets a discount on the plans (CashTap checkout; Paddle prices are fixed in Paddle).
+  let discount = null;
+  if (provider === 'cashtap') {
+    try { discount = await referrals.discountFor(req.userId); } catch (err) { console.error('referral discount lookup failed:', err.message); }
+  }
+  res.json({
+    success: true,
+    provider,
+    plans: plans.map((p) => (discount ? { ...p, discountedPriceUsd: referrals.priceAfterDiscount(p.priceUsd, discount.percent) } : p)),
+    referralDiscount: discount ? { percent: discount.percent, usesLeft: discount.usesLeft, expiresAt: discount.expiresAt } : null,
+  });
 });
 
 /**
@@ -76,8 +87,9 @@ router.post('/checkout', requireAuth, async (req, res) => {
   const provider = cashtapPayments.activeProvider();
   try {
     if (provider === 'cashtap') {
-      const { sessionId, url } = await cashtapPayments.startCheckout({ user, plan });
-      return res.json({ success: true, provider, sessionId, url });
+      const discount = await referrals.discountFor(req.userId).catch((err) => { console.error('referral discount lookup failed:', err.message); return null; });
+      const { sessionId, url } = await cashtapPayments.startCheckout({ user, plan, discount });
+      return res.json({ success: true, provider, sessionId, url, discountPercent: discount ? discount.percent : 0 });
     }
     if (!plan.paddlePriceId) return res.status(404).json({ success: false, error: 'This plan is not available.' });
     const { transactionId } = await createTransaction({

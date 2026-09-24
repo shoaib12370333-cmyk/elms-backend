@@ -7,7 +7,7 @@ const Purchase = require('./schemas/Purchase');
  * re-sends the same webhook (which it does by design - "at least once"
  * delivery).
  */
-async function recordPurchase({ userId, planId, provider, providerTransactionId, priceUsd, creditsGranted }) {
+async function recordPurchase({ userId, planId, provider, providerTransactionId, priceUsd, creditsGranted, listPriceUsd = null, discountPercent = 0, referralId = null }) {
   const existing = await Purchase.findOne({ providerTransactionId });
   if (existing) return null; // already processed - caller should skip crediting again
 
@@ -18,8 +18,16 @@ async function recordPurchase({ userId, planId, provider, providerTransactionId,
     providerTransactionId,
     priceUsd,
     creditsGranted,
+    listPriceUsd,
+    discountPercent,
+    referralId,
   });
   return serialize(doc);
+}
+
+/** True once the user has completed at least one purchase (a referral code can only be added before the first one). */
+async function hasPurchases(userId) {
+  return !!(await Purchase.exists({ userId, status: 'completed' }));
 }
 
 /**
@@ -39,10 +47,12 @@ function serialize(doc) {
     provider: obj.provider,
     providerTransactionId: obj.providerTransactionId,
     priceUsd: obj.priceUsd,
+    listPriceUsd: obj.listPriceUsd == null ? obj.priceUsd : obj.listPriceUsd,
+    discountPercent: obj.discountPercent || 0,
     creditsGranted: obj.creditsGranted,
     status: obj.status,
     createdAt: obj.createdAt,
   };
 }
 
-module.exports = { recordPurchase, listPurchasesForUser };
+module.exports = { recordPurchase, listPurchasesForUser, hasPurchases };

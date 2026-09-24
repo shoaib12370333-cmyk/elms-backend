@@ -30,6 +30,21 @@ function sendAuthError(res, err) {
 
 // New accounts cannot be created from a blocked address or browser (nobody new can be one of the accounts the admin let through).
 const { welcomeBonusDecision } = require('../services/signupBonusGuard');
+const referralService = require('../services/referralService');
+
+/**
+ * A new account came with a referral code (?ref= in the link, or typed on the sign-up form): record it. A bad code never stops
+ * the sign-up - the answer says what happened so the site can tell the person. Returns null when no code was given.
+ */
+async function tryAttachReferral(req, user, code) {
+  if (!code || !String(code).trim()) return null;
+  try {
+    return await referralService.attachReferral({ user, code, ip: requestContext(req).ip });
+  } catch (err) {
+    console.error('referral attach error:', err.message);
+    return { applied: false, reason: 'error' };
+  }
+}
 
 async function assertNewAccountAllowed(req) {
   const denied = await accessGuard.checkNewAccount(requestContext(req));
@@ -98,7 +113,7 @@ const extensionKeyLimiter = rateLimit({
  * returns a session token the frontend should store and send on future requests.
  */
 router.post('/google', async (req, res) => {
-  const { credential } = req.body;
+  const { credential, referralCode } = req.body;
 
   if (!credential) {
     return res.status(400).json({ success: false, error: 'A Google credential is required.' });
@@ -111,9 +126,10 @@ router.post('/google', async (req, res) => {
     const bonus = isNewAccount ? await welcomeBonusDecision(profile.email, requestContext(req)) : { allowed: true };
     if (!bonus.allowed) console.warn('[signup-bonus] not given to ' + profile.email + ': ' + bonus.reason);
     const user = await findOrCreateUser(profile, { welcomeBonus: bonus.allowed });
+    const referral = isNewAccount ? await tryAttachReferral(req, user, referralCode) : null;
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'google'));
 
-    res.json({ success: true, sessionToken, user });
+    res.json({ success: true, sessionToken, user, ...(referral ? { referral } : {}) });
   } catch (err) {
     console.error('google auth error:', err.message);
     sendAuthError(res, err);
@@ -130,7 +146,7 @@ router.post('/google', async (req, res) => {
  * duplicate - so credits/drafts/history carry over either way.
  */
 router.post('/register', registerLimiter, async (req, res) => {
-  const { username, email, password } = req.body;
+  const { username, email, password, referralCode } = req.body;
 
   if (!username || !email || !password) {
     return res.status(400).json({ success: false, error: 'A username, email, and password are all required.' });
@@ -149,9 +165,11 @@ router.post('/register', registerLimiter, async (req, res) => {
     await assertNewAccountAllowed(req);
     const bonus = await welcomeBonusDecision(email.trim().toLowerCase(), requestContext(req));
     if (!bonus.allowed) console.warn('[signup-bonus] not given to ' + email.trim().toLowerCase() + ': ' + bonus.reason);
+    const existedBefore = await UserModel.exists({ email: email.trim().toLowerCase() }); // a Google account adding a password is not a new account
     const user = await registerWithPassword({ username: username.trim(), email: email.trim().toLowerCase(), password }, { welcomeBonus: bonus.allowed });
+    const referral = existedBefore ? null : await tryAttachReferral(req, user, referralCode);
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'register'));
-    res.json({ success: true, sessionToken, user });
+    res.json({ success: true, sessionToken, user, ...(referral ? { referral } : {}) });
   } catch (err) {
     console.error('register error:', err.message);
     sendAuthError(res, err);
