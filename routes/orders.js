@@ -14,6 +14,28 @@ const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
 const { hasCredits } = require('../models/usersModel');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { isValidAmazonUrl, COUNTRY_TO_AMAZON_DOMAIN } = require('../services/validationService');
+const { startJob, getJob } = require('../services/backgroundJobs');
+
+const syncJobKey = (userId, accountId) => `orders:${userId}:${accountId || 'all'}`;
+
+/** Reads the orders of these eBay accounts from eBay and saves them. Returns { syncedCount, ordersFromEbay, errors }. */
+async function syncOrdersOf(userId, accounts, full) {
+  const results = await Promise.all(accounts.map(async (account) => {
+    try {
+      const { ordersFromEbay, savedCount } = await syncAccountOrders(userId, account.id, { full });
+      return { savedCount, ordersFromEbay };
+    } catch (err) {
+      console.error(`order sync error for account ${account.ebayUserId}:`, err.message);
+      return { savedCount: 0, ordersFromEbay: 0, error: `${account.ebayUserId}: ${err.message}` };
+    }
+  }));
+  const errors = results.map((r) => r.error).filter(Boolean);
+  return {
+    syncedCount: results.reduce((sum, r) => sum + r.savedCount, 0),
+    ordersFromEbay: results.reduce((sum, x) => sum + (x.ordersFromEbay || 0), 0),
+    errors,
+  };
+}
 
 /**
  * GET /api/orders?accountId=...
@@ -28,6 +50,15 @@ router.get('/', requireAuth, async (req, res) => {
   backfillOrderImagesForUser(req.userId); // orders without a picture get theirs from eBay in the background; the next load shows them
 });
 
+
+/**
+ * GET /api/orders/sync-status?accountId=...
+ * How the background order sync is going: { status: 'running' | 'done' | 'error', result?: { syncedCount, ordersFromEbay,
+ * errors }, error? }, or job null when none was started lately. Must stay above GET /:id.
+ */
+router.get('/sync-status', requireAuth, (req, res) => {
+  res.json({ success: true, job: getJob(syncJobKey(req.userId, req.query.accountId || null)) });
+});
 
 /**
  * GET /api/orders/processing
@@ -59,20 +90,16 @@ router.post('/sync', requireAuth, async (req, res) => {
   }
 
   const full = req.query.full === '1' || req.query.full === 'true';
-  const results = await Promise.all(accounts.map(async (account) => {
-    try {
-      const { ordersFromEbay, savedCount } = await syncAccountOrders(req.userId, account.id, { full });
-      return { savedCount, ordersFromEbay };
-    } catch (err) {
-      console.error(`order sync error for account ${account.ebayUserId}:`, err.message);
-      return { savedCount: 0, ordersFromEbay: 0, error: `${account.ebayUserId}: ${err.message}` };
-    }
-  }));
 
-  const savedCount = results.reduce((sum, r) => sum + r.savedCount, 0);
-  const errors = results.map((r) => r.error).filter(Boolean);
+  // ?background=1: start the sync and answer at once; the page asks GET /sync-status until it is done, then loads the orders.
+  if (req.query.background === '1') {
+    const { started, job } = startJob(syncJobKey(req.userId, requestedAccountId), () => syncOrdersOf(req.userId, accounts, full));
+    return res.status(202).json({ success: true, started, job });
+  }
+
+  const { syncedCount: savedCount, ordersFromEbay, errors } = await syncOrdersOf(req.userId, accounts, full);
   const orders = await listOrders(req.userId, requestedAccountId);
-  res.json({ success: true, syncedCount: savedCount, ordersFromEbay: results.reduce((sum, x) => sum + (x.ordersFromEbay || 0), 0), full, orders, errors: errors.length ? errors : undefined });
+  res.json({ success: true, syncedCount: savedCount, ordersFromEbay, full, orders, errors: errors.length ? errors : undefined });
 });
 
 

@@ -6,6 +6,7 @@ const {
   listListingsByStatuses,
   countListingsByStatus,
   getListingById,
+  getListingStatuses,
   claimListingForPublishing,
   markPublished,
   markError,
@@ -44,6 +45,7 @@ const { getImportById } = require('../models/importsModel');
 const { prepareAspects } = require('../services/publishPreflightService');
 
 const { requireAuth } = require('../middleware/requireAuth');
+const { enqueuePublish } = require('../services/publishRunner');
 
 const {
   hasCredits,
@@ -132,6 +134,22 @@ router.get('/counts', requireAuth, async (req, res) => {
       success: false,
       error: 'Could not load listing counts.',
     });
+  }
+});
+
+/**
+ * GET /api/listings/publish-status?ids=a,b,c
+ * Where each of these listings is in its publish: still "publishing", or done ("published" / "error" with the reason).
+ * The app polls this after starting a background publish. Must stay above GET /:id.
+ */
+router.get('/publish-status', requireAuth, async (req, res) => {
+  try {
+    const ids = String(req.query.ids || '').split(',');
+    const statuses = await getListingStatuses(req.userId, ids);
+    res.json({ success: true, statuses });
+  } catch (err) {
+    console.error('publish-status error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not read the publish status.' });
   }
 });
 
@@ -301,6 +319,13 @@ router.post('/:id/publish', requireAuth, async (req, res) => {
         error:
           'This listing is already being processed or cannot be published.',
       });
+    }
+
+    // Background publish: the listing is claimed (status "publishing"), so answer at once and let the runner do the slow part
+    // with eBay. The result is read back from the listing (GET /publish-status).
+    if (req.body && req.body.background === true) {
+      enqueuePublish(req.userId, claimed);
+      return res.status(202).json({ success: true, queued: true, listing: claimed });
     }
 
     /**

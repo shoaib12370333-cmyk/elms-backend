@@ -45,6 +45,8 @@
     "test:credits": "node tests/credits.test.js",
     "test:bulk-pricing": "node tests/bulkPricing.test.js",
     "test:bulk-aspects": "node tests/bulkAspects.test.js",
+    "test:background-publish": "node tests/backgroundPublish.test.js",
+    "test:background-sync": "node tests/backgroundSync.test.js",
     "test:amazon-currency": "node tests/amazonCurrency.test.js",
     "test:order-profit-currency": "node tests/orderProfitCurrency.test.js",
     "test:stock-monitor-marketplace": "node tests/stockMonitorMarketplace.test.js",

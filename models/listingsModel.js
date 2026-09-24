@@ -663,6 +663,17 @@ async function listStalePublishingListings(maxAgeMinutes = 30) {
   return docs.map(serialize);
 }
 
+/**
+ * Where a few listings are in their publish (status, and the reason when it failed), for the page that watches a background
+ * publish. Only this user's listings; at most 100 ids.
+ */
+async function getListingStatuses(userId, ids) {
+  const clean = (Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter((id) => /^[a-f0-9]{24}$/i.test(id)).slice(0, 100);
+  if (!clean.length) return [];
+  const docs = await Listing.find({ userId, _id: { $in: clean } }).select('status errorMessage ebayListingId title').lean();
+  return docs.map((d) => ({ id: String(d._id), status: d.status, error_message: d.errorMessage || null, ebay_listing_id: d.ebayListingId || null, title: d.title || null }));
+}
+
 async function recoverStalePublishingListings(maxAgeMinutes = 30) {
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
   return Listing.updateMany(
@@ -681,6 +692,7 @@ module.exports = {
   listPublishingListings,
   listStalePublishingListings,
   recoverStalePublishingListings,
+  getListingStatuses,
   getListingBySku,
   listListings,
   listListingsByStatuses,
