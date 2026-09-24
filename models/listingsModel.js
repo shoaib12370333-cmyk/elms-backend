@@ -508,6 +508,8 @@ async function listPublishedListings(userId) {
   return docs.map((doc) => {
     const serialized = serialize(doc);
     serialized.asin = doc.importId?.asin || null;
+    // Which Amazon site the product came from: the stock and price checks must ask THAT site.
+    serialized.amazon_url = doc.importId?.amazonUrl || null;
     // The last Amazon price we saw for this product (used by the price
     // monitor as the baseline to detect a change against).
     serialized.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);

@@ -10,6 +10,7 @@ const { ACTION_COSTS } = require('../config/actionCosts');
 const { getActiveEbayAccount } = require('../models/ebayAccountsModel');
 const { materializeImageUrls } = require('../services/imageStorageService');
 const { requireAsinSku } = require('../services/skuService');
+const { currencyForAmazonUrl } = require('../config/amazonDomains');
 
 const MAX_IMAGES = 24;
 const MAX_TEXT = 20000;
@@ -95,7 +96,8 @@ function cleanProduct(input, amazonUrl) {
     bulletPoints: Array.isArray(input.bulletPoints) ? input.bulletPoints.map((x) => cleanText(x, 2000)).filter(Boolean).slice(0, 30) : [],
     images: cleanImages(input.images),
     price: Number.isFinite(price) && price >= 0 ? price : null,
-    currency: cleanText(input.currency, 8) || 'USD',
+    // The Amazon site decides the currency (the page's language or a default of USD gets AU, CA and EU sites wrong).
+    currency: currencyForAmazonUrl(amazonUrl) || cleanText(input.currency, 8) || 'USD',
     availability: cleanText(input.availability, 200),
     rating: input.rating == null ? null : (Number.isFinite(Number(input.rating)) ? Number(input.rating) : null),
     ratingsTotal: input.ratingsTotal == null ? null : cleanText(input.ratingsTotal, 40),

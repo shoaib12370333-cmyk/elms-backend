@@ -46,6 +46,13 @@
     return Number.isFinite(n) ? n : null;
   }
 
+  // The currency an Amazon site shows its prices in (the site is more reliable than the page language or a default).
+  const HOST_CURRENCY = { com: 'USD', 'co.uk': 'GBP', ca: 'CAD', 'com.au': 'AUD', de: 'EUR', fr: 'EUR', it: 'EUR', es: 'EUR', nl: 'EUR', be: 'EUR', ie: 'EUR', pl: 'PLN', se: 'SEK', in: 'INR', 'co.jp': 'JPY', 'com.mx': 'MXN', 'com.br': 'BRL', sg: 'SGD', ae: 'AED', sa: 'SAR', 'com.tr': 'TRY', eg: 'EGP' };
+  function currencyForHost(host) {
+    const m = String(host || '').toLowerCase().match(/(?:^|\.)amazon\.([a-z.]+)$/);
+    return (m && HOST_CURRENCY[m[1]]) || null;
+  }
+
   const PRODUCT_INFORMATION_NAMES = new Set([
     'asin', 'date first available', 'manufacturer', 'department', 'best sellers rank',
     'customer reviews', 'customer review', 'upc', 'ean', 'isbn'
@@ -713,7 +720,7 @@
     const asin = getAsin();
     const title = extractProductTitle(json);
     const priceRaw = json.offers?.price ?? text(document.querySelector('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice, #price_inside_buybox, .a-price .a-offscreen'), 100);
-    const currency = clean(json.offers?.priceCurrency || (document.documentElement.lang?.toUpperCase() === 'EN-GB' ? 'GBP' : 'USD'), 8) || 'USD';
+    const currency = currencyForHost(location.hostname) || clean(json.offers?.priceCurrency, 8) || 'USD';
     const specifications = collectItemSpecifications();
     const info = collectProductInformation(specifications);
     const categories = collectCategories();
