@@ -9,6 +9,7 @@ const { applyActionCostOverridesOnStartup } = require('./models/settingsModel');
 
 const fetchProductRoute = require('./routes/fetchProduct');
 const browserImportRoute = require('./routes/browserImport');
+const extensionRoute = require('./routes/extension');
 const fetchVariantRoute = require('./routes/fetchVariant');
 const listOnEbayRoute = require('./routes/listOnEbay');
 const listingsRoute = require('./routes/listings');
@@ -152,6 +153,8 @@ app.use('/api/fetch-product', fetchProductRoute);
 // Browser extension import: accepts product data extracted from the user's
 // currently open Amazon page; no Amazon server-side scraping is performed.
 app.use('/api/browser-import', browserImportRoute);
+// What the extension's panel shows on an Amazon page before an import (credits, stores, already-imported, VeRO words) - free.
+app.use('/api/extension', extensionRoute);
 
 // Variant fetch route (used when the user selects a variant)
 app.use('/api/fetch-variant', fetchVariantRoute);

@@ -152,6 +152,27 @@ async function getListingBySku(userId, sku) {
   return doc ? serialize(doc) : null;
 }
 
+/** Every listing of the user for one ASIN (SKU = ASIN), in any store and any state, newest first. */
+async function listListingsBySku(userId, sku) {
+  const normalized = normalizeAsinSku(sku);
+  if (!normalized) return [];
+  const docs = await Listing.find({ userId, sku: normalized }).sort({ updatedAt: -1 }).limit(20);
+  return docs.map(serialize);
+}
+
+/**
+ * The listing this ASIN already has in ONE store - the row an import would land on (see upsertDraft: a legacy listing with
+ * no store counts for the first store that asks). null when there is none.
+ */
+async function findListingInStore(userId, sku, ebayAccountId) {
+  const normalized = normalizeAsinSku(sku);
+  if (!normalized) return null;
+  const accountKey = ebayAccountId || null;
+  const doc = (await Listing.findOne({ userId, sku: normalized, ebayAccountId: accountKey }))
+    || (accountKey ? await Listing.findOne({ userId, sku: normalized, ebayAccountId: null }) : null);
+  return doc ? serialize(doc) : null;
+}
+
 async function listListingsByStatuses(userId, statuses = [], accountId = null) {
   const cleanStatuses = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
   await claimUnassignedListings(userId, accountId);
@@ -697,6 +718,8 @@ module.exports = {
   recoverStalePublishingListings,
   getListingStatuses,
   getListingBySku,
+  listListingsBySku,
+  findListingInStore,
   listListings,
   listListingsByStatuses,
   countListingsByStatus,

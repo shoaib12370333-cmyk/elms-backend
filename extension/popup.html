@@ -19,12 +19,15 @@ body{width:360px;margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 I
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 4px 14px rgba(15,23,42,.04)}
 .field{margin:0 0 12px}.field:last-child{margin-bottom:0}
 label{display:block;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin:0 0 6px}
-input{width:100%;height:40px;padding:0 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit;outline:none;transition:border-color .15s,box-shadow .15s}
-input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,100,210,.14)}
+input,select{width:100%;height:40px;padding:0 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit;outline:none;transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,100,210,.14)}
+input[type=checkbox]{width:16px;height:16px;padding:0;flex:none;margin:2px 0 0}
 button{width:100%;height:42px;border:0;border-radius:11px;background:var(--blue);color:#fff;font:inherit;font-weight:800;font-size:13.5px;cursor:pointer;transition:background .15s,transform .05s;display:flex;align-items:center;justify-content:center;gap:8px}
 button:hover{background:#0055b3}button:active{transform:translateY(1px)}
 button:disabled{opacity:.6;cursor:wait}
 .import-btn{height:46px;font-size:14.5px;background:linear-gradient(135deg,#0064d2,#4f46e5);box-shadow:0 8px 18px rgba(0,100,210,.25)}
+.second{background:#fff;color:var(--ink);border:1.5px solid #cbd5e1;height:38px;font-size:12.5px;margin-top:10px}
+.second:hover{background:#f1f5f9}
 .disconnect{background:#fff;color:#b91c1c;border:1.5px solid #fca5a5;height:36px;font-size:12.5px;margin-top:10px}
 .disconnect:hover{background:#fef2f2}
 .register-line{margin:12px 0 0;text-align:center;font-size:12px;color:var(--muted)}
@@ -34,6 +37,9 @@ button:disabled{opacity:.6;cursor:wait}
 .connected-label{font-size:10.5px;font-weight:800;letter-spacing:.06em;color:#4d7c0f}
 .username{font-size:15px;font-weight:800;margin-top:1px;word-break:break-word}
 .email{font-size:11.5px;color:var(--muted);word-break:break-word}
+.credits{margin-top:10px;padding:8px 10px;border-radius:9px;background:#f1f5f9;font-size:12px;color:#334155}
+.credits:empty{display:none}
+.credits b{color:var(--ink)}
 .steps{margin:0;padding:0;list-style:none;display:grid;gap:8px}
 .steps li{display:flex;gap:10px;align-items:flex-start;color:#475569;font-size:12.5px}
 .steps b{flex:none;width:20px;height:20px;border-radius:50%;background:#e8f1fd;color:var(--blue);display:grid;place-items:center;font-size:11px}
@@ -45,8 +51,20 @@ button:disabled{opacity:.6;cursor:wait}
 .status:empty{display:none}
 .connected-text{color:#4d7c0f;font-weight:800}
 .notconnected{color:#b91c1c;font-weight:800}
+.warn-text{color:#b45309;font-weight:800}
 .hidden{display:none!important}
 .footer{font-size:11px;color:#94a3b8;text-align:center;margin-top:12px}
+details.card{padding:0}
+details.card summary{cursor:pointer;padding:12px 14px;font-weight:800;font-size:12.5px;list-style:none;display:flex;justify-content:space-between;align-items:center}
+details.card summary::-webkit-details-marker{display:none}
+details.card summary::after{content:"+";font-size:16px;color:var(--muted)}
+details.card[open] summary::after{content:"\2212"}
+details.card .inner{padding:0 14px 14px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid2 .field{margin:0}
+.hint{font-size:11.5px;color:var(--muted);margin-top:8px}
+.opt{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:#334155;margin:0 0 10px;text-transform:none;letter-spacing:0;font-weight:500;cursor:pointer}
+.opt:last-child{margin-bottom:0}
 </style>
 </head>
 <body>
@@ -54,6 +72,7 @@ button:disabled{opacity:.6;cursor:wait}
 <div class="body">
   <div id="connectedCard" class="card hidden">
     <div class="connection"><div class="check">&#10003;</div><div><div class="connected-label">CONNECTED</div><div id="connectedUsername" class="username">ELMS Account</div><div id="connectedEmail" class="email"></div></div></div>
+    <div id="credits" class="credits"></div>
     <button id="disconnect" class="disconnect hidden">Disconnect ELMS</button>
   </div>
   <div id="keySection" class="card">
@@ -62,20 +81,43 @@ button:disabled{opacity:.6;cursor:wait}
     <div class="register-line">Don&rsquo;t have an ELMS account? <a id="registerLink" href="#">Register now</a></div>
   </div>
   <div class="card">
-    <div class="field"><label>Markup % (optional)</label><input id="markup" type="number" step="0.01" min="0" placeholder="0"></div>
+    <div id="storeField" class="field hidden"><label for="store">eBay store</label><select id="store"></select></div>
+    <div class="field"><label for="markup">Markup % (optional)</label><input id="markup" type="number" step="0.01" min="0" placeholder="0"></div>
     <button id="import" class="import-btn">Import current Amazon product</button>
+    <button id="openDraft" class="second hidden">Open the draft in ELMS</button>
     <div id="preview" class="preview hidden"></div>
     <div id="status" class="status"></div>
   </div>
+  <details class="card">
+    <summary>Profit settings</summary>
+    <div class="inner">
+      <div class="grid2">
+        <div class="field"><label for="feePct">eBay fee %</label><input id="feePct" type="number" step="0.05" min="0" max="60" placeholder="13"></div>
+        <div class="field"><label for="fixed">Fixed fee / order</label><input id="fixed" type="number" step="0.01" min="0" placeholder="0.30"></div>
+        <div class="field"><label for="adPct">Promoted listing %</label><input id="adPct" type="number" step="0.1" min="0" max="40" placeholder="0"></div>
+        <div class="field"><label for="targetPct">Wanted profit %</label><input id="targetPct" type="number" step="1" min="0" placeholder="30"></div>
+      </div>
+      <div class="hint">Used by the profit panel on Amazon pages. eBay takes its fees from the price the buyer pays, so a small markup can be a loss. &ldquo;Wanted profit&rdquo; is a share of what the product costs you.</div>
+    </div>
+  </details>
+  <details class="card">
+    <summary>Options</summary>
+    <div class="inner">
+      <label class="opt"><input id="autoOpen" type="checkbox"><span>Open the draft in ELMS after an import</span></label>
+      <label class="opt"><input id="skipVariants" type="checkbox"><span>Import only the option shown (do not read the other colours / sizes). Use it when Amazon asks for a captcha.</span></label>
+      <div class="hint">Shortcut: <b>Alt+Shift+E</b> imports the product on the page (change it at chrome://extensions/shortcuts).</div>
+    </div>
+  </details>
   <div class="card">
     <ul class="steps">
-      <li><b>1</b><span>Open an Amazon product page.</span></li>
+      <li><b>1</b><span>Open an Amazon product page. The <strong>ELMS panel</strong> shows your profit and warnings.</span></li>
       <li><b>2</b><span>Press the button above, or the ELMS button on the page.</span></li>
       <li><b>3</b><span>Find the draft in <strong>ELMS &rarr; Drafts</strong>, review it and publish.</span></li>
     </ul>
   </div>
   <div class="footer">ELMS &middot; Amazon &rarr; eBay</div>
 </div>
+<script src="logic.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>
