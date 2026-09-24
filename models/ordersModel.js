@@ -103,6 +103,30 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
  * Listing) so the frontend can show Buy Price and calculate Profit without
  * an extra API call.
  */
+const positive = (v) => { const n = Number(v); return v !== null && v !== undefined && v !== '' && Number.isFinite(n) && n > 0 ? n : null; };
+
+/**
+ * An order is linked to its listing by SKU when it is first saved. Orders that are not linked (the listing was made or
+ * published later, or eBay's SKU differs) get their listing found here by SKU or by eBay item number, so title, picture and
+ * cost still show. Read-only: nothing is written.
+ */
+async function attachMissingListings(userId, docs) {
+  const loose = docs.filter((d) => !d.listingId);
+  if (!loose.length) return docs;
+  const skus = [...new Set(loose.map((d) => d.sku).filter((s) => s && !/^EBAY-/.test(s)))];
+  const itemIds = [...new Set(loose.map((d) => d.legacyItemId).filter(Boolean))];
+  if (!skus.length && !itemIds.length) return docs;
+  const found = await Listing.find({ userId, $or: [...(skus.length ? [{ sku: { $in: skus } }] : []), ...(itemIds.length ? [{ ebayListingId: { $in: itemIds } }] : [])] })
+    .populate('importId').lean();
+  const accountOf = (x) => String((x && (x._id || x)) || '');
+  for (const d of loose) {
+    const matches = found.filter((l) => (d.sku && l.sku === d.sku) || (d.legacyItemId && l.ebayListingId === d.legacyItemId));
+    const listing = matches.find((l) => accountOf(l.ebayAccountId) === accountOf(d.ebayAccountId)) || matches[0];
+    if (listing) d.listingId = listing;
+  }
+  return docs;
+}
+
 async function listOrders(userId, accountId) {
   const query = accountId ? { userId, ebayAccountId: accountId } : { userId };
   const docs = await Order.find(query)
@@ -110,6 +134,7 @@ async function listOrders(userId, accountId) {
     .populate('ebayAccountId')
     .sort({ ebayCreatedAt: -1, createdAt: -1 })
     .lean();
+  await attachMissingListings(userId, docs);
 
   return docs.map((doc) => enrichOrder(serialize(doc), doc));
 }
@@ -127,7 +152,8 @@ function enrichOrder(serialized, doc) {
 
   // Prefer the listing's saved Amazon price snapshot. This keeps historical
   // order profit stable even if the source/import price changes later.
-  const savedAmazonPrice = listing?.amazonPrice ?? importRecord?.amazonPrice ?? null;
+  const savedAmazonPrice = positive(doc.buyPriceOverride) ?? positive(listing?.amazonPrice) ?? positive(importRecord?.amazonPrice) ?? positive(importRecord?.product?.price);
+  serialized.buy_price_manual = positive(doc.buyPriceOverride) !== null;
 
   serialized.listing_title = listing?.title || serialized.item_title || null;
   // Fall back to eBay's own picture for the line item (item.image.imageUrl)
@@ -151,6 +177,7 @@ async function getOrderById(userId, id) {
     .populate({ path: 'listingId', populate: { path: 'importId' } })
     .populate('ebayAccountId')
     .lean();
+  if (doc) await attachMissingListings(userId, [doc]);
   return doc ? enrichOrder(serialize(doc), doc) : null;
 }
 
@@ -203,6 +230,14 @@ function deriveOrderStatus(obj) {
   const overall = String(obj.ebayOrderFulfillmentStatus || '').toUpperCase();
   if (obj.fulfillmentStatus === 'shipped' || line === 'FULFILLED' || overall === 'FULFILLED') return 'shipped';
   return 'awaiting_shipment';
+}
+
+/** The seller's own cost of one unit (null clears it). Used for profit when the listing / import carry no price. */
+async function setBuyPrice(userId, id, price) {
+  const value = price === null || price === '' || price === undefined ? null : Number(price);
+  if (value !== null && (!Number.isFinite(value) || value <= 0 || value > 1000000)) throw new Error('Enter the cost of one item as a number above 0.');
+  const doc = await Order.findOneAndUpdate({ _id: id, userId }, { buyPriceOverride: value === null ? null : Number(value.toFixed(2)) }, { new: true });
+  return doc ? serialize(doc) : null;
 }
 
 async function setSellerNote(userId, id, note) {
@@ -262,4 +297,4 @@ function serialize(doc) {
   };
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, deriveOrderStatus };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, deriveOrderStatus };
