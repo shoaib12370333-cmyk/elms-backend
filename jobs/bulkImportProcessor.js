@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const BulkImportJob = require('../models/schemas/BulkImportJob');
 const { acquireLock } = require('../services/jobLockService');
 const { hasCredits } = require('../models/usersModel');
+const { ACTION_COSTS } = require('../config/actionCosts');
 const { toEasyparserDomain, submitBulkDetail, pollResult, normalizeDetail } = require('../services/easyparserAmazonService');
 const { setCachedProduct } = require('../services/productCacheService');
 
@@ -100,7 +101,7 @@ async function pollItems(job, saveProductAsDraft) {
 
 /** Attempts to save an item's already-fetched product as a draft, charging a credit. */
 async function trySave(job, item, saveProductAsDraft) {
-  if (!(await hasCredits(job.userId, 1))) {
+  if (!(await hasCredits(job.userId, ACTION_COSTS.AMAZON_IMPORT))) {
     item.status = 'fetched';
     item.outOfCredits = true;
     return;
@@ -111,6 +112,7 @@ async function trySave(job, item, saveProductAsDraft) {
     item.draftId = saved.draft?.id || null;
     item.outOfCredits = false;
   } catch (err) {
+    if (err.outOfCredits) { item.status = 'fetched'; item.outOfCredits = true; return; } // the credit could not be taken: wait, nothing was saved
     item.status = 'error';
     item.error = err.message || 'Could not save this product as a draft.';
   }

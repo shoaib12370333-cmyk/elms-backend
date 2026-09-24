@@ -44,8 +44,8 @@ router.get('/users', async (req, res) => {
 router.put('/users/:id/credits', async (req, res) => {
   const { creditBalance } = req.body;
 
-  if (creditBalance == null || Number.isNaN(Number(creditBalance)) || Number(creditBalance) < 0) {
-    return res.status(400).json({ success: false, error: 'A non-negative creditBalance is required.' });
+  if (creditBalance == null || creditBalance === '' || !Number.isFinite(Number(creditBalance)) || Number(creditBalance) < 0 || Number(creditBalance) > 10000000) {
+    return res.status(400).json({ success: false, error: 'A credit balance between 0 and 10,000,000 is required.' });
   }
 
   const user = await setCreditBalance(req.params.id, Number(creditBalance));

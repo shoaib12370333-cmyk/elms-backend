@@ -3,7 +3,8 @@ const router = express.Router();
 const { fetchProductByUrl, extractAsinFromUrl, detectCountryFromUrl } = require('../services/canopyAmazonService');
 const { createImport, updateImportImages } = require('../models/importsModel');
 const { upsertDraft } = require('../models/listingsModel');
-const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
+const { hasCredits } = require('../models/usersModel');
+const { withCredits } = require('../services/creditService');
 const { requireAuth } = require('../middleware/requireAuth');
 const { isValidAmazonUrl, assertAmazonMatchesStore } = require('../services/validationService');
 const { ACTION_COSTS } = require('../config/actionCosts');
@@ -27,9 +28,8 @@ const { getCachedProduct, setCachedProduct } = require('../services/productCache
  */
 async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount) {
   const activeEbayAccount = knownActiveEbayAccount !== undefined ? knownActiveEbayAccount : await getActiveEbayAccount(userId);
-  const charged = await spendCredit(userId, ACTION_COSTS.AMAZON_IMPORT);
-
-  try {
+  // Pays first (nothing is saved without the credit) and gives it back if saving fails.
+  return withCredits(userId, ACTION_COSTS.AMAZON_IMPORT, async () => {
     let suggestedPrice = null;
     if (product.price != null && markupPercent != null) {
       const markup = Number(markupPercent);
@@ -65,10 +65,13 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
     });
 
     return { product, suggestedPrice, importId: importRecord.id, draft };
-  } catch (err) {
-    if (charged) await refundCredit(userId, ACTION_COSTS.AMAZON_IMPORT);
-    throw err;
-  }
+  });
+}
+
+/** One product = country + ASIN, however the link is written. */
+function productKey(url) {
+  const asin = extractAsinFromUrl(url);
+  return detectCountryFromUrl(url) + ':' + (asin || url);
 }
 
 /**
@@ -163,18 +166,28 @@ router.post('/bulk', requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: 'Please import at most ' + bulkImportMax + ' links at a time.', max: bulkImportMax });
   }
 
+  // One credit per product: the same product pasted twice is imported (and charged) once, and the whole list has to be
+  // affordable before anything is fetched, so a list never stops half way for lack of credits.
+  const uniqueProducts = new Set(amazonUrls.filter((u) => isValidAmazonUrl(u)).map((u) => productKey(String(u).trim())));
+  const needed = uniqueProducts.size * ACTION_COSTS.AMAZON_IMPORT;
+  if (uniqueProducts.size && !(await hasCredits(req.userId, needed))) {
+    return res.status(402).json({ success: false, error: `This list has ${uniqueProducts.size} product${uniqueProducts.size === 1 ? '' : 's'} and needs ${needed} credit${needed === 1 ? '' : 's'}. You do not have enough.`, needed });
+  }
+
   const results = [];
+  const done = new Set();
 
   for (const amazonUrl of amazonUrls) {
     if (!isValidAmazonUrl(amazonUrl)) {
       results.push({ amazonUrl, success: false, error: 'That does not look like a valid Amazon product URL.' });
       continue;
     }
-
-    if (!(await hasCredits(req.userId, ACTION_COSTS.AMAZON_IMPORT))) {
-      results.push({ amazonUrl, success: false, error: 'Out of credits. Please open a support ticket to request more.' });
+    const key = productKey(String(amazonUrl).trim());
+    if (done.has(key)) {
+      results.push({ amazonUrl, success: false, skipped: true, error: 'The same product is already in this list. It is imported once and charged once.' });
       continue;
     }
+    done.add(key);
 
     try {
       const result = await fetchAndSaveDraft(req.userId, amazonUrl, markupPercent, req);
@@ -238,6 +251,11 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   }
   if (!items.length) {
     return res.status(400).json({ success: false, error: 'None of those links look like valid Amazon product links.', skipped });
+  }
+
+  const needed = items.length * ACTION_COSTS.AMAZON_IMPORT;
+  if (!(await hasCredits(req.userId, needed))) {
+    return res.status(402).json({ success: false, error: `This list has ${items.length} product${items.length === 1 ? '' : 's'} and needs ${needed} credit${needed === 1 ? '' : 's'}. You do not have enough.`, needed, products: items.length, skipped });
   }
 
   const { createBulkImportJob } = require('../models/bulkImportJobsModel');

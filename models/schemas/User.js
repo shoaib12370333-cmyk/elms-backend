@@ -28,6 +28,7 @@ const userSchema = new mongoose.Schema(
     // Credit balance for Amazon API usage (import fetches + stock checks).
     // Assigned manually by an admin - see routes/admin.js.
     creditBalance: { type: Number, default: 0 },
+    emailKey: { type: String, default: null, index: true }, // the mailbox with dots / +tags removed (services/signupBonusGuard.js)
 
     // Messages page: how ELMS answers new buyer messages. off = never, draft = AI writes a draft for you
     // to review, auto = AI also sends it (only for simple, low-risk messages).

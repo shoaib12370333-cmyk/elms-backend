@@ -17,6 +17,7 @@ async function connectDB() {
   await migrateOrderIndex();
   await migrateProductCacheTtl();
   await migrateUserExtensionKeyIndex();
+  await require('./services/signupBonusGuard').backfillEmailKeys().then((n) => n && console.log(`Filled emailKey on ${n} user(s).`)).catch((err) => console.warn('emailKey backfill skipped:', err.message));
 }
 
 /**

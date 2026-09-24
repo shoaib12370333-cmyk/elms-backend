@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/requireAuth');
-const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
+const { withCredits } = require('../services/creditService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const {
   fetchProductByAsin,
@@ -24,6 +24,22 @@ function resolveAsin(req) {
 }
 
 /**
+ * Runs one billable research call. The credit is taken BEFORE the Amazon call (an atomic charge that only succeeds while the
+ * balance covers it) and given back if the call fails, so a user cannot start many requests at once with one credit and get
+ * every result. `work` returns the fields to send back.
+ */
+async function billed(req, res, costKey, failMessage, work) {
+  try {
+    const payload = await withCredits(req.userId, ACTION_COSTS[costKey], work);
+    res.json({ success: true, ...payload });
+  } catch (err) {
+    if (err.outOfCredits) return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
+    console.error(`${costKey} error:`, err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || failMessage });
+  }
+}
+
+/**
  * GET /api/tools/review-analyzer?asin=...&country=US
  * Requires a valid session token and available credits.
  *
@@ -35,19 +51,7 @@ router.get('/review-analyzer', requireAuth, async (req, res) => {
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
-
-  if (!(await hasCredits(req.userId, ACTION_COSTS.REVIEW_ANALYZER))) {
-    return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
-  }
-
-  try {
-    const result = await fetchProductReviews(asin, req.query.country || 'US');
-    await spendCredit(req.userId, ACTION_COSTS.REVIEW_ANALYZER);
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('review-analyzer error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not fetch reviews for this product.' });
-  }
+  await billed(req, res, 'REVIEW_ANALYZER', 'Could not fetch reviews for this product.', () => fetchProductReviews(asin, req.query.country || 'US'));
 });
 
 /**
@@ -64,23 +68,8 @@ router.get('/keyword-rank', requireAuth, async (req, res) => {
   if (!keyword || !asin) {
     return res.status(400).json({ success: false, error: 'Both a keyword and an asin (or url) are required.' });
   }
-
-  if (!(await hasCredits(req.userId, ACTION_COSTS.KEYWORD_RANK_CHECKER))) {
-    return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
-  }
-
-  const charged = await spendCredit(req.userId, ACTION_COSTS.KEYWORD_RANK_CHECKER);
-
-  try {
-    const result = await findKeywordRank(keyword, asin, { country: req.query.country || 'US' });
-    res.json({ success: true, keyword, asin, ...result });
-  } catch (err) {
-    console.error('keyword-rank error:', err.message);
-    // The search itself failed (not just "not found") - refund since the
-    // user got no usable result at all.
-    if (charged) await refundCredit(req.userId, ACTION_COSTS.KEYWORD_RANK_CHECKER);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not check keyword rank.' });
-  }
+  // A search that fails (not just "not found") gives the credit back: the user got no usable result.
+  await billed(req, res, 'KEYWORD_RANK_CHECKER', 'Could not check keyword rank.', async () => ({ keyword, asin, ...(await findKeywordRank(keyword, asin, { country: req.query.country || 'US' })) }));
 });
 
 /**
@@ -95,19 +84,7 @@ router.get('/category-finder', requireAuth, async (req, res) => {
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
-
-  if (!(await hasCredits(req.userId, ACTION_COSTS.CATEGORY_FINDER))) {
-    return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
-  }
-
-  try {
-    const result = await findProductCategories(asin, req.query.country || 'US');
-    await spendCredit(req.userId, ACTION_COSTS.CATEGORY_FINDER);
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('category-finder error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not find categories for this product.' });
-  }
+  await billed(req, res, 'CATEGORY_FINDER', 'Could not find categories for this product.', () => findProductCategories(asin, req.query.country || 'US'));
 });
 
 /**
@@ -122,23 +99,11 @@ router.get('/bestseller-explorer', requireAuth, async (req, res) => {
   if (!categoryId) {
     return res.status(400).json({ success: false, error: 'A categoryId is required.' });
   }
-
-  if (!(await hasCredits(req.userId, ACTION_COSTS.BESTSELLER_EXPLORER))) {
-    return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
-  }
-
-  try {
-    const result = await fetchCategoryDetails(categoryId, {
-      country: req.query.country || 'US',
-      page: page ? Number(page) : undefined,
-      sort: 'FEATURED',
-    });
-    await spendCredit(req.userId, ACTION_COSTS.BESTSELLER_EXPLORER);
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('bestseller-explorer error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not load this category.' });
-  }
+  await billed(req, res, 'BESTSELLER_EXPLORER', 'Could not load this category.', () => fetchCategoryDetails(categoryId, {
+    country: req.query.country || 'US',
+    page: page ? Number(page) : undefined,
+    sort: 'FEATURED',
+  }));
 });
 
 /**
@@ -154,19 +119,10 @@ router.get('/image-extractor', requireAuth, async (req, res) => {
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
-
-  if (!(await hasCredits(req.userId, ACTION_COSTS.IMAGE_EXTRACTOR))) {
-    return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
-  }
-
-  try {
+  await billed(req, res, 'IMAGE_EXTRACTOR', 'Could not fetch images for this product.', async () => {
     const product = await fetchProductByAsin(asin, req.query.country || 'US');
-    await spendCredit(req.userId, ACTION_COSTS.IMAGE_EXTRACTOR);
-    res.json({ success: true, asin, title: product.title, images: product.images });
-  } catch (err) {
-    console.error('image-extractor error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not fetch images for this product.' });
-  }
+    return { asin, title: product.title, images: product.images };
+  });
 });
 
 /**
@@ -182,19 +138,7 @@ router.get('/listing-grader', requireAuth, async (req, res) => {
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
-
-  if (!(await hasCredits(req.userId, ACTION_COSTS.LISTING_GRADER))) {
-    return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
-  }
-
-  try {
-    const result = await gradeListing(asin, req.query.country || 'US');
-    await spendCredit(req.userId, ACTION_COSTS.LISTING_GRADER);
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('listing-grader error:', err.message);
-    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not grade this listing.' });
-  }
+  await billed(req, res, 'LISTING_GRADER', 'Could not grade this listing.', () => gradeListing(asin, req.query.country || 'US'));
 });
 
 module.exports = router;

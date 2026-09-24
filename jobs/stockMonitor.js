@@ -8,8 +8,8 @@ const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const { acquireLock } = require('../services/jobLockService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const {
-  hasCredits,
   spendCredit,
+  refundCredit,
   listUsersDueForStockCheck,
   markStockCheckRan,
 } = require('../models/usersModel');
@@ -38,14 +38,20 @@ async function runStockCheckForUser(user) {
       continue;
     }
 
-    if (!(await hasCredits(user.id, ACTION_COSTS.STOCK_MONITORING))) {
+    // Pay first (an atomic charge, so a check is never run for free); the credit comes back if the check itself fails.
+    if (!(await spendCredit(user.id, ACTION_COSTS.STOCK_MONITORING))) {
       console.warn(`[stock-monitor] ${user.email} ran out of credits mid-check; remaining listings will be checked next time they're due.`);
       break;
     }
 
     try {
-      const availability = await checkAvailabilityByAsin(listing.asin);
-      await spendCredit(user.id, ACTION_COSTS.STOCK_MONITORING);
+      let availability;
+      try {
+        availability = await checkAvailabilityByAsin(listing.asin);
+      } catch (checkErr) {
+        await refundCredit(user.id, ACTION_COSTS.STOCK_MONITORING).catch((e) => console.error(`[credits] REFUND FAILED for user ${user.id}: ${e.message}`));
+        throw checkErr;
+      }
 
       if (!availability.inStock && listing.stock_monitoring !== false) {
         console.log(`[stock-monitor] ${listing.sku} is out of stock on Amazon (${availability.availabilityText}). Ending eBay listing...`);
