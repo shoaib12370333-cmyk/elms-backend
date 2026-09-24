@@ -71,7 +71,8 @@
     "test:extension-panel": "node tests/extensionPanel.test.js",
     "test:extension-background": "node tests/extensionBackground.test.js",
     "test:extension-bulk": "node tests/extensionBulk.test.js",
-    "test:extension-market": "node tests/extensionMarket.test.js"
+    "test:extension-market": "node tests/extensionMarket.test.js",
+    "test:support-admin-chat": "node tests/supportAdminChat.test.js"
   },
   "engines": {
     "node": "22.13.0"
