@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { createImport, updateImportImages } = require('../models/importsModel');
 const { upsertDraft } = require('../models/listingsModel');
-const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
+const { hasCredits } = require('../models/usersModel');
+const { withCredits } = require('../services/creditService');
 const { requireAuth } = require('../middleware/requireAuth');
 const { isValidAmazonUrl, assertAmazonMatchesStore } = require('../services/validationService');
 const { ACTION_COSTS } = require('../config/actionCosts');
@@ -139,11 +140,10 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    const charged = await spendCredit(req.userId, ACTION_COSTS.BROWSER_IMPORT_SCRAPE);
-
     let importRecord;
     let draft;
-    try {
+    // Pays first (nothing is saved without the credit) and gives it back if saving fails.
+    await withCredits(req.userId, ACTION_COSTS.BROWSER_IMPORT_SCRAPE, async () => {
       importRecord = await createImport(req.userId, normalized, suggestedPrice, amazonUrl.trim(), activeEbayAccount?.id || null);
       const storedImages = normalized.images.length
         ? await materializeImageUrls({ urls: normalized.images, userId: req.userId, listingId: importRecord.id, req })
@@ -171,13 +171,7 @@ router.post('/', requireAuth, async (req, res) => {
         amazonPrice: normalized.price,
         marginAmount: suggestedPrice != null && normalized.price != null ? Number((suggestedPrice - normalized.price).toFixed(2)) : null,
       });
-    } catch (err) {
-      // We already have the product data (the part credits actually pay
-      // for), but saving it failed - refund so the user isn't charged for
-      // a draft they never actually got. Mirrors routes/fetchProduct.js.
-      if (charged) await refundCredit(req.userId, ACTION_COSTS.BROWSER_IMPORT_SCRAPE);
-      throw err;
-    }
+    });
 
     return res.json({ success: true, source: 'browser', product: normalized, suggestedPrice, importId: importRecord.id, draft });
   } catch (err) {

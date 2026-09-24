@@ -2,7 +2,7 @@ const cron = require('node-cron');
 const { syncAccountOrders } = require('../services/orderSyncService');
 const { getEbayAccountRefreshToken, getEbayAccountById } = require('../models/ebayAccountsModel');
 const { acquireLock } = require('../services/jobLockService');
-const { hasCredits, spendCredit } = require('../models/usersModel');
+const { spendCredit } = require('../models/usersModel');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const User = require('../models/schemas/User');
@@ -27,19 +27,23 @@ async function syncOneAccount(userId, accountId, ebayUsername, lastSyncAttemptAt
  */
 async function chargeDailyOrderSyncFeeIfDue(user) {
   const now = new Date();
-  const last = user.lastOrderSyncCreditChargeAt;
-  const alreadyChargedToday = last && last.toDateString() === now.toDateString();
-  if (alreadyChargedToday) return;
+  const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-  const cost = user.orderSyncMode === 'realtime'
+  // The day is claimed in ONE atomic step, so the periodic job and a webhook-triggered sync running at the same moment
+  // (or two accounts of one user) can never both charge for the same day.
+  const claimed = await User.findOneAndUpdate(
+    { _id: user._id, $or: [{ lastOrderSyncCreditChargeAt: null }, { lastOrderSyncCreditChargeAt: { $lt: startOfToday } }] },
+    { $set: { lastOrderSyncCreditChargeAt: now } },
+    { new: false, projection: { orderSyncMode: 1 } }
+  );
+  if (!claimed) return; // already handled today
+
+  const cost = (claimed.orderSyncMode || user.orderSyncMode) === 'realtime'
     ? ACTION_COSTS.ORDER_SYNC_REALTIME_DAILY
     : ACTION_COSTS.ORDER_SYNC_POLLING_DAILY;
 
-  if (await hasCredits(user._id.toString(), cost)) {
-    await spendCredit(user._id.toString(), cost);
-  }
-
-  await User.updateOne({ _id: user._id }, { lastOrderSyncCreditChargeAt: now });
+  // A user without enough credits is still synced (missing orders would cost them real money); that day is simply free.
+  await spendCredit(user._id.toString(), cost);
 }
 
 /**
@@ -150,4 +154,4 @@ function startOrderSync() {
   console.log('[order-sync] Order sync scheduled (every 5 minutes, per-user interval respected).');
 }
 
-module.exports = { startOrderSync, runOrderSync, triggerImmediateSyncForNotification };
+module.exports = { startOrderSync, runOrderSync, triggerImmediateSyncForNotification, chargeDailyOrderSyncFeeIfDue };

@@ -21,7 +21,9 @@ function notifyNewUser(email, method) {
   } catch (e) { /* ignore */ }
 }
 
-async function findOrCreateUser({ googleId, email, name, picture }) {
+const { emailKey } = require('../services/signupBonusGuard');
+
+async function findOrCreateUser({ googleId, email, name, picture }, { welcomeBonus = true } = {}) {
   let user = await User.findOne({ googleId });
 
   if (!user) {
@@ -38,8 +40,8 @@ async function findOrCreateUser({ googleId, email, name, picture }) {
       await user.save();
     } else {
       // A genuinely brand-new account - apply the welcome bonus if enabled.
-      const creditBalance = await getWelcomeBonusAmount();
-      user = await User.create({ googleId, email, name, picture, creditBalance });
+      const creditBalance = welcomeBonus ? await getWelcomeBonusAmount() : 0;
+      user = await User.create({ googleId, email, emailKey: emailKey(email), name, picture, creditBalance });
       notifyNewUser(email, 'Google');
     }
   } else {
@@ -71,7 +73,7 @@ async function getWelcomeBonusAmount() {
  * Throws if the username is already taken by someone else, or if an
  * existing account with this email already has a password set.
  */
-async function registerWithPassword({ username, email, password }) {
+async function registerWithPassword({ username, email, password }, { welcomeBonus = true } = {}) {
   const existingUsername = await User.findOne({ username });
   if (existingUsername) {
     const err = new Error('That username is already taken.');
@@ -95,8 +97,8 @@ async function registerWithPassword({ username, email, password }) {
     await user.save();
   } else {
     // A genuinely brand-new account - apply the welcome bonus if enabled.
-    const creditBalance = await getWelcomeBonusAmount();
-    user = await User.create({ username, email, passwordHash, name: username, creditBalance });
+    const creditBalance = welcomeBonus ? await getWelcomeBonusAmount() : 0;
+    user = await User.create({ username, email, emailKey: emailKey(email), passwordHash, name: username, creditBalance });
     notifyNewUser(email, 'email and password');
   }
 

@@ -29,6 +29,8 @@ function sendAuthError(res, err) {
 }
 
 // New accounts cannot be created from a blocked address or browser (nobody new can be one of the accounts the admin let through).
+const { welcomeBonusDecision } = require('../services/signupBonusGuard');
+
 async function assertNewAccountAllowed(req) {
   const denied = await accessGuard.checkNewAccount(requestContext(req));
   if (denied) throw accessGuard.blockedError(denied);
@@ -104,8 +106,11 @@ router.post('/google', async (req, res) => {
 
   try {
     const profile = await verifyGoogleToken(credential);
-    if (!(await UserModel.exists({ email: String(profile.email || '').toLowerCase() }))) await assertNewAccountAllowed(req);
-    const user = await findOrCreateUser(profile);
+    const isNewAccount = !(await UserModel.exists({ email: String(profile.email || '').toLowerCase() }));
+    if (isNewAccount) await assertNewAccountAllowed(req);
+    const bonus = isNewAccount ? await welcomeBonusDecision(profile.email, requestContext(req)) : { allowed: true };
+    if (!bonus.allowed) console.warn('[signup-bonus] not given to ' + profile.email + ': ' + bonus.reason);
+    const user = await findOrCreateUser(profile, { welcomeBonus: bonus.allowed });
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'google'));
 
     res.json({ success: true, sessionToken, user });
@@ -142,7 +147,9 @@ router.post('/register', registerLimiter, async (req, res) => {
 
   try {
     await assertNewAccountAllowed(req);
-    const user = await registerWithPassword({ username: username.trim(), email: email.trim().toLowerCase(), password });
+    const bonus = await welcomeBonusDecision(email.trim().toLowerCase(), requestContext(req));
+    if (!bonus.allowed) console.warn('[signup-bonus] not given to ' + email.trim().toLowerCase() + ': ' + bonus.reason);
+    const user = await registerWithPassword({ username: username.trim(), email: email.trim().toLowerCase(), password }, { welcomeBonus: bonus.allowed });
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'register'));
     res.json({ success: true, sessionToken, user });
   } catch (err) {
