@@ -28,6 +28,9 @@ stub('services/emailService', {
   sendAdminAlert: async (m) => { db.alerts.push(m); },
   sendPurchaseReceiptEmail: async (m) => { db.receipts.push(m); },
 });
+// the referral programme (tests/referral.test.js) has nobody referred here
+stub('models/referralsModel', { findReferralByReferred: async () => null });
+stub('models/settingsModel', { getReferralSettings: async () => ({ enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
 const reset = () => { db.users.clear(); db.purchases.clear(); db.alerts.length = 0; db.receipts.length = 0; db.users.set('u1', { email: 'buyer@x.com', creditBalance: 5, maxEbayAccounts: 1, planName: null }); };
 
 const cashtap = require('../services/cashtapService');

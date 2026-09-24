@@ -10,7 +10,10 @@ const purchaseSchema = new mongoose.Schema(
     provider: { type: String, enum: ['paddle', 'cashtap'], default: 'paddle' },
     providerTransactionId: { type: String, required: true, unique: true }, // Paddle transaction ID - also used to prevent double-crediting
 
-    priceUsd: { type: Number, required: true },
+    priceUsd: { type: Number, required: true }, // what the buyer paid
+    listPriceUsd: { type: Number, default: null }, // the plan's price before a discount
+    discountPercent: { type: Number, default: 0 }, // referral discount applied to this purchase
+    referralId: { type: mongoose.Schema.Types.ObjectId, ref: 'Referral', default: null },
     creditsGranted: { type: Number, required: true },
     status: { type: String, enum: ['completed', 'refunded'], default: 'completed' },
   },

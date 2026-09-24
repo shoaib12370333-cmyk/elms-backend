@@ -1,5 +1,6 @@
 const cashtap = require('./cashtapService');
 const { fulfillPurchase } = require('./purchaseFulfillmentService');
+const referrals = require('./referralService');
 
 /**
  * Buying a plan with CashTap.
@@ -27,19 +28,30 @@ function assertCashtapUrl(url) {
   if (!/(^|\.)cashtap\.cash$/i.test(host)) throw Object.assign(new Error('CashTap returned an unexpected checkout address.'), { statusCode: 502 });
 }
 
-async function startCheckout({ user, plan }) {
+/**
+ * @param {{ user: object, plan: object, discount?: { referralId: string, percent: number } | null }} p
+ * discount: a referral discount the server already decided (services/referralService.js discountFor). The amount asked of the
+ * buyer is the plan's price minus that percent; the percent travels in the session's metadata so the payment can be checked.
+ */
+async function startCheckout({ user, plan, discount = null }) {
+  const percent = discount ? referrals.clampPercent(discount.percent) : 0;
+  const amount = percent > 0 ? referrals.priceAfterDiscount(plan.priceUsd, percent) : plan.priceUsd;
   const session = await cashtap.createSession({
-    amount: plan.priceUsd,
+    amount,
     lineItems: [{
-      name: plan.name,
+      name: plan.name + (percent > 0 ? ' (' + percent + '% referral discount)' : ''),
       description: plan.credits.toLocaleString('en-US') + ' credits' + (plan.maxEbayAccounts ? ' + ' + plan.maxEbayAccounts + ' eBay account' + (plan.maxEbayAccounts === 1 ? '' : 's') : ''),
       quantity: 1,
-      unit_amount: plan.priceUsd,
+      unit_amount: amount,
     }],
     customerEmail: user.email || undefined,
     successUrl: frontendUrl() + '/?payment=cashtap',
     cancelUrl: frontendUrl() + '/?payment=cancelled',
-    metadata: { elms_user_id: String(user.id), elms_plan_id: String(plan.id) },
+    metadata: {
+      elms_user_id: String(user.id),
+      elms_plan_id: String(plan.id),
+      ...(percent > 0 ? { elms_discount_percent: String(percent), elms_referral_id: String(discount.referralId) } : {}),
+    },
   });
   assertCashtapUrl(session.url);
   return { sessionId: session.id, url: session.url };
@@ -73,9 +85,13 @@ async function grantForSession(session, { expectUserId } = {}) {
     return { status: 'completed', granted: false, reason: 'no_plan' };
   }
 
-  // The amount is set by our server from the plan; a session whose amount differs was not created by us.
-  if (Math.abs(Number(session.amount) - Number(plan.priceUsd)) > 0.01) {
-    await alertAdmin('CashTap payment with an unexpected amount', ['Session: ' + session.id, 'Plan: ' + plan.name + ' ($' + plan.priceUsd + ')', 'Session amount: $' + session.amount, 'Nobody was credited. Please check it by hand.']);
+  // The amount is set by our server from the plan (less the referral discount it decided when the session was made); a session
+  // whose amount differs was not created by us.
+  const discountPercent = referrals.clampPercent(meta.elms_discount_percent);
+  const referralId = discountPercent > 0 && /^[a-f0-9]{24}$/i.test(String(meta.elms_referral_id || '')) ? String(meta.elms_referral_id) : null;
+  const expected = referralId ? referrals.priceAfterDiscount(plan.priceUsd, discountPercent) : Number(plan.priceUsd);
+  if (Math.abs(Number(session.amount) - expected) > 0.01) {
+    await alertAdmin('CashTap payment with an unexpected amount', ['Session: ' + session.id, 'Plan: ' + plan.name + ' ($' + plan.priceUsd + ')' + (referralId ? ' with ' + discountPercent + '% referral discount = $' + expected : ''), 'Session amount: $' + session.amount, 'Nobody was credited. Please check it by hand.']);
     return { status: 'completed', granted: false, reason: 'amount_mismatch' };
   }
   const received = session.amount_received == null ? Number(session.amount) : Number(session.amount_received);
@@ -84,7 +100,10 @@ async function grantForSession(session, { expectUserId } = {}) {
     return { status: 'completed', granted: false, reason: 'underpaid' };
   }
 
-  const done = await fulfillPurchase({ userId, plan, provider: 'cashtap', transactionId: session.id, priceUsd: Number(session.amount) });
+  const done = await fulfillPurchase({
+    userId, plan, provider: 'cashtap', transactionId: session.id, priceUsd: Number(session.amount),
+    listPriceUsd: Number(plan.priceUsd), discountPercent: referralId ? discountPercent : 0, referralId,
+  });
   return { status: 'completed', ...done };
 }
 

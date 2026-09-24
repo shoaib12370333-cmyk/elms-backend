@@ -119,6 +119,39 @@ async function updateAiSettings(input = {}) {
   return serializeAi(doc.toObject());
 }
 
+const REFERRAL_DEFAULTS = { referralEnabled: true, referralDiscountPercent: 10, referralDiscountUses: 1, referralDiscountDays: 0, referralRewardCredits: 0 };
+const REFERRAL_RANGES = { referralDiscountPercent: [0, 90], referralDiscountUses: [1, 100], referralDiscountDays: [0, 3650], referralRewardCredits: [0, 1000000] };
+
+/** The referral offer as the admin set it (defaults when nothing was saved yet). */
+async function getReferralSettings() {
+  const doc = await Settings.findOne({ key: 'global' }).lean();
+  const d = doc || {};
+  const num = (k) => (Number.isFinite(Number(d[k])) && d[k] !== null && d[k] !== undefined ? Number(d[k]) : REFERRAL_DEFAULTS[k]);
+  return {
+    enabled: d.referralEnabled === undefined || d.referralEnabled === null ? REFERRAL_DEFAULTS.referralEnabled : !!d.referralEnabled,
+    discountPercent: num('referralDiscountPercent'),
+    discountUses: Math.max(1, Math.floor(num('referralDiscountUses'))),
+    discountDays: Math.max(0, Math.floor(num('referralDiscountDays'))),
+    rewardCredits: Math.max(0, Math.floor(num('referralRewardCredits'))),
+  };
+}
+
+async function updateReferralSettings(input = {}) {
+  const update = {};
+  if (input.enabled !== undefined) update.referralEnabled = !!input.enabled;
+  const map = { discountPercent: 'referralDiscountPercent', discountUses: 'referralDiscountUses', discountDays: 'referralDiscountDays', rewardCredits: 'referralRewardCredits' };
+  const labels = { discountPercent: 'The discount', discountUses: 'The number of discounted purchases', discountDays: 'The number of days', rewardCredits: 'The reward' };
+  for (const [k, field] of Object.entries(map)) {
+    if (input[k] === undefined) continue;
+    const n = Number(input[k]);
+    const [lo, hi] = REFERRAL_RANGES[field];
+    if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(labels[k] + ' must be a number between ' + lo + ' and ' + hi + '.');
+    update[field] = k === 'discountPercent' ? Math.round(n * 100) / 100 : Math.floor(n);
+  }
+  await Settings.findOneAndUpdate({ key: 'global' }, update, { new: true, upsert: true });
+  return getReferralSettings();
+}
+
 const LIMIT_DEFAULTS = { bulkImportMax: 25, bulkJobMax: 1000, mailBatchSize: 20, mailDailyCap: 200, productCacheDays: 7 };
 const LIMIT_RANGES = { bulkImportMax: [1, 50], bulkJobMax: [1, 5000], mailBatchSize: [1, 100], mailDailyCap: [1, 100000], productCacheDays: [1, 90] };
 
@@ -265,4 +298,6 @@ module.exports = {
   updateAiSettings,
   getLimits,
   updateLimits,
+  getReferralSettings,
+  updateReferralSettings,
 };

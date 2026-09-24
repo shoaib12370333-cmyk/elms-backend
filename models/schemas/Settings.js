@@ -52,6 +52,16 @@ const settingsSchema = new mongoose.Schema(
     // charged either way (see routes/fetchProduct.js).
     productCacheDays: { type: Number, default: 7, min: 1, max: 90 },
 
+    // Referral programme (Admin -> Referrals). A friend who signs up with someone's code gets referralDiscountPercent off
+    // their first referralDiscountUses purchase(s) (for referralDiscountDays days after signing up, 0 = no limit); the person
+    // who referred them earns referralRewardCredits when that friend makes their first purchase. An admin can override the
+    // discount and the reward for a single referrer (User.referralDiscountPercent / referralRewardCredits).
+    referralEnabled: { type: Boolean, default: true },
+    referralDiscountPercent: { type: Number, default: 10, min: 0, max: 90 },
+    referralDiscountUses: { type: Number, default: 1, min: 1, max: 100 },
+    referralDiscountDays: { type: Number, default: 0, min: 0, max: 3650 },
+    referralRewardCredits: { type: Number, default: 0, min: 0, max: 1000000 },
+
     actionCosts: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }

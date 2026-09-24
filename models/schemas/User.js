@@ -84,11 +84,21 @@ const userSchema = new mongoose.Schema(
     // every explicit null as the same value, so `default: null` made the second signup ever fail
     // with E11000 (a sparse index still indexes explicit nulls).
     extensionKeyHash: { type: String, default: undefined },
+
+    // Referral programme (services/referralService.js). The code is what a friend types (or finds in ?ref=) when signing up.
+    // No default, like extensionKeyHash: accounts without a code must have the field MISSING so the unique index ignores them.
+    referralCode: { type: String, default: undefined },
+    // Set by an admin for this person as a referrer: the discount THEIR friends get (null = the default from Admin -> Referrals),
+    // the credits they earn when a friend buys (null = the default), and a switch that stops their code from working.
+    referralDiscountPercent: { type: Number, default: null },
+    referralRewardCredits: { type: Number, default: null },
+    referralBlocked: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 // Unique only among users that actually have a key.
 userSchema.index({ extensionKeyHash: 1 }, { unique: true, partialFilterExpression: { extensionKeyHash: { $type: 'string' } } });
+userSchema.index({ referralCode: 1 }, { unique: true, partialFilterExpression: { referralCode: { $type: 'string' } } });
 
 module.exports = mongoose.model('User', userSchema);
