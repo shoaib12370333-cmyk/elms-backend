@@ -11,6 +11,7 @@ let token = 'tok';
 let liveFails = false;
 let profileCalls = 0;
 let profileGate; // resolves when the test lets the background refresh finish
+let orderDoc = null;
 
 const query = (result) => { const q = { populate: () => q, select: () => q, lean: async () => result, catch: () => q, then: (f) => Promise.resolve(result).then(f) }; return q; };
 const fakes = {
@@ -31,7 +32,7 @@ const fakes = {
     sendMessage: async () => null,
     updateConversationStatus: async () => { log.push('ebayRead'); },
   },
-  '../models/schemas/Order': { findOne: () => query(null) },
+  '../models/schemas/Order': { findOne: () => query(orderDoc) },
   '../models/schemas/Listing': { findOne: () => query({ _id: 'l1', title: 'Blue lamp', mainImage: 'img', ebayItemId: '123' }) },
   '../jobs/conversationSync': { syncConversationsForUser: async () => ({}) },
 };
@@ -106,5 +107,14 @@ const baseConv = () => ({ id: 'c1', ebay_account_id: 'a1', ebay_conversation_id:
   conv = null;
   res = await open();
   assert.strictEqual(res.statusCode, 404);
+  // an order is the context: the item number buyers see is the eBay item id (not the order id)
+  orderDoc = { _id: 'o1', ebayOrderId: '12-34567-89012', legacyItemId: '176543210987', salePrice: 249.99, currency: 'GBP', quantity: 1, listingId: null };
+  conv = baseConv();
+  res = await open();
+  assert.strictEqual(res.body.context.type, 'order');
+  assert.strictEqual(res.body.context.ebay_item_id, '176543210987');
+  assert.strictEqual(res.body.context.ebay_order_id, '12-34567-89012');
+  orderDoc = null;
+
   console.log('message thread tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
