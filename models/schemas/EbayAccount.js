@@ -14,6 +14,12 @@ const ebayAccountSchema = new mongoose.Schema(
     // Private ELMS label used to identify this connected seller in the UI.
     // It does not modify the real eBay username.
     displayName: { type: String, default: null, trim: true, maxlength: 60 },
+    // The seller's eBay Store name, read from eBay (GetStore) and remembered here. '' = looked up and the seller has no store.
+    storeName: { type: String, default: null, trim: true, maxlength: 120 },
+    // 1, 2, 3 ... per ELMS user: the name shown for a store that has neither an eBay Store name nor a known username.
+    storeNumber: { type: Number, default: null },
+    // When eBay was last asked who this account is (username / store name), so it is not asked on every page load.
+    identityCheckedAt: { type: Date, default: null },
     refreshTokenEncrypted: { type: String, required: true },
     refreshTokenExpiresAt: { type: Date, default: null },
 

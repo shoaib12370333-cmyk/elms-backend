@@ -1,6 +1,13 @@
 const EbayAccount = require('./schemas/EbayAccount');
 const User = require('./schemas/User');
 const { encrypt, decrypt } = require('../services/cryptoService');
+const { accountLabel, publicUsername, isPlaceholderUsername } = require('../services/accountLabel');
+
+/** The next free "Store N" number of a user (numbers are never reused after a store is removed). */
+async function nextStoreNumber(userId) {
+  const top = await EbayAccount.findOne({ userId, storeNumber: { $ne: null } }).sort({ storeNumber: -1 }).select('storeNumber').lean();
+  return (top?.storeNumber || 0) + 1;
+}
 
 /**
  * Returns how many eBay accounts a user currently has connected, and how
@@ -20,12 +27,19 @@ async function getAccountLimitStatus(userId) {
  *
  * Throws a friendly, actionable error if the user is already at their limit.
  */
-async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, marketplaceId = 'EBAY_US' }) {
+async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, marketplaceId = 'EBAY_US', storeName = null, identityCheckedAt = null }) {
   const { connected, max } = await getAccountLimitStatus(userId);
 
   // If this exact eBay account is already connected, this is a
   // reconnect/refresh, not a new connection - don't count it against the limit.
-  const existing = await EbayAccount.findOne({ userId, ebayUserId });
+  let existing = await EbayAccount.findOne({ userId, ebayUserId });
+
+  // A store that was connected while eBay gave no username is saved under a stand-in name. Connecting it again, now with the real
+  // username, is the same store: it takes its place (with all its listings and orders) instead of becoming a second one.
+  if (!existing && !isPlaceholderUsername(ebayUserId)) {
+    const stand = (await EbayAccount.find({ userId, marketplaceId: marketplaceId || 'EBAY_US' })).filter((a) => isPlaceholderUsername(a.ebayUserId));
+    if (stand.length === 1) { existing = stand[0]; existing.ebayUserId = ebayUserId; }
+  }
 
   if (!existing && connected >= max) {
     const err = new Error(
@@ -43,6 +57,9 @@ async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, mar
     existing.refreshTokenEncrypted = refreshTokenEncrypted;
     existing.refreshTokenExpiresAt = expiresAt || null;
     existing.marketplaceId = marketplaceId || existing.marketplaceId || 'EBAY_US';
+    if (storeName !== null) existing.storeName = storeName;
+    if (identityCheckedAt) existing.identityCheckedAt = identityCheckedAt;
+    if (!existing.storeNumber) existing.storeNumber = await nextStoreNumber(userId);
     await existing.save();
     return serialize(existing);
   }
@@ -56,6 +73,9 @@ async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, mar
     refreshTokenExpiresAt: expiresAt || null,
     marketplaceId: marketplaceId || 'EBAY_US',
     isActive: isFirstAccount,
+    storeName,
+    identityCheckedAt,
+    storeNumber: await nextStoreNumber(userId),
   });
 
   return serialize(doc);
@@ -67,6 +87,16 @@ async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, mar
  */
 async function listEbayAccounts(userId) {
   const docs = await EbayAccount.find({ userId }).sort({ createdAt: 1 });
+  // Accounts connected before "Store N" existed get their number now, in the order they were connected.
+  if (docs.some((d) => !d.storeNumber)) {
+    let n = Math.max(0, ...docs.map((d) => d.storeNumber || 0));
+    for (const d of docs) {
+      if (d.storeNumber) continue;
+      n += 1;
+      d.storeNumber = n;
+      await EbayAccount.updateOne({ _id: d._id }, { storeNumber: n });
+    }
+  }
   return docs.map(serialize);
 }
 
@@ -192,6 +222,13 @@ function serialize(doc) {
     id: obj._id.toString(),
     userId: obj.userId.toString(),
     ebayUserId: obj.ebayUserId,
+    // The real eBay username (null when eBay never gave one - the stand-in name is never shown), the eBay Store name
+    // (null = not looked up yet, '' = the seller has no store) and the one name the UI shows for the account.
+    username: publicUsername(obj.ebayUserId),
+    storeName: obj.storeName === undefined ? null : obj.storeName,
+    storeNumber: obj.storeNumber || null,
+    identityCheckedAt: obj.identityCheckedAt || null,
+    label: accountLabel(obj),
     displayName: obj.displayName || '',
     merchantLocationKey: obj.merchantLocationKey,
     paymentPolicyId: obj.paymentPolicyId,

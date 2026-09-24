@@ -6,7 +6,9 @@ const {
   getAccountLimitStatus,
   setActiveEbayAccount,
   updateEbayAccountDisplayName,
+  getEbayAccountById,
 } = require('../models/ebayAccountsModel');
+const { refreshStaleIdentities, refreshAccountIdentity } = require('../services/accountIdentityService');
 
 /**
  * GET /api/ebay-accounts
@@ -15,12 +17,33 @@ const {
  * admin-set connection limit - used by the sidebar widget and Settings page.
  */
 router.get('/', requireAuth, async (req, res) => {
-  const [accounts, limitStatus] = await Promise.all([
+  let [accounts, limitStatus] = await Promise.all([
     listEbayAccounts(req.userId),
     getAccountLimitStatus(req.userId),
   ]);
 
+  // Accounts whose name eBay has not been asked for yet (or that were saved under a stand-in name) are looked up now, once,
+  // and remembered; the page does not wait longer than a few seconds for eBay.
+  try {
+    const looked = await refreshStaleIdentities(req.userId, accounts);
+    if (looked.length) accounts = await listEbayAccounts(req.userId);
+  } catch (err) {
+    console.warn('[ebay-accounts] name lookup failed:', err.message);
+  }
+
   res.json({ success: true, accounts, limit: limitStatus });
+});
+
+/**
+ * POST /api/ebay-accounts/:id/refresh-name
+ * Asks eBay again who this account is (eBay username and eBay Store name) and remembers the answer.
+ */
+router.post('/:id/refresh-name', requireAuth, async (req, res) => {
+  const existing = await getEbayAccountById(req.userId, req.params.id);
+  if (!existing) return res.status(404).json({ success: false, error: 'That eBay account was not found.' });
+  await refreshAccountIdentity(req.userId, req.params.id);
+  const account = await getEbayAccountById(req.userId, req.params.id);
+  res.json({ success: true, account });
 });
 
 /**
