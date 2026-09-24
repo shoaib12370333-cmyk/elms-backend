@@ -1,18 +1,10 @@
 /**
- * Words that put an eBay seller at risk: brand / character / trademark names that rights owners police through
- * eBay's VeRO programme, and claims eBay bans outright (replica, fake, ...). A listing that uses one of them
- * can be removed and, when it repeats, the seller account can be restricted or suspended.
+ * SUGGESTIONS for Settings -> VeRO. Every user keeps their own VeRO word list (what they save there is what gets
+ * flagged, warned about and removed); nothing on this list is flagged unless the user saves it.
  *
- * This is a large STARTER list of the names that hit dropshippers most. eBay does not publish a complete VeRO
- * word list (brands enforce without being listed and new ones join all the time), so extra words can be added
- * without a code change through the VERO_EXTRA_WORDS environment variable (comma or new-line separated).
- *
- * Some entries are ordinary English words too (apple, ring, switch, coach, ram, hp, ...). They ARE flagged, but
- * they are listed in AMBIGUOUS_WORDS so the "Remove with AI" cleaner only takes them out where they name the brand
- * and never force-deletes them from normal sentences ("diamond ring", "toggle switch", "8GB RAM").
- *
- * Deliberately NOT on the list: generic wording that appears in almost every listing (authentic, genuine, official,
- * fits, compatible with, copy, ...). Flagging those would mark every draft and the cleaner would cut normal sentences.
+ * It is a large starter list of brand / character / trademark names that rights owners police through eBay's VeRO
+ * programme, plus wording eBay bans (replica, counterfeit, ...). eBay does not publish a complete list, so a user can
+ * type any word that is not here.
  */
 
 // Claims and phrases eBay does not allow (counterfeit / "inspired by" wording).
@@ -104,26 +96,9 @@ nuna, uppababy, bugaboo, doona, stokke, baby bjorn, babybjorn, chicco, graco, fi
 // Claims from the same screening list that name what eBay bans.
 const EXTRA_CLAIM_WORDS = `aaa quality, mirror quality, 1:1, dupe, knockoff, unauthorized, inspired by, replica`;
 
-// Words that are also ordinary English (or a common abbreviation). They are flagged, but the cleaner keeps them
-// where they are used in their ordinary meaning instead of deleting them from normal sentences.
-const AMBIGUOUS_WORDS = `
-apple, ring, echo, nest, switch, sonic, shark, stanley, coach, dove, benefit, champion, citizen, columbia, jordan, vans,
-brooks, ram, ford, mac, hp, lv, mk, f1, frozen, anime, olympic, olympics, fossil, michele, omega, tudor, surface,
-converse, focal, marshall, carrera, corsair, intel, on running, world cup, super bowl, supreme, beats, galaxy, ninja,
-pioneer, dodge, barcelona, fanatics, dupe, dupes, clone, fake, 1:1
-`;
-
-/** Every word to watch for, lowercase and de-duplicated (built-in lists + VERO_EXTRA_WORDS). */
-function getVeroWords() {
-  return [...new Set([
-    ...parseList(CLAIM_WORDS), ...parseList(EXTRA_CLAIM_WORDS), ...parseList(BRAND_WORDS), ...parseList(CATEGORY_WORDS),
-    ...parseList(process.env.VERO_EXTRA_WORDS),
-  ])];
+/** Words offered as suggestions while a user types in Settings -> VeRO. They are NOT flagged by themselves: only the words a user saves are. */
+function getSuggestionWords() {
+  return [...new Set([...parseList(CLAIM_WORDS), ...parseList(EXTRA_CLAIM_WORDS), ...parseList(BRAND_WORDS), ...parseList(CATEGORY_WORDS)])].sort();
 }
 
-/** The flagged words that are also ordinary language; the cleaner does not force-delete these. */
-function getAmbiguousWords() {
-  return new Set(parseList(AMBIGUOUS_WORDS));
-}
-
-module.exports = { getVeroWords, getAmbiguousWords };
+module.exports = { getSuggestionWords };

@@ -40,6 +40,7 @@
     "test:vero": "node tests/vero.test.js",
     "test:vero-clean": "node tests/veroClean.test.js",
     "test:vero-routes": "node tests/veroRoutes.test.js",
+    "test:vero-settings": "node tests/veroSettings.test.js",
     "test:specifics-fallback": "node tests/itemSpecificsFallback.test.js"
   },
   "engines": {

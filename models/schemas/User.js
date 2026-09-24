@@ -33,6 +33,8 @@ const userSchema = new mongoose.Schema(
     // to review, auto = AI also sends it (only for simple, low-risk messages).
     // Set by an admin (Admin -> Users / Security): the account cannot sign in or use the site. The reason is shown to the
     // person, who can appeal from the blocked screen.
+    // The user's own VeRO words (Settings -> VeRO): the words flagged in their drafts and listings.
+    veroWords: { type: [String], default: [] },
     // Name of the plan the user bought last (shown under their name). null = free plan.
     planName: { type: String, default: null },
     suspendedAt: { type: Date, default: null },

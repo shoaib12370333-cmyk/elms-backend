@@ -176,13 +176,15 @@ router.post('/fill-aspects', requireAuth, async (req, res) => {
 
 /**
  * GET /api/list-on-ebay/vero-words
- * The VeRO word list as ONE regex (source + flags), so the browser checks drafts and live listings with
- * exactly the rules the server uses. Apply it to text with accents removed.
+ * The user's own VeRO words (Settings -> VeRO) as ONE regex (source + flags), so the browser checks drafts and live
+ * listings with exactly the rules the server uses. Apply it to text with accents removed.
+ * pattern is null when the user has not saved any word yet (nothing is flagged then).
  */
-router.get('/vero-words', requireAuth, (req, res) => {
-  const { getVeroPattern } = require('../services/veroService');
-  const { getVeroWords } = require('../config/veroWords');
-  res.json({ success: true, pattern: getVeroPattern(), count: getVeroWords().length });
+router.get('/vero-words', requireAuth, async (req, res) => {
+  const { createMatcher } = require('../services/veroService');
+  const { getVeroWordsOf } = require('../services/veroSettingsService');
+  const words = await getVeroWordsOf(req.userId);
+  res.json({ success: true, pattern: createMatcher(words).pattern, count: words.length });
 });
 
 /**
@@ -192,8 +194,10 @@ router.get('/vero-words', requireAuth, (req, res) => {
  * Costs one AI credit, but only when there is something to remove.
  */
 router.post('/vero-clean', requireAuth, async (req, res) => {
-  const { scanListing } = require('../services/veroService');
+  const { createMatcher } = require('../services/veroService');
+  const { getVeroWordsOf } = require('../services/veroSettingsService');
   const { cleanVeroTerms } = require('../services/veroCleanerService');
+  const words = await getVeroWordsOf(req.userId);
   const input = {
     title: String(req.body?.title || ''),
     description: String(req.body?.description || ''),
@@ -203,10 +207,10 @@ router.post('/vero-clean', requireAuth, async (req, res) => {
     brand: String(req.body?.brand || ''),
   };
   if (!input.title.trim()) return res.status(400).json({ success: false, error: 'Enter a title first.' });
-  if (!scanListing(input).terms.length) return res.json({ success: true, data: { unchanged: true, removed: [] }, creditsUsed: 0 });
+  if (!createMatcher(words).scanListing(input).terms.length) return res.json({ success: true, data: { unchanged: true, removed: [] }, creditsUsed: 0 });
   return runAiAction(req, res, {
     kind: 'vero', costKey: 'AI_TITLE', enabledKey: 'aiTitleEnabled',
-    run: () => cleanVeroTerms(input),
+    run: () => cleanVeroTerms(input, words),
   });
 });
 

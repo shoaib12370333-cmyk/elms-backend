@@ -179,6 +179,7 @@ app.use('/api/admin', adminRoute);
 // Support tickets (user-facing: create/view own tickets)
 app.use('/api/support-tickets', supportTicketsRoute);
 app.use('/api/notices', require('./routes/notices'));
+app.use('/api/vero', require('./routes/veroSettings'));
 app.use('/api/presence', require('./routes/presence'));
 app.use('/api/appeals', require('./routes/appeals'));
 app.use('/api/tools', researchToolsRoute);
