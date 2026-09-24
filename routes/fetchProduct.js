@@ -112,6 +112,11 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
   });
 }
 
+/** The store a list of imports goes to: the one the extension chose (must be the user's own), else the active store as always. */
+function resolveStore(userId, ebayAccountId) {
+  return ebayAccountId === undefined || ebayAccountId === null || ebayAccountId === '' ? getActiveEbayAccount(userId) : storeForImport(userId, ebayAccountId);
+}
+
 /** One product = country + ASIN, however the link is written. */
 function productKey(url) {
   const asin = extractAsinFromUrl(url);
@@ -220,7 +225,7 @@ router.post('/bulk', requireAuth, async (req, res) => {
 
   let chosenStore;
   try {
-    chosenStore = await storeForImport(req.userId, ebayAccountId);
+    chosenStore = await resolveStore(req.userId, ebayAccountId);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ success: false, error: err.message });
   }
@@ -284,7 +289,7 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
 
   let activeEbayAccount;
   try {
-    activeEbayAccount = await storeForImport(req.userId, ebayAccountId);
+    activeEbayAccount = await resolveStore(req.userId, ebayAccountId);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ success: false, error: err.message });
   }
