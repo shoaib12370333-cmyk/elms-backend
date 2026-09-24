@@ -8,6 +8,24 @@ const { createTransaction } = require('../services/paddleService');
 const cashtapPayments = require('../services/cashtapPaymentService');
 
 /**
+ * GET /api/payments/public-plans
+ * No sign-in: the plans as the public website (elmstool.com) shows them. Only what a visitor needs to see - name, price,
+ * credits and how many eBay accounts - taken live from the plans the admin manages. Cached for 5 minutes.
+ */
+router.get('/public-plans', async (req, res) => {
+  try {
+    const provider = cashtapPayments.activeProvider();
+    const plans = (await listActivePlans())
+      .filter((p) => provider === 'cashtap' || p.paddlePriceId)
+      .map((p) => ({ name: p.name, priceUsd: p.priceUsd, credits: p.credits, maxEbayAccounts: p.maxEbayAccounts || null }));
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json({ success: true, plans });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Could not load the plans.' });
+  }
+});
+
+/**
  * GET /api/payments/plans
  * Requires a valid session token.
  * Returns the active plans for the Pricing page, and which checkout provider will be used (CashTap by default,
