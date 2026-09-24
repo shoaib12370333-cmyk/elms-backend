@@ -5,7 +5,7 @@ const { EBAY_API_BASE_URL } = require('../config/ebayEnvironment');
 // eBay Trading API site IDs per marketplace.
 const SITE_IDS = Object.freeze({
   EBAY_US: 0, EBAY_CA: 2, EBAY_GB: 3, EBAY_AU: 15, EBAY_AT: 16, EBAY_FR: 71, EBAY_DE: 77,
-  EBAY_IT: 101, EBAY_NL: 146, EBAY_ES: 186, EBAY_CH: 193, EBAY_HK: 201, EBAY_IE: 205,
+  EBAY_BE: 23, EBAY_IT: 101, EBAY_NL: 146, EBAY_ES: 186, EBAY_CH: 193, EBAY_HK: 201, EBAY_IE: 205,
   EBAY_MY: 207, EBAY_PH: 211, EBAY_PL: 212, EBAY_SG: 216,
 });
 

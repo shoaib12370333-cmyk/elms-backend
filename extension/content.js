@@ -46,6 +46,13 @@
     return Number.isFinite(n) ? n : null;
   }
 
+  // The currency an Amazon site shows its prices in (the site is more reliable than the page language or a default).
+  const HOST_CURRENCY = { com: 'USD', 'co.uk': 'GBP', ca: 'CAD', 'com.au': 'AUD', de: 'EUR', fr: 'EUR', it: 'EUR', es: 'EUR', nl: 'EUR', be: 'EUR', ie: 'EUR', pl: 'PLN', se: 'SEK', in: 'INR', 'co.jp': 'JPY', 'com.mx': 'MXN', 'com.br': 'BRL', sg: 'SGD', ae: 'AED', sa: 'SAR', 'com.tr': 'TRY', eg: 'EGP' };
+  function currencyForHost(host) {
+    const m = String(host || '').toLowerCase().match(/(?:^|\.)amazon\.([a-z.]+)$/);
+    return (m && HOST_CURRENCY[m[1]]) || null;
+  }
+
   const PRODUCT_INFORMATION_NAMES = new Set([
     'asin', 'date first available', 'manufacturer', 'department', 'best sellers rank',
     'customer reviews', 'customer review', 'upc', 'ean', 'isbn'
@@ -484,12 +491,236 @@
     return '';
   }
 
+  // ---------- variants: colour / size / ... each with its own pictures, title and price ----------
+  const MAX_VARIANTS = 30;
+  const MAX_VARIANT_IMAGES = 12;
+  const ASIN_RE = /^[A-Z0-9]{10}$/;
+
+  // The {...} or [...] that starts at text[start], read with string quoting in mind (null when it never closes).
+  function sliceJson(text, start) {
+    let depth = 0, inString = false, escaped = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false; else if (ch === '\\') escaped = true; else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') { depth--; if (depth === 0) return text.slice(start, i + 1); }
+    }
+    return null;
+  }
+
+  // The parsed value of  "key": {...}  or  "key": [...]  inside a page script (Amazon writes some keys with single quotes).
+  function jsonAfterKey(text, key, afterIndex = 0) {
+    const re = new RegExp('["\']' + key + '["\']\\s*:\\s*([\\[{])', 'g');
+    re.lastIndex = afterIndex;
+    const m = re.exec(text);
+    if (!m) return null;
+    const raw = sliceJson(text, m.index + m[0].length - 1);
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (_) { return null; }
+  }
+
+  const scriptTexts = (root) => [...root.querySelectorAll('script')].map((s) => s.textContent || '').filter(Boolean);
+  const prettyDimension = (key) => String(key || '').replace(/_name$/i, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const asinFromUrl = (url) => (String(url || '').match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i) || [])[1]?.toUpperCase() || null;
+
+  // What Amazon puts in the page for the colour / size picker: which ASIN is which combination.
+  function readTwister(root) {
+    for (const t of scriptTexts(root)) {
+      if (!/dimensionValuesDisplayData|asinVariationValues/.test(t)) continue;
+      const display = jsonAfterKey(t, 'dimensionValuesDisplayData');
+      const asinValues = jsonAfterKey(t, 'asinVariationValues');
+      const variationValues = jsonAfterKey(t, 'variationValues');
+      const labels = jsonAfterKey(t, 'variationDisplayLabels');
+      const dimsDisplay = jsonAfterKey(t, 'dimensionsDisplay');
+      const dims = jsonAfterKey(t, 'dimensions');
+      const strings = (a) => Array.isArray(a) && a.length && a.every((x) => typeof x === 'string');
+      const keys = strings(dims) ? dims : null;
+      let names = strings(dimsDisplay) ? dimsDisplay.slice() : keys ? keys.map((k) => (labels && labels[k]) || prettyDimension(k)) : [];
+      const values = {};
+      if (display && typeof display === 'object') {
+        for (const [asin, vals] of Object.entries(display)) {
+          if (ASIN_RE.test(asin) && Array.isArray(vals)) values[asin] = vals.map((v) => clean(v, 200) || '');
+        }
+      }
+      if (!Object.keys(values).length && asinValues && variationValues && keys) {
+        for (const [asin, o] of Object.entries(asinValues)) {
+          if (!ASIN_RE.test(asin) || !o) continue;
+          values[asin] = keys.map((k) => { const list = variationValues[k]; return Array.isArray(list) ? clean(list[Number(o[k])], 200) || '' : ''; });
+        }
+      }
+      if (Object.keys(values).length) return { names, values };
+    }
+    return null;
+  }
+
+  // The picker's own pictures: one small swatch per colour, made full size.
+  function readSwatches(root) {
+    const map = new Map();
+    root.querySelectorAll('#twisterContainer li, [id^="variation_"] li, #twister li, [id^="inline-twister"] li').forEach((li) => {
+      const asin = (li.getAttribute('data-asin') || li.getAttribute('data-defaultasin') || asinFromUrl(li.getAttribute('data-dp-url')) || '').toUpperCase();
+      if (!ASIN_RE.test(asin)) return;
+      const img = li.querySelector('img');
+      const src = img && (img.getAttribute('src') || img.getAttribute('data-src'));
+      const url = src ? normalizeImage(absolute(src) || '') : '';
+      if (url && /^https?:\/\//i.test(url) && !map.has(asin)) map.set(asin, url);
+    });
+    return map;
+  }
+
+  // When the page has no data block for the picker: the picker itself (each colour / size button and its ASIN).
+  function readPickerButtons(root) {
+    const variants = [];
+    root.querySelectorAll('[id^="variation_"]').forEach((box) => {
+      const dimName = clean(text(box.querySelector('label, .a-form-label')), 80)?.replace(/:\s*$/, '') || prettyDimension(box.id.replace(/^variation_/, ''));
+      box.querySelectorAll('li').forEach((li) => {
+        const asin = (li.getAttribute('data-asin') || li.getAttribute('data-defaultasin') || asinFromUrl(li.getAttribute('data-dp-url')) || '').toUpperCase();
+        if (!ASIN_RE.test(asin)) return;
+        const label = clean((li.getAttribute('title') || '').replace(/^click to select\s*/i, ''), 200) || clean(li.querySelector('img')?.getAttribute('alt'), 200) || text(li, 200);
+        if (label) variants.push({ asin, dim: dimName, value: label });
+      });
+      box.querySelectorAll('select option, [id^="native_dropdown_selected_"] option').forEach((opt) => {
+        const asin = (String(opt.value || '').split(',').pop() || '').toUpperCase();
+        const label = clean(opt.textContent, 200);
+        if (ASIN_RE.test(asin) && label && !/^select/i.test(label)) variants.push({ asin, dim: dimName, value: label });
+      });
+    });
+    return variants;
+  }
+
+  // Every variant that can be told from the page itself (no extra requests): ASIN, what makes it different, its swatch picture.
+  function collectVariantsQuick() {
+    const current = getAsin();
+    const swatches = readSwatches(document);
+    const twister = readTwister(document);
+    let variants = [];
+    if (twister) {
+      variants = Object.entries(twister.values).map(([asin, vals]) => ({
+        asin,
+        dimensions: vals.map((value, i) => ({ name: twister.names[i] || `Option ${i + 1}`, value })).filter((d) => d.value),
+      }));
+    } else {
+      const seen = new Map();
+      readPickerButtons(document).forEach((b) => { if (!seen.has(b.asin)) seen.set(b.asin, { asin: b.asin, dimensions: [{ name: b.dim, value: b.value }] }); });
+      variants = [...seen.values()];
+    }
+    return variants.slice(0, MAX_VARIANTS).map((v) => ({
+      asin: v.asin,
+      label: v.dimensions.map((d) => d.value).join(' / '),
+      dimensions: v.dimensions,
+      image: swatches.get(v.asin) || null,
+      images: [],
+      title: null,
+      price: null,
+      availability: null,
+      isCurrentProduct: v.asin === current,
+    }));
+  }
+
+  // The gallery pictures Amazon lists for the product shown (colorImages.initial), full size, videos left out.
+  function galleryFromScripts(texts) {
+    for (const t of texts) {
+      const at = t.search(/["']colorImages["']\s*:\s*\{\s*["']initial["']\s*:\s*\[/);
+      if (at < 0) continue;
+      const list = jsonAfterKey(t, 'initial', at);
+      if (!Array.isArray(list)) continue;
+      const urls = [];
+      for (const item of list) {
+        if (!item || item.videoUrl || /video/i.test(String(item.variant || ''))) continue;
+        let u = item.hiRes || item.large;
+        if (!u && item.main && typeof item.main === 'object') {
+          u = Object.entries(item.main).sort((a, b) => (Number(b[1]?.[0]) || 0) - (Number(a[1]?.[0]) || 0))[0]?.[0];
+        }
+        u = u ? normalizeImage(u) : '';
+        if (u && /^https?:\/\//i.test(u) && !urls.includes(u)) urls.push(u);
+      }
+      if (urls.length) return urls;
+    }
+    return [];
+  }
+
+  // A variant's own product page (same site, so the browser's own session is used): pictures, title, price, stock.
+  async function fetchVariantPage(asin) {
+    const res = await fetch(`${location.origin}/dp/${asin}?th=1&psc=1`, { credentials: 'include' });
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (/validateCaptcha|Enter the characters you see below|Robot Check/i.test(html)) return 'blocked';
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const images = galleryFromScripts(scriptTexts(doc));
+    if (!images.length) {
+      const og = doc.querySelector('meta[property="og:image"]')?.content;
+      if (og) images.push(normalizeImage(og));
+    }
+    return {
+      images,
+      title: cleanProductTitle(text(doc.querySelector('#productTitle'))) || null,
+      price: parsePrice(text(doc.querySelector('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice, #price_inside_buybox, .a-price .a-offscreen'), 100)),
+      availability: clean(doc.querySelector('#availability span, #availability')?.textContent, 200),
+    };
+  }
+
+  // Fills in each variant's pictures, title, price and stock. Never throws and never takes more than ~25 seconds:
+  // a variant that could not be read keeps what the page already told us (its swatch picture and what makes it different).
+  async function enrichVariants(product, onProgress) {
+    const list = product.variants;
+    if (!list.length) return;
+    const base = product.title || '';
+    const current = list.find((v) => v.isCurrentProduct);
+    if (current) {
+      current.images = product.images.slice(0, MAX_VARIANT_IMAGES);
+      current.image = product.images[0] || current.image;
+      current.price = product.price;
+      current.availability = product.availability;
+      current.pageTitle = base;
+    }
+    const queue = list.filter((v) => !v.isCurrentProduct);
+    const total = queue.length;
+    let done = 0;
+    let blocked = false;
+    const started = Date.now();
+    const worker = async () => {
+      while (queue.length && !blocked && Date.now() - started < 25000) {
+        const v = queue.shift();
+        try {
+          const data = await fetchVariantPage(v.asin);
+          if (data === 'blocked') blocked = true;
+          else if (data) {
+            v.images = data.images.slice(0, MAX_VARIANT_IMAGES);
+            v.image = v.images[0] || v.image;
+            v.price = data.price ?? v.price;
+            v.availability = data.availability || v.availability;
+            v.pageTitle = data.title || null;
+          }
+        } catch (_) { /* this variant keeps what the page told us */ }
+        done += 1;
+        if (onProgress) onProgress(`Reading variants ${done}/${total}…`);
+        await new Promise((r) => setTimeout(r, 120));
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    // A title of its own: the variant page's title when it differs from the product's, else the product title + what makes it different.
+    list.forEach((v) => {
+      v.title = v.pageTitle && v.pageTitle !== base ? v.pageTitle : (v.label ? `${base} - ${v.label}`.slice(0, 200) : base);
+      delete v.pageTitle;
+    });
+  }
+
+  async function extractWithVariants(onProgress) {
+    const product = extract();
+    if (product.variants.length > 1) await enrichVariants(product, onProgress);
+    else product.variants = []; // a product with one option has no variants to speak of
+    return product;
+  }
+
   function extract() {
     const json = getJsonLd();
     const asin = getAsin();
     const title = extractProductTitle(json);
     const priceRaw = json.offers?.price ?? text(document.querySelector('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice, #price_inside_buybox, .a-price .a-offscreen'), 100);
-    const currency = clean(json.offers?.priceCurrency || (document.documentElement.lang?.toUpperCase() === 'EN-GB' ? 'GBP' : 'USD'), 8) || 'USD';
+    const currency = currencyForHost(location.hostname) || clean(json.offers?.priceCurrency, 8) || 'USD';
     const specifications = collectItemSpecifications();
     const info = collectProductInformation(specifications);
     const categories = collectCategories();
@@ -513,6 +744,8 @@
       variants: [], sourceMarketplace: location.hostname
     };
     if (!product.asin) product.asin = info.asin || null;
+    product.variants = collectVariantsQuick();
+    product.variantDimensions = [...new Set(product.variants.flatMap((v) => v.dimensions.map((d) => d.name)))];
     return product;
   }
 
@@ -564,7 +797,7 @@
       button.disabled=true;
       show('Reading this Amazon page…','busy');
       try {
-        const product=extract();
+        const product=await extractWithVariants((message)=>show(message,'busy'));
         const isAmazonProduct=/^https:\/\/(?:www\.)?amazon\.[a-z.]+\/(?:[^?#]*\/)?(?:dp|gp\/product|product)\//i.test(location.href) || !!product.asin;
         if (!isAmazonProduct || !product.asin || !product.title) {
           throw new Error('Amazon product page not detected. Open a product page and try again.');
@@ -575,7 +808,8 @@
         if (!response?.success) throw new Error(response?.error || 'Could not import this product.');
         dot.style.display='block';
         const saved=response.result?.product || product;
-        show(`✓ Saved to ELMS Drafts\n${saved.asin || product.asin} · ${saved.images?.length || product.images?.length || 0} images`,'ok');
+        const variantCount = (saved.variants || product.variants || []).length;
+        show(`✓ Saved to ELMS Drafts\n${saved.asin || product.asin} · ${saved.images?.length || product.images?.length || 0} images${variantCount ? ` · ${variantCount} variants` : ''}`,'ok');
       } catch (e) {
         show(e?.message || 'Import failed.','err');
       } finally {
@@ -589,7 +823,7 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== 'ELMS_GET_PRODUCT') return false;
-    try { sendResponse({ success: true, product: extract() }); } catch (e) { sendResponse({ success: false, error: e?.message || 'Could not extract Amazon product.' }); }
+    extractWithVariants().then((product) => sendResponse({ success: true, product })).catch((e) => sendResponse({ success: false, error: e?.message || 'Could not extract Amazon product.' }));
     return true;
   });
 })();

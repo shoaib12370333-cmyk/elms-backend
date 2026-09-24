@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { retryWithBackoff } = require('./retryService');
+const { currencyForAmazonUrl } = require('../config/amazonDomains');
 
 const REST_BASE_URL = 'https://rest.canopyapi.co';
 
@@ -105,7 +106,7 @@ function normalizeProduct(rawResponse, sourceUrl) {
   }
 
   const price = data.price?.value != null ? Number(data.price.value) : null;
-  const currency = data.price?.currency || 'USD';
+  const currency = data.price?.currency || currencyForAmazonUrl(sourceUrl || data.url) || 'USD';
 
   const bulletPoints = Array.isArray(data.featureBullets) ? data.featureBullets : [];
 
@@ -492,4 +493,5 @@ module.exports = {
   toCanopyDomain,
   extractAsinFromUrl,
   detectCountryFromUrl,
+  normalizeProduct,
 };

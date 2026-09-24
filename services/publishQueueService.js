@@ -11,6 +11,7 @@ const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
 const { prepareAspects, assertUsableCategory } = require('./publishPreflightService');
 const { extractPackageInfo, toEbayPackageWeightAndSize } = require('./packageInfoService');
 const { convertAmount } = require('./currencyService');
+const { sourceCurrency } = require('../config/amazonDomains');
 
 const {
   getEbayAccountById,
@@ -518,13 +519,16 @@ async function processOneQueuedListing(listing) {
     // number that goes live means what the seller saw.
     let publishPrice = listing.sell_price;
     const storeCurrency = getMarketplaceConfig(sellerSettings.marketplaceId)?.currency;
-    if (storeCurrency && listing.currency && String(listing.currency).toUpperCase() !== storeCurrency) {
+    // What the price is in: the Amazon site it was read from decides (drafts saved with a wrong default of USD exist),
+    // then the currency saved on the draft.
+    const draftCurrency = sourceCurrency(importRecord.amazon_url, listing.currency) || '';
+    if (storeCurrency && draftCurrency && draftCurrency !== storeCurrency) {
       try {
-        const fx = await convertAmount(listing.sell_price, listing.currency, storeCurrency);
+        const fx = await convertAmount(listing.sell_price, draftCurrency, storeCurrency);
         publishPrice = fx.amount;
-        debug('PRICE CONVERTED', { from: listing.currency, to: storeCurrency, rate: fx.rate, price: publishPrice });
+        debug('PRICE CONVERTED', { from: draftCurrency, to: storeCurrency, rate: fx.rate, price: publishPrice });
       } catch (fxErr) {
-        throw new Error('This draft is priced in ' + String(listing.currency).toUpperCase() + ' but the store sells in ' + storeCurrency + ', and the exchange rate could not be loaded (' + fxErr.message + '). Try again in a minute.');
+        throw new Error('This draft is priced in ' + draftCurrency + ' but the store sells in ' + storeCurrency + ', and the exchange rate could not be loaded (' + fxErr.message + '). Try again in a minute.');
       }
     }
 

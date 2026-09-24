@@ -1,6 +1,8 @@
 const Order = require('./schemas/Order');
 const Listing = require('./schemas/Listing');
 const Import = require('./schemas/Import');
+const { warmRates, convertCached } = require('../services/currencyService');
+const { sourceCurrency } = require('../config/amazonDomains');
 
 /**
  * Creates or updates one order line item from an eBay sync, matched by
@@ -143,6 +145,7 @@ async function listOrders(userId, accountId) {
     .sort({ ebayCreatedAt: -1, createdAt: -1 })
     .lean();
   await attachMissingListings(userId, docs);
+  if (needsRates(docs)) await warmRates();
 
   return docs.map((doc) => enrichOrder(serialize(doc), doc));
 }
@@ -154,6 +157,17 @@ async function listOrders(userId, accountId) {
  * (refresh, mark shipped, save note...) looks exactly like it does in the list,
  * instead of the drawer briefly losing its image/title/profit.
  */
+/** The currency the cost of an order's item is in: the seller's own figure is in the sale's currency, the rest is the Amazon site's. */
+function costCurrencyOf(doc) {
+  if (positive(doc.buyPriceOverride) !== null) return doc.currency || null;
+  const listing = doc.listingId;
+  // The Amazon site the product was read from decides; then what was saved with the listing / import.
+  return sourceCurrency(listing?.importId?.amazonUrl, listing?.currency || listing?.importId?.currency || listing?.importId?.product?.currency);
+}
+const upper = (c) => (c ? String(c).toUpperCase() : null);
+/** True when some order's cost is in another currency than its sale, so exchange rates are needed to work out the profit. */
+const needsRates = (docs) => docs.some((d) => upper(costCurrencyOf(d)) && upper(d.currency) && upper(costCurrencyOf(d)) !== upper(d.currency));
+
 function enrichOrder(serialized, doc) {
   const listing = doc.listingId;
   const importRecord = listing?.importId;
@@ -171,6 +185,24 @@ function enrichOrder(serialized, doc) {
   serialized.ebay_account_username = doc.ebayAccountId?.ebayUserId || null;
   serialized.buy_price = savedAmazonPrice;
 
+  // The sale is in the eBay site's currency and the cost in the Amazon site's. They are usually the same (a UK store sells
+  // items from amazon.co.uk), but not always (a site with no Amazon of its own, an old draft): then the cost is converted
+  // first, so profit is never "GBP 20 - USD 15".
+  const saleCurrency = upper(doc.currency);
+  const costCurrency = upper(costCurrencyOf(doc));
+  serialized.buy_price_currency = costCurrency || saleCurrency || null;
+  if (serialized.buy_price != null && saleCurrency && costCurrency && costCurrency !== saleCurrency) {
+    const converted = convertCached(serialized.buy_price, costCurrency, saleCurrency);
+    if (converted == null) {
+      serialized.profit = null;
+      serialized.profit_note = `The cost is in ${costCurrency} and the sale in ${saleCurrency}, and no exchange rate is available right now.`;
+      return serialized;
+    }
+    serialized.buy_price_original = { amount: serialized.buy_price, currency: costCurrency };
+    serialized.buy_price = converted;
+    serialized.buy_price_currency = saleCurrency;
+  }
+
   if (serialized.buy_price != null && serialized.sale_price != null) {
     serialized.profit = Number((serialized.sale_price - serialized.buy_price * (serialized.quantity || 1)).toFixed(2));
   } else {
@@ -186,6 +218,7 @@ async function getOrderById(userId, id) {
     .populate('ebayAccountId')
     .lean();
   if (doc) await attachMissingListings(userId, [doc]);
+  if (doc && needsRates([doc])) await warmRates();
   return doc ? enrichOrder(serialize(doc), doc) : null;
 }
 
