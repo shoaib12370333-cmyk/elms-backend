@@ -53,6 +53,9 @@
     return (m && HOST_CURRENCY[m[1]]) || null;
   }
 
+  // Where the price of the product shown is on the page (the import and the panel read the same place).
+  const PRICE_SELECTOR = '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice, #price_inside_buybox, .a-price .a-offscreen';
+
   const PRODUCT_INFORMATION_NAMES = new Set([
     'asin', 'date first available', 'manufacturer', 'department', 'best sellers rank',
     'customer reviews', 'customer review', 'upc', 'ean', 'isbn'
@@ -710,8 +713,10 @@
 
   async function extractWithVariants(onProgress) {
     const product = extract();
-    if (product.variants.length > 1) await enrichVariants(product, onProgress);
-    else product.variants = []; // a product with one option has no variants to speak of
+    let skip = false;
+    try { skip = !!(await chrome.storage.local.get(['skipVariants'])).skipVariants; } catch (_) { /* variants are read */ }
+    if (!skip && product.variants.length > 1) await enrichVariants(product, onProgress);
+    else product.variants = []; // a product with one option has no variants to speak of - or the person chose to import this option only
     return product;
   }
 
@@ -719,7 +724,7 @@
     const json = getJsonLd();
     const asin = getAsin();
     const title = extractProductTitle(json);
-    const priceRaw = json.offers?.price ?? text(document.querySelector('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice, #price_inside_buybox, .a-price .a-offscreen'), 100);
+    const priceRaw = json.offers?.price ?? text(document.querySelector(PRICE_SELECTOR), 100);
     const currency = currencyForHost(location.hostname) || clean(json.offers?.priceCurrency, 8) || 'USD';
     const specifications = collectItemSpecifications();
     const info = collectProductInformation(specifications);
@@ -750,72 +755,464 @@
   }
 
 
+  // ---------- the light read of the page the panel works from: it runs often, so it never fetches anything ----------
+  const UNAVAILABLE_RE = /currently unavailable|out of stock|no featured offers|not available|derzeit nicht|nicht verf[uü]gbar|actuellement indisponible|non disponibile|no disponible|niet beschikbaar/i;
+  const LIST_PRICE_SELECTOR = '.basisPrice .a-offscreen, #listPrice, #priceblock_listprice, .a-price[data-a-strike="true"] .a-offscreen';
+  const DELIVERY_SELECTOR = '#mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE, #mir-layout-DELIVERY_BLOCK-slot-DELIVERY_MESSAGE, #deliveryBlockMessage, #delivery-message, #ddmDeliveryMessage, [data-csa-c-content-id="DEXUnifiedCXPDM"]';
+  const asCount = (v) => { const n = parseInt(String(v == null ? '' : v).replace(/[^0-9]/g, ''), 10); return Number.isFinite(n) ? n : 0; };
+  const variantCounts = new Map();
+
+  // A product page (not a search or list page, where [data-asin] belongs to the first result).
+  const isProductPage = () => /\/(?:dp|gp\/product|product)\/[A-Z0-9]{10}/i.test(location.pathname) || !!document.querySelector('#productTitle');
+
+  // Who sells it and who ships it (the seller link and the buy box wording differ between Amazon layouts).
+  function readSeller() {
+    const tabular = (name) => text(document.querySelector(`#tabular-buybox [tabular-attribute-name="${name}"] .tabular-buybox-text`), 200);
+    const merchant = text(document.querySelector('#merchant-info'), 400) || '';
+    let soldBy = text(document.querySelector('#sellerProfileTriggerId'), 200) || tabular('Sold by') || tabular('Sold By') || null;
+    if (!soldBy && merchant) {
+      const m = merchant.match(/sold by\s+(.+?)(?:\s+and\s+|\.|$)/i);
+      soldBy = m ? clean(m[1], 120) : (/amazon/i.test(merchant) ? 'Amazon' : null);
+    }
+    const shipsFrom = tabular('Ships from') || tabular('Dispatches from') || clean((merchant.match(/(?:ships|dispatched) from\s+(.+?)(?:\s+and\s+|\.|$)/i) || [])[1], 120) || null;
+    return {
+      soldBy,
+      shipsFrom,
+      amazonSold: !!soldBy && /^amazon(\.|\s|$)/i.test(soldBy),
+      fulfilledByAmazon: /^amazon/i.test(shipsFrom || '') || /fulfilled by amazon|(?:ships|dispatched) from and sold by amazon/i.test(merchant),
+    };
+  }
+
+  // What the panel needs from the page right now.
+  function snapshot() {
+    const json = getJsonLd();
+    const asin = getAsin();
+    const availability = clean(document.querySelector('#availability span, #outOfStock, #buybox-see-all-buying-choices-announce, #availability')?.textContent, 500);
+    const reviews = extractRatingAndRank();
+    const seller = readSeller();
+    let variantCount = variantCounts.get(asin);
+    if (variantCount === undefined) {
+      try { variantCount = collectVariantsQuick().length; } catch (_) { variantCount = 0; }
+      variantCounts.set(asin, variantCount);
+    }
+    return {
+      asin,
+      title: extractProductTitle(json),
+      brand: clean(json.brand?.name || text(document.querySelector('#bylineInfo, #brand'), 300), 300),
+      bullets: unique([...document.querySelectorAll('#feature-bullets li, #feature-bullets .a-list-item')].map((el) => cleanHighlight(el.textContent)).filter(Boolean)).slice(0, 20),
+      price: parsePrice(json.offers?.price ?? text(document.querySelector(PRICE_SELECTOR), 100)),
+      listPrice: parsePrice(text(document.querySelector(LIST_PRICE_SELECTOR), 100)),
+      currency: currencyForHost(location.hostname) || clean(json.offers?.priceCurrency, 8) || 'USD',
+      unavailable: UNAVAILABLE_RE.test(availability || ''),
+      hasCart: !!document.querySelector('#add-to-cart-button, #buy-now-button, input[name="submit.add-to-cart"], #add-to-cart-button-ubb'),
+      deliveryText: clean(document.querySelector(DELIVERY_SELECTOR)?.textContent, 300),
+      rating: reviews.rating,
+      ratingCount: asCount(reviews.ratingsTotal),
+      imageCount: new Set([...document.querySelectorAll('#altImages li.imageThumbnail, #altImages li.item')]).size,
+      dealBadge: !!text(document.querySelector('#dealBadge_feature_div, #dealBadgeSupportingText, .dealBadge'), 100),
+      variantCount,
+      ...seller,
+    };
+  }
+
+  // Settings the popup keeps (chrome.storage.local); read again whenever they change.
+  async function readSettings() {
+    try {
+      const d = await chrome.storage.local.get(['extensionKey', 'sessionToken', 'markup', 'storeId', 'fees', 'autoOpen', 'skipVariants']);
+      return { connected: !!d.extensionKey, hasSession: !!d.sessionToken, markup: d.markup == null ? '' : String(d.markup), storeId: d.storeId || null, fees: ELMS_LOGIC.normalizeSettings(d.fees), autoOpen: !!d.autoOpen, skipVariants: !!d.skipVariants };
+    } catch (_) {
+      return { connected: false, hasSession: false, markup: '', storeId: null, fees: ELMS_LOGIC.normalizeSettings({}), autoOpen: false, skipVariants: false };
+    }
+  }
+
+  // Asks the background script; never throws (an extension that was updated while the page was open answers with an error).
+  function send(message) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(message, (response) => {
+          if (chrome.runtime.lastError) resolve({ success: false, error: 'The ELMS extension was updated: reload this page.' });
+          else resolve(response || { success: false, error: 'ELMS did not answer.' });
+        });
+      } catch (_) {
+        resolve({ success: false, error: 'The ELMS extension was updated: reload this page.' });
+      }
+    });
+  }
+
+  function h(tag, props, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v);
+    }
+    kids.forEach((kid) => { if (kid != null) el.append(kid); });
+    return el;
+  }
+
+  const PANEL_CSS = `
+    :host{all:initial}
+    *{box-sizing:border-box}
+    .wrap{position:relative;width:58px;height:58px;font-family:Inter,-apple-system,"Segoe UI",Arial,sans-serif;color:#0f172a}
+    .logo{position:relative;width:58px;height:58px;border:0;border-radius:18px;padding:8px;background:linear-gradient(145deg,#0f172a,#172554);box-shadow:0 8px 26px rgba(15,23,42,.35),0 0 0 3px rgba(255,255,255,.9);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .16s,box-shadow .16s}
+    .logo::after{content:"";position:absolute;left:10px;right:10px;bottom:-3px;height:3px;border-radius:3px;background:linear-gradient(90deg,#e53238 0 25%,#0064d2 25% 50%,#f5af02 50% 75%,#86b817 75%)}
+    .logo:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(15,23,42,.42),0 0 0 3px #fff}
+    .logo:active{transform:scale(.96)}
+    .logo[disabled]{cursor:wait;opacity:.85}
+    .logo[disabled] img{animation:pulse 1s ease-in-out infinite}
+    @keyframes pulse{50%{opacity:.45;transform:scale(.92)}}
+    .logo img{width:100%;height:100%;object-fit:contain;border-radius:11px;display:block}
+    .dot{position:absolute;right:-3px;top:-3px;width:14px;height:14px;border-radius:50%;background:#86b817;border:2px solid #fff;display:none}
+    .toast{position:absolute;right:70px;bottom:0;min-width:220px;max-width:300px;padding:11px 14px;border-radius:12px;background:#0f172a;color:#fff;font-size:12.5px;line-height:1.4;white-space:pre-line;box-shadow:0 12px 30px rgba(15,23,42,.3);border-left:4px solid #0064d2;display:none}
+    .toast.show{display:block;animation:in .18s ease-out}
+    @keyframes in{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:none}}
+    .toast.ok{border-left-color:#86b817}.toast.err{border-left-color:#e53238;background:#2a1216}.toast.busy{border-left-color:#f5af02}
+    .stack{position:absolute;right:0;bottom:70px;display:none;flex-direction:column;align-items:flex-end;gap:8px}
+    .chip{border:0;border-radius:999px;padding:7px 13px 7px 11px;font:700 12.5px/1 Inter,-apple-system,"Segoe UI",Arial,sans-serif;color:#fff;background:#475569;cursor:pointer;box-shadow:0 6px 18px rgba(15,23,42,.28);display:flex;align-items:center;gap:7px;white-space:nowrap}
+    .chip::before{content:"";width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.9)}
+    .chip.ok{background:#3f7d0b}.chip.warn{background:#b45309}.chip.bad{background:#b91c1c}
+    .panel{display:none;width:336px;max-width:calc(100vw - 40px);max-height:calc(100vh - 170px);overflow:auto;background:#fff;border-radius:16px;box-shadow:0 18px 50px rgba(15,23,42,.35),0 0 0 1px rgba(15,23,42,.08);font-size:13px;line-height:1.45}
+    .panel.open{display:block}
+    .ph{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:linear-gradient(135deg,#0f172a,#172554);color:#fff;border-radius:16px 16px 0 0;font-weight:800;font-size:13.5px;position:sticky;top:0}
+    .ph button{border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:0 2px;opacity:.8}
+    .pb{padding:12px 14px 14px}
+    .sec{margin:0 0 12px}.sec:last-child{margin-bottom:0}
+    .lab{display:block;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin:0 0 5px}
+    select,input{width:100%;height:36px;border:1.5px solid #e2e8f0;border-radius:9px;padding:0 10px;font:inherit;background:#fff;color:#0f172a}
+    select:focus,input:focus{outline:none;border-color:#0064d2;box-shadow:0 0 0 3px rgba(0,100,210,.14)}
+    .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0}
+    .row span:first-child{color:#475569}
+    .row.keep{border-top:1px solid #e2e8f0;margin-top:4px;padding-top:7px;font-weight:800;font-size:14px}
+    .good{color:#3f7d0b}.loss{color:#b91c1c}
+    .mk{display:flex;gap:8px;align-items:center}
+    .mk input{width:78px;flex:none}
+    .mk .use{flex:1}
+    .use{border:1.5px solid #0064d2;background:#eff6ff;color:#0064d2;border-radius:9px;height:36px;font:700 12px/1.2 Inter,-apple-system,"Segoe UI",Arial,sans-serif;cursor:pointer;padding:0 8px}
+    .hint{font-size:11.5px;color:#64748b;margin-top:5px}
+    ul.checks{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+    ul.checks li{display:flex;gap:8px;font-size:12.5px;align-items:flex-start}
+    ul.checks li i{flex:none;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font:800 11px/1 Inter,Arial,sans-serif;color:#fff;font-style:normal;margin-top:1px}
+    li.bad i{background:#dc2626}li.warn i{background:#d97706}li.info i{background:#0064d2}li.ok i{background:#65a30d}
+    .go{width:100%;height:42px;border:0;border-radius:11px;background:linear-gradient(135deg,#0064d2,#4f46e5);color:#fff;font:800 13.5px/1 Inter,-apple-system,"Segoe UI",Arial,sans-serif;cursor:pointer;box-shadow:0 8px 18px rgba(0,100,210,.25)}
+    .go:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}
+    .go2{width:100%;height:36px;margin-top:8px;border:1.5px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;font:700 12.5px/1 Inter,-apple-system,"Segoe UI",Arial,sans-serif;cursor:pointer}
+    .foot{font-size:11px;color:#94a3b8;margin-top:9px;text-align:center}
+    .note{background:#f1f5f9;border-radius:9px;padding:8px 10px;font-size:12px;color:#334155}
+  `;
+
   function installFloatingImporter() {
     if (document.getElementById('__elms-floating-host')) return;
+    const LOGIC = globalThis.ELMS_LOGIC;
     const host = document.createElement('div');
     host.id = '__elms-floating-host';
     host.style.cssText = 'position:fixed;right:18px;bottom:22px;width:58px;height:58px;z-index:2147483647;';
-    const shadow = host.attachShadow({mode:'closed'});
+    const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
-    style.textContent = `
-      .wrap{position:relative;width:58px;height:58px;font-family:Inter,-apple-system,"Segoe UI",Arial,sans-serif}
-      button{position:relative;width:58px;height:58px;border:0;border-radius:18px;padding:8px;background:linear-gradient(145deg,#0f172a,#172554);box-shadow:0 8px 26px rgba(15,23,42,.35),0 0 0 3px rgba(255,255,255,.9);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .16s,box-shadow .16s}
-      button::after{content:"";position:absolute;left:10px;right:10px;bottom:-3px;height:3px;border-radius:3px;background:linear-gradient(90deg,#e53238 0 25%,#0064d2 25% 50%,#f5af02 50% 75%,#86b817 75%)}
-      button:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(15,23,42,.42),0 0 0 3px #fff}
-      button:active{transform:scale(.96)}
-      button[disabled]{cursor:wait;opacity:.85}
-      button[disabled] img{animation:pulse 1s ease-in-out infinite}
-      @keyframes pulse{50%{opacity:.45;transform:scale(.92)}}
-      img{width:100%;height:100%;object-fit:contain;border-radius:11px;display:block}
-      .dot{position:absolute;right:-3px;top:-3px;width:14px;height:14px;border-radius:50%;background:#86b817;border:2px solid #fff;box-sizing:border-box;display:none}
-      .toast{position:absolute;right:70px;bottom:0;min-width:220px;max-width:300px;padding:11px 14px;border-radius:12px;background:#0f172a;color:#fff;font-size:12.5px;line-height:1.4;white-space:pre-line;box-shadow:0 12px 30px rgba(15,23,42,.3);border-left:4px solid #0064d2;display:none}
-      .toast.show{display:block;animation:in .18s ease-out}
-      @keyframes in{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:none}}
-      .toast.ok{border-left-color:#86b817}.toast.err{border-left-color:#e53238;background:#2a1216}.toast.busy{border-left-color:#f5af02}
-    `;
-    const wrap = document.createElement('div'); wrap.className='wrap';
-    const button = document.createElement('button'); button.type='button'; button.title='Import this Amazon product to ELMS';
-    const img = document.createElement('img'); img.alt='ELMS'; img.src=chrome.runtime.getURL('logo.png');
-    const dot = document.createElement('span'); dot.className='dot';
-    const toast = document.createElement('div'); toast.className='toast';
-    button.append(img); wrap.append(button,dot,toast); shadow.append(style,wrap); document.documentElement.appendChild(host);
+    style.textContent = PANEL_CSS;
 
-    const show = (message, kind='busy') => {
-      toast.textContent=message; toast.className=`toast show ${kind}`;
-      if (kind !== 'busy') setTimeout(()=>toast.className='toast', 3200);
-    };
-    const setConnectedDot = async () => {
-      try {
-        const d=await chrome.storage.local.get(['extensionKey','sessionToken']);
-        dot.style.display = d.extensionKey && d.sessionToken ? 'block' : 'none';
-      } catch (_) {}
-    };
-    setConnectedDot();
+    // ----- the parts -----
+    const logo = h('button', { class: 'logo', type: 'button', title: 'Import this Amazon product to ELMS' }, h('img', { alt: 'ELMS', src: chrome.runtime.getURL('logo.png') }));
+    const dot = h('span', { class: 'dot' });
+    const toast = h('div', { class: 'toast' });
+    const chip = h('button', { class: 'chip', type: 'button', title: 'Profit and checks for this product' });
+    const closeBtn = h('button', { type: 'button', 'aria-label': 'Close', text: '×' });
+    const storeSelect = h('select');
+    const storeSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'eBay store' }), storeSelect);
+    const moneyBox = h('div', { class: 'sec' });
+    const markupInput = h('input', { type: 'number', step: '0.01', min: '0', placeholder: '0', 'aria-label': 'Markup percent' });
+    const useBtn = h('button', { class: 'use', type: 'button' });
+    const markupHint = h('div', { class: 'hint' });
+    const markupSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'Your markup %' }), h('div', { class: 'mk' }, markupInput, useBtn), markupHint);
+    const checksList = h('ul', { class: 'checks' });
+    const checksSec = h('div', { class: 'sec' }, h('label', { class: 'lab', text: 'Checks' }), checksList);
+    const goBtn = h('button', { class: 'go', type: 'button' });
+    const openBtn = h('button', { class: 'go2', type: 'button', text: 'Open in ELMS' });
+    const foot = h('div', { class: 'foot' });
+    const panel = h('div', { class: 'panel' }, h('div', { class: 'ph' }, h('span', { text: 'ELMS · Profit check' }), closeBtn), h('div', { class: 'pb' }, storeSec, moneyBox, markupSec, checksSec, h('div', { class: 'sec' }, goBtn, openBtn, foot)));
+    const stack = h('div', { class: 'stack' }, panel, chip);
+    const wrap = h('div', { class: 'wrap' }, logo, dot, toast, stack);
+    shadow.append(style, wrap);
+    document.documentElement.appendChild(host);
 
-    button.addEventListener('click', async () => {
-      if (button.disabled) return;
-      button.disabled=true;
-      show('Reading this Amazon page…','busy');
-      try {
-        const product=await extractWithVariants((message)=>show(message,'busy'));
-        const isAmazonProduct=/^https:\/\/(?:www\.)?amazon\.[a-z.]+\/(?:[^?#]*\/)?(?:dp|gp\/product|product)\//i.test(location.href) || !!product.asin;
-        if (!isAmazonProduct || !product.asin || !product.title) {
-          throw new Error('Amazon product page not detected. Open a product page and try again.');
-        }
-        show('Sending product to ELMS…','busy');
-        const response=await new Promise(resolve=>chrome.runtime.sendMessage({type:'ELMS_IMPORT_PRODUCT',product,amazonUrl:location.href},resolve));
-        if (chrome.runtime.lastError) throw new Error(chrome.runtime.lastError.message);
-        if (!response?.success) throw new Error(response?.error || 'Could not import this product.');
-        dot.style.display='block';
-        const saved=response.result?.product || product;
-        const variantCount = (saved.variants || product.variants || []).length;
-        show(`✓ Saved to ELMS Drafts\n${saved.asin || product.asin} · ${saved.images?.length || product.images?.length || 0} images${variantCount ? ` · ${variantCount} variants` : ''}`,'ok');
-      } catch (e) {
-        show(e?.message || 'Import failed.','err');
-      } finally {
-        setTimeout(()=>{button.disabled=false;},700);
+    // ----- state -----
+    const S = { ...{ connected: false, hasSession: false, markup: '', storeId: null, fees: LOGIC.normalizeSettings({}), autoOpen: false, skipVariants: false }, page: null, server: null, serverState: 'idle', serverError: '', busy: false, open: false, confirmUntil: 0 };
+    const cache = new Map(); // asin -> { at, data }: ELMS's answer for a product, kept for a minute and a half
+    let toastTimer = null;
+    let checkSeq = 0;
+    let lastSig = '';
+
+    const show = (message, kind = 'busy') => {
+      toast.textContent = message;
+      toast.className = `toast show ${kind}`;
+      clearTimeout(toastTimer);
+      if (kind !== 'busy') toastTimer = setTimeout(() => { toast.className = 'toast'; }, kind === 'err' ? 6500 : 4200);
+    };
+
+    const money = (n) => LOGIC.formatMoney(n, S.page && S.page.currency);
+
+    // ----- talking to ELMS -----
+    async function loadServer(force) {
+      const asin = S.page && S.page.asin;
+      if (!S.connected || !asin) return;
+      const hit = cache.get(asin);
+      if (!force && hit && Date.now() - hit.at < 90000) { S.server = hit.data; S.serverState = 'ok'; return; }
+      const seq = ++checkSeq;
+      S.serverState = 'loading';
+      render();
+      const r = await send({ type: 'ELMS_CHECK', payload: { asin, amazonUrl: location.href, title: S.page.title, brand: S.page.brand, bulletPoints: S.page.bullets } });
+      if (seq !== checkSeq) return; // the person moved on to another product meanwhile
+      if (r.success) {
+        S.server = r.result;
+        S.serverState = 'ok';
+        cache.set(asin, { at: Date.now(), data: r.result });
+        try { chrome.storage.local.set({ appUrl: r.result.appUrl }); } catch (_) { /* only remembered for opening ELMS pages */ }
+      } else {
+        S.server = null;
+        S.serverState = 'error';
+        S.serverError = r.error || 'ELMS could not be reached.';
       }
+      render();
+    }
+
+    async function refresh(force) {
+      if (!isProductPage()) { if (S.page) { S.page = null; render(); } return; }
+      let page;
+      try { page = snapshot(); } catch (_) { return; }
+      if (!page.asin) return;
+      const sig = JSON.stringify([page.asin, page.price, page.unavailable, page.hasCart, page.soldBy, page.deliveryText, page.title, page.imageCount]);
+      if (!force && sig === lastSig) return;
+      lastSig = sig;
+      const changed = !S.page || S.page.asin !== page.asin;
+      S.page = page;
+      if (changed) { S.server = null; S.serverState = 'idle'; S.confirmUntil = 0; }
+      render();
+      if (changed || force) await loadServer(!!force && !changed);
+    }
+
+    // ----- what to show -----
+    function locate() { return LOGIC.locate(S.server, S.storeId); }
+
+    // Why an import cannot go ahead (or null).
+    function importBlock() {
+      if (!S.connected) return 'Connect your ELMS account first: click the ELMS icon in the Chrome toolbar and paste your Extension Key.';
+      if (!S.page) return 'Open an Amazon product page first.';
+      if (!S.server) return null;
+      const { store, here } = locate();
+      if (!S.server.stores.length) return 'Connect an eBay store in ELMS first.';
+      if (store && store.amazonOk === false) return store.amazonMessage || 'This Amazon site does not match your store.';
+      if (here && here.status !== 'draft') return 'Already ' + (LOGIC.WHERE[here.status] || here.status) + (store ? ' (' + store.label + ')' : '') + '. It cannot be imported again.';
+      const c = S.server.credits;
+      if (c && !c.unlimited && c.balance < c.importCost) return 'You do not have enough credits (' + c.balance + ').';
+      return null;
+    }
+
+    function compute() {
+      const p = S.page;
+      const out = { checks: [], level: 'ok', cost: p.price, sell: null, r: null, rec: null, even: null, recMarkup: null, live: null, cannotImport: false };
+      const { here } = locate();
+      out.cannotImport = !!here && here.status !== 'draft';
+      // Already live on eBay: what it earns at the price it is listed at, not at the markup of a new import.
+      if (here && LOGIC.LIVE.has(here.status) && here.sellPrice && (!here.currency || here.currency === p.currency)) out.live = here;
+      out.checks = LOGIC.buildChecks({ page: p, server: S.server, storeId: S.storeId, settings: S.fees, markup: S.markup, now: new Date() });
+      out.level = LOGIC.worstLevel(out.checks);
+      if (p.price != null) {
+        out.sell = out.live ? out.live.sellPrice : LOGIC.priceAtMarkup(p.price, S.markup);
+        out.r = LOGIC.evaluate(p.price, out.sell, S.fees);
+        out.rec = LOGIC.recommendedPrice(p.price, S.fees, S.fees.targetPct);
+        out.even = LOGIC.breakEvenPrice(p.price, S.fees);
+        out.recMarkup = out.rec == null ? null : LOGIC.markupToReach(p.price, out.rec);
+      }
+      return out;
+    }
+
+    let storeSig = '';
+    function renderStores() {
+      const stores = (S.server && S.server.stores) || [];
+      const sig = JSON.stringify(stores.map((s) => [s.id, s.label, s.amazonOk]));
+      const { store } = locate();
+      if (sig !== storeSig) {
+        storeSig = sig;
+        storeSelect.replaceChildren(...stores.map((s) => h('option', { value: s.id, text: s.label + (s.amazonOk === false ? ' (other Amazon site)' : '') })));
+      }
+      if (store) storeSelect.value = store.id;
+      storeSec.style.display = stores.length > 1 ? 'block' : 'none';
+    }
+
+    function renderMoney(c) {
+      const rows = [];
+      const row = (label, value, cls) => h('div', { class: 'row' + (cls ? ' ' + cls : '') }, h('span', { text: label }), h('span', { text: value }));
+      if (c.r) {
+        const m = S.markup === '' ? 0 : Number(S.markup) || 0;
+        rows.push(row('Amazon price', money(c.cost)));
+        rows.push(row(c.live ? 'Your live eBay price' : 'Your eBay price (' + m + '% markup)', money(c.sell)));
+        rows.push(row('eBay fees', '-' + money(c.r.fees)));
+        const keep = h('div', { class: 'row keep ' + (c.r.profit < 0 ? 'loss' : 'good') }, h('span', { text: 'You keep' }), h('span', { text: money(c.r.profit) + ' · ' + c.r.margin.toFixed(1) + '%' }));
+        rows.push(keep);
+        if (c.even != null) rows.push(row('Break-even price', money(c.even)));
+        if (c.rec != null) rows.push(row(S.fees.targetPct + '% profit needs', money(c.rec) + ' (' + c.recMarkup + '% markup)'));
+      } else {
+        rows.push(h('div', { class: 'note', text: 'No price was found, so the profit cannot be worked out.' }));
+      }
+      moneyBox.replaceChildren(...rows);
+      if (c.recMarkup != null && c.r) {
+        useBtn.style.display = '';
+        useBtn.textContent = 'Use ' + c.recMarkup + '%';
+        useBtn.disabled = Number(S.markup) === c.recMarkup;
+      } else useBtn.style.display = 'none';
+      markupSec.style.display = c.cannotImport ? 'none' : 'block';
+      if (document.activeElement !== markupInput && shadow.activeElement !== markupInput) markupInput.value = S.markup;
+      markupHint.textContent = 'eBay fees ' + S.fees.feePct + '%' + (S.fees.adPct ? ' + ' + S.fees.adPct + '% promoted' : '') + ' + ' + money(S.fees.fixed) + ' per order. Change them in the extension popup.';
+    }
+
+    function renderChecks(c) {
+      const items = [];
+      if (!S.connected) items.push(h('li', { class: 'info' }, h('i', { text: 'i' }), h('span', { text: 'Connect your ELMS account (click the ELMS icon in the toolbar) to see what you already have, VeRO words and your credits.' })));
+      else if (S.serverState === 'loading' && !S.server) items.push(h('li', { class: 'info' }, h('i', { text: 'i' }), h('span', { text: 'Checking with ELMS…' })));
+      else if (S.serverState === 'error') items.push(h('li', { class: 'info' }, h('i', { text: 'i' }), h('span', { text: 'ELMS could not be checked: ' + S.serverError })));
+      const icon = { bad: '✕', warn: '!', info: 'i', ok: '✓' };
+      c.checks.forEach((k) => items.push(h('li', { class: k.level }, h('i', { text: icon[k.level] }), h('span', { text: k.text }))));
+      checksList.replaceChildren(...items);
+    }
+
+    function renderActions() {
+      const block = importBlock();
+      const { here } = locate();
+      const credits = S.server && S.server.credits;
+      const cost = credits ? credits.importCost : 1;
+      goBtn.disabled = S.busy || !!block;
+      goBtn.textContent = S.busy ? 'Importing…' : here && here.status === 'draft' ? 'Refresh the draft · ' + cost + ' credit' : 'Import to Drafts · ' + cost + ' credit';
+      // Something to open in ELMS: the draft, or the live listing.
+      openBtn.style.display = here ? 'block' : 'none';
+      openBtn.textContent = here && here.status === 'draft' ? 'Open the draft in ELMS' : 'Open in ELMS';
+      foot.textContent = credits ? (credits.unlimited ? 'Unlimited credits' : 'You have ' + credits.balance + ' credit' + (credits.balance === 1 ? '' : 's')) : '';
+      goBtn.title = block || '';
+    }
+
+    function render() {
+      const p = S.page;
+      stack.style.display = p ? 'flex' : 'none';
+      if (!p) return;
+      const c = compute();
+      const bad = c.checks.filter((k) => k.level === 'bad' || k.level === 'warn').length;
+      chip.className = 'chip ' + (S.connected ? c.level : '');
+      chip.textContent = (c.r ? (c.r.profit < 0 ? 'Loss ' + money(-c.r.profit) : 'Profit ' + money(c.r.profit)) : 'ELMS') + (bad ? ' · ' + bad + (bad === 1 ? ' warning' : ' warnings') : '');
+      panel.className = 'panel' + (S.open ? ' open' : '');
+      renderStores();
+      renderMoney(c);
+      renderChecks(c);
+      renderActions();
+    }
+
+    // ----- the import -----
+    async function runImport(source) {
+      if (S.busy) return;
+      if (!isProductPage()) { show('Open an Amazon product page to import it.', 'err'); return; }
+      await refresh(false);
+      const block = importBlock();
+      if (block) { show(block, 'err'); S.open = true; render(); return; }
+      const { store, here } = locate();
+      if (source === 'logo' && here && here.status === 'draft' && Date.now() > S.confirmUntil) {
+        S.confirmUntil = Date.now() + 6000;
+        show('This product is already in your Drafts. Press the button again within 6 seconds to refresh it (' + ((S.server.credits && S.server.credits.importCost) || 1) + ' credit).', 'busy');
+        return;
+      }
+      S.busy = true;
+      logo.disabled = true;
+      render();
+      try {
+        show('Reading this Amazon page…', 'busy');
+        const product = await extractWithVariants((message) => show(message, 'busy'));
+        if (!product.asin || !product.title) throw new Error('Amazon product page not detected. Open a product page and try again.');
+        show('Sending product to ELMS…', 'busy');
+        const markup = S.markup === '' ? undefined : Number(S.markup);
+        const response = await send({ type: 'ELMS_IMPORT_PRODUCT', product, amazonUrl: location.href, markupPercent: Number.isFinite(markup) ? markup : undefined, ebayAccountId: store ? store.id : undefined });
+        if (!response.success) {
+          if (response.code === 'already_listed') loadServer(true);
+          throw new Error(response.error || 'Could not import this product.');
+        }
+        dot.style.display = 'block';
+        const result = response.result || {};
+        const saved = result.product || product;
+        const variantCount = (saved.variants || product.variants || []).length;
+        const left = result.creditsLeft;
+        show('✓ Saved to ELMS Drafts\n' + (saved.asin || product.asin) + ' · ' + (saved.images ? saved.images.length : 0) + ' images' + (variantCount ? ' · ' + variantCount + ' variants' : '') + (left != null ? '\n' + left + ' credit' + (left === 1 ? '' : 's') + ' left' : ''), 'ok');
+        cache.delete(product.asin);
+        loadServer(true);
+        if (S.autoOpen && result.draft && result.draft.id) openInElms(result.appUrl, '/draft?open=' + encodeURIComponent(result.draft.id));
+      } catch (e) {
+        show(e && e.message ? e.message : 'Import failed.', 'err');
+      } finally {
+        S.busy = false;
+        logo.disabled = false;
+        render();
+      }
+    }
+
+    function openInElms(appUrl, path) {
+      const base = String(appUrl || (S.server && S.server.appUrl) || 'https://elmstool.com').replace(/\/+$/, '');
+      send({ type: 'ELMS_OPEN_URL', url: base + path });
+    }
+
+    // ----- wiring -----
+    logo.addEventListener('click', () => runImport('logo'));
+    goBtn.addEventListener('click', () => runImport('panel'));
+    chip.addEventListener('click', () => { S.open = !S.open; render(); });
+    closeBtn.addEventListener('click', () => { S.open = false; render(); });
+    openBtn.addEventListener('click', () => {
+      const { here } = locate();
+      if (!here) return;
+      openInElms(null, here.status === 'draft' ? '/draft?open=' + encodeURIComponent(here.id) : '/listing');
     });
+    storeSelect.addEventListener('change', () => {
+      S.storeId = storeSelect.value;
+      S.confirmUntil = 0;
+      try { chrome.storage.local.set({ storeId: S.storeId }); } catch (_) { /* kept for this page only */ }
+      render();
+    });
+    markupInput.addEventListener('input', () => {
+      S.markup = markupInput.value.trim();
+      try { chrome.storage.local.set({ markup: S.markup }); } catch (_) { /* kept for this page only */ }
+      render();
+    });
+    useBtn.addEventListener('click', () => {
+      const c = compute();
+      if (c.recMarkup == null) return;
+      S.markup = String(c.recMarkup);
+      markupInput.value = S.markup;
+      try { chrome.storage.local.set({ markup: S.markup }); } catch (_) { /* kept for this page only */ }
+      render();
+    });
+
+    // The popup (or another tab) changed a setting.
+    try {
+      chrome.storage.onChanged.addListener(async (changes, area) => {
+        if (area !== 'local') return;
+        const keys = Object.keys(changes);
+        if (!keys.some((k) => ['extensionKey', 'sessionToken', 'markup', 'storeId', 'fees', 'autoOpen', 'skipVariants'].includes(k))) return;
+        const wasConnected = S.connected;
+        Object.assign(S, await readSettings());
+        dot.style.display = S.connected && S.hasSession ? 'block' : 'none';
+        if (S.connected && !wasConnected) { lastSig = ''; refresh(true); } else render();
+      });
+    } catch (_) { /* no live settings */ }
+
+    // Amazon changes the page without loading a new one (a colour or size is picked, the price appears): look again when it settles.
+    let timer = null;
+    const later = () => { clearTimeout(timer); timer = setTimeout(() => refresh(false), 1000); };
+    try { new MutationObserver(later).observe(document.body, { childList: true, subtree: true, characterData: true }); } catch (_) { /* the page is read once */ }
+    window.addEventListener('popstate', later);
+
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message && message.type === 'ELMS_TRIGGER_IMPORT') runImport('shortcut');
+      return false;
+    });
+
+    (async () => {
+      Object.assign(S, await readSettings());
+      dot.style.display = S.connected && S.hasSession ? 'block' : 'none';
+      await refresh(true);
+    })();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installFloatingImporter, {once:true});

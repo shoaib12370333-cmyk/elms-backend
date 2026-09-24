@@ -1,6 +1,11 @@
 const $ = (id) => document.getElementById(id);
 const BOOTSTRAP_BACKEND = 'https://elms-backend-1-tr5h.onrender.com';
 const normalizeUrl = (v) => String(v || '').trim().replace(/\/$/, '');
+const LOGIC = globalThis.ELMS_LOGIC;
+const FEE_FIELDS = ['feePct', 'fixed', 'adPct', 'targetPct'];
+
+let info = null;              // ELMS's answer: credits, stores, appUrl
+const askedAbout = new Set(); // ASINs the person has been told are already in Drafts (the second press imports)
 
 async function resolveBackend() {
   const cached = await chrome.storage.local.get(['backend']);
@@ -10,11 +15,20 @@ async function resolveBackend() {
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.success && j.backendUrl) {
       const backend = normalizeUrl(j.backendUrl);
-      await chrome.storage.local.set({ backend });
+      await chrome.storage.local.set({ backend, backendCheckedAt: Date.now() });
       return backend;
     }
   } catch (_) {}
   return fallback;
+}
+
+// The background script talks to ELMS (it renews an expired session by itself).
+async function ask(message) {
+  try {
+    return (await chrome.runtime.sendMessage(message)) || { success: false, error: 'ELMS did not answer.' };
+  } catch (e) {
+    return { success: false, error: e?.message || 'ELMS did not answer.' };
+  }
 }
 
 function showConnected(user) {
@@ -32,13 +46,49 @@ function showDisconnected() {
   $('disconnect').classList.add('hidden');
   $('extensionKey').value = '';
   $('status').textContent = '';
+  info = null;
+  renderInfo();
+}
+
+// Credits and stores (free): shown under the account and in the store list.
+function renderInfo() {
+  const stores = info?.stores || [];
+  const credits = info?.credits;
+  $('credits').innerHTML = credits
+    ? (credits.unlimited ? '<b>Unlimited</b> credits' : `You have <b>${credits.balance}</b> credit${credits.balance === 1 ? '' : 's'}`) + ` &middot; an import costs <b>${credits.importCost}</b>`
+    : '';
+  $('storeField').classList.toggle('hidden', stores.length < 2);
+  const chosen = chosenStoreId();
+  $('store').replaceChildren(...stores.map((s) => Object.assign(document.createElement('option'), { value: s.id, textContent: s.label, selected: s.id === chosen })));
+}
+
+function chosenStoreId(saved) {
+  const stores = info?.stores || [];
+  const id = saved !== undefined ? saved : $('store').value;
+  return (stores.find((s) => s.id === id) || stores.find((s) => s.isActive) || stores[0] || {}).id || null;
+}
+
+async function loadInfo() {
+  const r = await ask({ type: 'ELMS_CHECK', payload: {} });
+  if (r.success) {
+    info = r.result;
+    if (info.appUrl) chrome.storage.local.set({ appUrl: info.appUrl });
+    const { storeId } = await chrome.storage.local.get(['storeId']);
+    renderInfo();
+    if (storeId) $('store').value = chosenStoreId(storeId) || '';
+  }
 }
 
 async function load() {
-  const data = await chrome.storage.local.get(['extensionKey', 'markup', 'connectedUser']);
+  const data = await chrome.storage.local.get(['extensionKey', 'markup', 'connectedUser', 'fees', 'autoOpen', 'skipVariants']);
   $('markup').value = data.markup ?? '';
+  const fees = data.fees || {};
+  FEE_FIELDS.forEach((k) => { $(k).value = fees[k] ?? ''; $(k).placeholder = String(LOGIC.DEFAULTS[k]); });
+  $('autoOpen').checked = !!data.autoOpen;
+  $('skipVariants').checked = !!data.skipVariants;
   if (data.extensionKey) {
     showConnected(data.connectedUser || {});
+    loadInfo();
   } else {
     showDisconnected();
   }
@@ -67,7 +117,7 @@ async function exchangeExtensionKey(key, backend) {
 async function ensureContentScript(tabId) {
   try { return await chrome.tabs.sendMessage(tabId, {type:'ELMS_GET_PRODUCT'}); }
   catch (_) {
-    await chrome.scripting.executeScript({target:{tabId},files:['content.js']});
+    await chrome.scripting.executeScript({target:{tabId},files:['logic.js','content.js']});
     await new Promise(r=>setTimeout(r,150));
     return await chrome.tabs.sendMessage(tabId,{type:'ELMS_GET_PRODUCT'});
   }
@@ -95,6 +145,7 @@ $('connect').addEventListener('click', async()=>{
     await chrome.storage.local.set({extensionKey:key,backend,sessionToken:result.sessionToken,markup:$('markup').value.trim(),connectedUser:user});
     showConnected(user);
     $('status').innerHTML='<span class="connected-text">✓ Connected successfully</span>';
+    loadInfo();
   } catch(e) {
     $('status').innerHTML=`<span class="notconnected">Connection failed</span>\n${escapeHtml(e.message)}`;
   } finally { button.disabled=false; }
@@ -110,36 +161,69 @@ $('markup').addEventListener('change', async()=>{
   await chrome.storage.local.set({markup:$('markup').value.trim()});
 });
 
+$('store').addEventListener('change', () => chrome.storage.local.set({ storeId: $('store').value }));
+
+// Profit settings: what is typed is kept as typed; the panel on the page reads it through LOGIC.normalizeSettings.
+FEE_FIELDS.forEach((k) => $(k).addEventListener('change', () => {
+  const fees = {};
+  FEE_FIELDS.forEach((f) => { const v = $(f).value.trim(); if (v !== '') fees[f] = v; });
+  chrome.storage.local.set({ fees });
+}));
+$('autoOpen').addEventListener('change', () => chrome.storage.local.set({ autoOpen: $('autoOpen').checked }));
+$('skipVariants').addEventListener('change', () => chrome.storage.local.set({ skipVariants: $('skipVariants').checked }));
+
+let openTarget = null;
+$('openDraft').addEventListener('click', () => { if (openTarget) ask({ type: 'ELMS_OPEN_URL', url: openTarget }); });
+
 $('import').addEventListener('click',async()=>{
-  renderPreview(null); $('status').textContent='Reading the current Amazon page and its variants…';
+  const button=$('import');
+  let holdLabel=false; // true while the button asks for a second press
+  renderPreview(null); $('openDraft').classList.add('hidden'); $('status').textContent='Reading the current Amazon page and its variants…';
+  button.disabled=true;
   try {
-    const data=await chrome.storage.local.get(['extensionKey','markup','sessionToken','backend']);
+    const data=await chrome.storage.local.get(['extensionKey','markup']);
     const key=String(data.extensionKey||'').trim();
     if(!key) throw new Error('Connect your ELMS account first.');
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
     if(!tab?.id || !/^https:\/\/(www\.)?amazon\./i.test(tab.url||'')) throw new Error('Open an Amazon product page first.');
     const extracted=await ensureContentScript(tab.id);
     if(!extracted?.success) throw new Error(extracted?.error||'Could not read the Amazon page.');
-    renderPreview(extracted.product); $('status').textContent='Connecting to ELMS…';
-    const backend=await resolveBackend();
-    let token=data.sessionToken;
-    let user=data.connectedUser;
-    if(!token){
-      const result=await exchangeExtensionKey(key,backend);
-      token=result.sessionToken; user=result.user||user;
-      await chrome.storage.local.set({sessionToken:token,backend,connectedUser:user});
-      showConnected(user||{});
+    const product=extracted.product;
+    renderPreview(product);
+
+    // A draft that is already there is refreshed for another credit: ask once before doing it.
+    if(product.asin && !askedAbout.has(product.asin)){
+      $('status').textContent='Checking ELMS…';
+      const c=await ask({type:'ELMS_CHECK',payload:{asin:product.asin,amazonUrl:tab.url,title:product.title,brand:product.brand}});
+      if(c.success){
+        info=c.result; renderInfo();
+        const {here}=LOGIC.locate(info,chosenStoreId());
+        if(here && here.status==='draft'){
+          askedAbout.add(product.asin);
+          holdLabel=true;
+          button.textContent=`Refresh the draft · ${info.credits.importCost} credit`;
+          $('status').innerHTML=`<span class="warn-text">Already in your Drafts.</span>\nImporting again refreshes it and costs ${info.credits.importCost} credit. Press the button again to do it.`;
+          return;
+        }
+      }
     }
-    const markup=$('markup').value.trim() || data.markup || '';
+
     $('status').textContent='Saving product to ELMS Drafts…';
-    const payload={amazonUrl:tab.url,product:extracted.product};
-    if(markup!=='') payload.markupPercent=Number(markup);
-    const r=await fetch(`${backend}/api/browser-import`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify(payload)});
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok||!j.success) throw new Error(j.error||`Import failed (${r.status}).`);
-    await chrome.storage.local.set({backend,markup});
-    $('status').innerHTML=`<span class="connected-text">✓ Saved to ELMS Drafts</span>\nASIN: ${escapeHtml(j.product.asin||'—')}\nAmazon: ${j.product.price!=null?escapeHtml(Number(j.product.price).toFixed(2)):'—'} · Selling: ${j.suggestedPrice!=null?escapeHtml(Number(j.suggestedPrice).toFixed(2)):'—'}`;
+    const markup=$('markup').value.trim() || data.markup || '';
+    const r=await ask({type:'ELMS_IMPORT_PRODUCT',product,amazonUrl:tab.url,markupPercent:markup!==''&&Number.isFinite(Number(markup))?Number(markup):undefined,ebayAccountId:chosenStoreId()||undefined});
+    if(!r.success) throw new Error(r.error||'Import failed.');
+    const j=r.result;
+    await chrome.storage.local.set({markup});
+    askedAbout.delete(product.asin);
+    if(info?.credits && j.creditsLeft!=null){ info.credits.balance=j.creditsLeft; renderInfo(); }
+    $('status').innerHTML=`<span class="connected-text">✓ Saved to ELMS Drafts</span>\nASIN: ${escapeHtml(j.product.asin||'—')}${j.store?.label?` · ${escapeHtml(j.store.label)}`:''}\nAmazon: ${j.product.price!=null?escapeHtml(Number(j.product.price).toFixed(2)):'—'} · Selling: ${j.suggestedPrice!=null?escapeHtml(Number(j.suggestedPrice).toFixed(2)):'—'}`;
+    if(j.draft?.id){
+      openTarget=`${String(j.appUrl||info?.appUrl||'https://elmstool.com').replace(/\/+$/,'')}/draft?open=${encodeURIComponent(j.draft.id)}`;
+      $('openDraft').classList.remove('hidden');
+      if($('autoOpen').checked) ask({type:'ELMS_OPEN_URL',url:openTarget});
+    }
   } catch(e) { $('status').innerHTML=`<span class="notconnected">Import failed</span>\n${escapeHtml(e.message||'Import failed.')}`; }
+  finally { button.disabled=false; if(!holdLabel) button.textContent='Import current Amazon product'; }
 });
 
 load().catch((e)=>{ $('status').textContent=e?.message||'Unable to load ELMS settings.'; });
