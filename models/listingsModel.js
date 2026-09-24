@@ -173,10 +173,29 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null) {
   });
 }
 
+/**
+ * The colour / size variants of an imported product, small enough to travel with every listing row: what makes each one
+ * different, its own title, one picture and its price (the full picture lists stay on the import).
+ */
+function compactVariants(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((v) => v && v.asin).slice(0, 50).map((v) => ({
+    asin: v.asin,
+    title: v.title || v.label || null,
+    label: v.label || null,
+    image: v.image || (Array.isArray(v.images) && v.images[0]) || null,
+    price: Number.isFinite(Number(v.price)) && v.price !== null && v.price !== '' ? Number(v.price) : null,
+    dimensions: Array.isArray(v.dimensions) ? v.dimensions.filter((d) => d && d.name && d.value).map((d) => ({ name: d.name, value: d.value })) : [],
+    isCurrentProduct: v.isCurrentProduct === true,
+  }));
+}
+
 /** Drafts made before description/bullets/specs were copied onto the listing read them from the linked import. */
 function withImportFallback(serialized, doc) {
   const p = doc.importId?.product;
   if (!p) return serialized;
+  serialized.variants = compactVariants(p.variants);
+  serialized.variants_count = serialized.variants.length;
   serialized.brand = String(p.brand || '');
   if (!serialized.description) serialized.description = String(p.description || '');
   if (!Array.isArray(serialized.bullet_points) || !serialized.bullet_points.length) serialized.bullet_points = Array.isArray(p.bulletPoints) ? p.bulletPoints : [];
@@ -679,4 +698,6 @@ module.exports = {
   unscheduleListing,
   listScheduledDue,
   serialize,
+  withImportFallback,
+  compactVariants,
 };
