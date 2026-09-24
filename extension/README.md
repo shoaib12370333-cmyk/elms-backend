@@ -12,6 +12,9 @@ The extension does **not** expose an editable backend URL and does **not** have 
 
 Product images are limited to Amazon's product gallery/A+ areas and video thumbnails/player posters are filtered out.
 
+## Look (v3.3.1)
+The ELMS wordmark is the extension's logo everywhere: the toolbar icon, the popup header and the button on Amazon pages (`icon-*.png`, `logo-wordmark.png`, `logo.png`).
+
 ## What it reads (v3.3)
 - Title, description, bullet points, price, brand, categories and **every item specification** on the page.
 - **All gallery pictures** of the product, full size.
