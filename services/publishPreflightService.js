@@ -53,9 +53,26 @@ function numberFromFacts(def, product) {
  *
  * @returns {Promise<{ aspects: Object<string,string[]>|null, notes: string[] }>}
  */
-async function prepareAspects({ categoryId, marketplaceId, product }) {
+async function prepareAspects(args) {
+  const out = await checkAspects(args);
+  if (out.missing.length) {
+    const e = new Error('eBay requires these item specifics for this category and they are empty: ' + out.missing.join(', ') + '. Open the draft → Item Specifications and fill them (or press Fill with AI), then publish again.');
+    e.statusCode = 400;
+    throw e;
+  }
+  return { aspects: out.aspects, notes: out.notes };
+}
+
+/**
+ * The same work as prepareAspects, but a required item specific that cannot be filled is REPORTED (missing) instead of
+ * thrown, so the AI filler can save everything else and tell the seller exactly what is left.
+ * aspectsOnly: keep only the item specifics that were passed in (product.ebayAspects) - the Amazon specifications and
+ * brand are still read as facts, but are not turned into item specifics (that is what publishing does).
+ * @returns {Promise<{ aspects: Object<string,string[]>|null, notes: string[], missing: string[] }>}
+ */
+async function checkAspects({ categoryId, marketplaceId, product, aspectsOnly = false }) {
   const notes = [];
-  const merged = buildAspects(product);
+  const merged = buildAspects(aspectsOnly ? { ebayAspects: product.ebayAspects } : product);
   let defs;
   try {
     defs = (await getItemAspectsForCategory(null, categoryId, marketplaceId)).aspects || [];
@@ -65,9 +82,9 @@ async function prepareAspects({ categoryId, marketplaceId, product }) {
       e.statusCode = 400;
       throw e;
     }
-    return { aspects: null, notes: ['category lookup unavailable, sent as is'] };
+    return { aspects: null, notes: ['category lookup unavailable, sent as is'], missing: [] };
   }
-  if (!defs.length) return { aspects: merged, notes };
+  if (!defs.length) return { aspects: merged, notes, missing: [] };
 
   const byName = new Map(defs.map((d) => [norm(d.name), d]));
   const final = {};
@@ -98,7 +115,9 @@ async function prepareAspects({ categoryId, marketplaceId, product }) {
     const textAspect = !def.dataType || def.dataType === 'STRING';
     let value = null;
     if (list.length) value = (isBrand && pick('Unbranded')) || pick('Does not apply') || null;
-    else if (textAspect) value = isBrand ? 'Unbranded' : 'Does not apply';
+    // A FREE_TEXT aspect only SUGGESTS values (Brand has thousands), so "Unbranded" / "Does not apply" are fine even when
+    // they are not on its list; only a "choose from" aspect needs one of the listed values.
+    if (!value && textAspect && (!list.length || def.mode === 'FREE_TEXT')) value = isBrand ? 'Unbranded' : 'Does not apply';
     if (value) { final[def.name] = [value]; notes.push('"' + def.name + '" was empty, set to ' + value); continue; }
 
     // Nothing "not applicable" is allowed here, so use what the product itself says: an allowed value that
@@ -109,12 +128,7 @@ async function prepareAspects({ categoryId, marketplaceId, product }) {
     else if (number) { final[def.name] = [number]; notes.push('"' + def.name + '" was empty, taken from the specifications: ' + number); }
     else missing.push(def.name + (list.length ? ' (' + list.slice(0, 5).join(' / ') + (list.length > 5 ? ' ...' : '') + ')' : def.dataType && def.dataType !== 'STRING' ? ' (a ' + def.dataType.toLowerCase() + ')' : ''));
   }
-  if (missing.length) {
-    const e = new Error('eBay requires these item specifics for this category and they are empty: ' + missing.join(', ') + '. Open the draft \u2192 Item Specifications and fill them (or press Fill with AI), then publish again.');
-    e.statusCode = 400;
-    throw e;
-  }
-  return { aspects: final, notes };
+  return { aspects: final, notes, missing };
 }
 
 /**
@@ -143,4 +157,4 @@ async function assertUsableCategory({ categoryId, marketplaceId }) {
   }
 }
 
-module.exports = { prepareAspects, assertUsableCategory };
+module.exports = { prepareAspects, checkAspects, assertUsableCategory };
