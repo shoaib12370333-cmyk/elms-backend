@@ -8,7 +8,8 @@ const {
   setStockCheckInterval,
   setMaxEbayAccounts,
 } = require('../models/usersModel');
-const { listAllTickets, resolveTicket } = require('../models/supportTicketsModel');
+const { listAllTickets, resolveTicket, adminReplyToTicket } = require('../models/supportTicketsModel');
+const { isValidObjectIdString } = require('../services/validationService');
 const { createPlan, updatePlan, deletePlan, listAllPlans } = require('../models/plansModel');
 const {
   getSettings,
@@ -108,6 +109,44 @@ router.get('/tickets', async (req, res) => {
   res.json({ success: true, tickets });
 });
 
+/** Mails an admin's reply to whoever wrote the ticket (best effort). A mail ticket goes back to its sender, an in-app one to the account's email. */
+async function emailTicketReply(ticket, reply) {
+  const text = reply && String(reply).trim();
+  if (!text || !(ticket.userId || ticket.fromEmail)) return false;
+  try {
+    let to = ticket.fromEmail || null;
+    if (!to && ticket.userId) {
+      const { getUserById } = require('../models/usersModel');
+      const owner = await getUserById(ticket.userId);
+      to = owner && owner.email ? owner.email : null;
+    }
+    if (!to) return false;
+    await require('../services/emailService').sendTicketReplyEmail({ to, subject: ticket.subject, reply: text, ref: ticket.ref, inReplyTo: ticket.emailMessageId || undefined });
+    return true;
+  } catch (mailErr) {
+    console.warn('ticket reply email failed:', mailErr.message);
+    return false;
+  }
+}
+
+/**
+ * POST /api/admin/tickets/:id/reply
+ * Body: { reply: string }
+ *
+ * Answers in the conversation and keeps the ticket open. The pending request is cleared; when the customer writes back it is
+ * pending again. (Resolve closes the ticket.)
+ */
+router.post('/tickets/:id/reply', async (req, res) => {
+  const reply = String((req.body && req.body.reply) || '').trim();
+  if (!reply) return res.status(400).json({ success: false, error: 'Write your reply first.' });
+  if (reply.length > 4000) return res.status(400).json({ success: false, error: 'A reply can be 4000 characters.' });
+  if (!isValidObjectIdString(req.params.id)) return res.status(404).json({ success: false, error: 'Ticket not found.' });
+  const ticket = await adminReplyToTicket(req.params.id, reply);
+  if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found.' });
+  const emailed = await emailTicketReply(ticket, reply);
+  res.json({ success: true, ticket, emailed });
+});
+
 /**
  * POST /api/admin/tickets/:id/resolve
  * Body: { adminReply?: string }
@@ -121,25 +160,7 @@ router.post('/tickets/:id/resolve', async (req, res) => {
   if (!ticket) {
     return res.status(404).json({ success: false, error: 'Ticket not found.' });
   }
-  let emailed = false;
-  if (adminReply && String(adminReply).trim() && (ticket.userId || ticket.fromEmail)) {
-    try {
-      // A ticket that came in as an email goes back to whoever wrote it (they may have no ELMS account);
-      // an in-app ticket goes to the account's email.
-      let to = ticket.fromEmail || null;
-      if (!to && ticket.userId) {
-        const { getUserById } = require('../models/usersModel');
-        const owner = await getUserById(ticket.userId);
-        to = owner && owner.email ? owner.email : null;
-      }
-      if (to) {
-        await require('../services/emailService').sendTicketReplyEmail({ to, subject: ticket.subject, reply: String(adminReply).trim(), ref: ticket.ref, inReplyTo: ticket.emailMessageId || undefined });
-        emailed = true;
-      }
-    } catch (mailErr) {
-      console.warn('ticket reply email failed:', mailErr.message);
-    }
-  }
+  const emailed = await emailTicketReply(ticket, adminReply);
 
   res.json({ success: true, ticket, emailed });
 });
