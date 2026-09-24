@@ -1,6 +1,8 @@
 const { askClaude } = require('./aiService');
 
 const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+// Every value eBay allows for an aspect (eBay's list can be longer than the 100 choices the editor receives).
+const allowedOf = (a) => (Array.isArray(a.allValues) && a.allValues.length ? a.allValues : Array.isArray(a.values) ? a.values : []).map(String);
 
 /**
  * Fills the item specifics of an eBay category from what we know about the product.
@@ -11,7 +13,7 @@ const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
 async function fillItemSpecifics({ title, description, bulletPoints, specifications, categoryName, aspects, existing = {} }) {
   const list = (Array.isArray(aspects) ? aspects : [])
     .filter((a) => a && a.name)
-    .map((a) => ({ name: String(a.name), required: !!a.required, usage: a.usage || (a.required ? 'REQUIRED' : 'OPTIONAL'), multi: a.cardinality === 'MULTI', values: Array.isArray(a.values) ? a.values.map(String).slice(0, 60) : [] }))
+    .map((a) => ({ name: String(a.name), required: !!a.required, usage: a.usage || (a.required ? 'REQUIRED' : 'OPTIONAL'), multi: a.cardinality === 'MULTI', values: allowedOf(a), free: a.mode === 'FREE_TEXT' }))
     .sort((x, y) => (y.required - x.required) || ((y.usage === 'RECOMMENDED') - (x.usage === 'RECOMMENDED')))
     .slice(0, 45);
   if (!list.length) return { text: '', data: { values: {}, filled: 0 }, usage: null };
@@ -26,7 +28,11 @@ async function fillItemSpecifics({ title, description, bulletPoints, specificati
 
   const spec = list.map((a) => {
     const kind = a.required ? 'REQUIRED' : a.usage === 'RECOMMENDED' ? 'recommended' : 'optional';
-    const allowed = a.values.length ? ` | choose from: ${a.values.join(' ; ')}` : ' | free text, max 65 characters';
+    // The prompt shows the first 60 choices; the answer is checked against the whole list.
+    // A FREE_TEXT aspect only suggests values: the seller (or the AI) may write another one.
+    const allowed = a.values.length && !a.free
+      ? ` | choose from: ${a.values.slice(0, 60).join(' ; ')}${a.values.length > 60 ? ' ; (or another standard eBay value that fits)' : ''}`
+      : a.values.length ? ` | free text, max 65 characters (usual values: ${a.values.slice(0, 25).join(' ; ')})` : ' | free text, max 65 characters';
     return `- ${a.name} (${kind}${a.multi ? ', can have several values' : ''})${allowed}`;
   }).join('\n');
 
@@ -65,7 +71,8 @@ async function fillItemSpecifics({ title, description, bulletPoints, specificati
     let vals = (Array.isArray(rawVal) ? rawVal : [rawVal]).map((v) => String(v ?? '').trim()).filter(Boolean);
     if (a.values.length) {
       const allowed = new Map(a.values.map((v) => [norm(v), v]));
-      vals = vals.map((v) => allowed.get(norm(v))).filter(Boolean);
+      // Only a "choose from" aspect drops what is not on the list; a free-text one keeps the AI's own wording.
+      vals = a.free ? vals.map((v) => allowed.get(norm(v)) || v.slice(0, 65)) : vals.map((v) => allowed.get(norm(v))).filter(Boolean);
     } else {
       vals = vals.map((v) => v.slice(0, 65));
     }

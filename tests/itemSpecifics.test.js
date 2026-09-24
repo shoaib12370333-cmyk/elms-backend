@@ -30,6 +30,17 @@ const withAll = (def, all) => Object.defineProperty(def, 'allValues', { value: a
   out = await prepareAspects({ categoryId: '1', marketplaceId: 'EBAY_US', product: {} });
   assert.deepStrictEqual(out.aspects, { Pattern: ['Does not apply'] });
 
+  // A free-text aspect only SUGGESTS values: Brand with a long list that lacks "Unbranded" still gets it when empty ...
+  defs = [{ name: 'Brand', required: true, cardinality: 'SINGLE', mode: 'FREE_TEXT', dataType: 'STRING', values: ['Nike', 'Adidas'] }];
+  out = await prepareAspects({ categoryId: '1', marketplaceId: 'EBAY_US', product: {} });
+  assert.deepStrictEqual(out.aspects, { Brand: ['Unbranded'] });
+  // ... and the seller's own brand, which is not on the list, is kept.
+  out = await prepareAspects({ categoryId: '1', marketplaceId: 'EBAY_US', product: { ebayAspects: { Brand: ['Acme'] } } });
+  assert.deepStrictEqual(out.aspects, { Brand: ['Acme'] });
+  // a "choose from" aspect whose list has no "not applicable" value is still reported
+  defs = [{ name: 'Department', required: true, cardinality: 'SINGLE', mode: 'SELECTION_ONLY', dataType: 'STRING', values: ['Men', 'Women'] }];
+  await assert.rejects(() => prepareAspects({ categoryId: '1', marketplaceId: 'EBAY_US', product: { title: 'Some thing' } }), /Department/);
+
   // buildAspects cleans what it sends.
   const a = buildAspects({
     brand: 'Acme',

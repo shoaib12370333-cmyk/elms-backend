@@ -164,13 +164,25 @@ router.post('/fill-aspects', requireAuth, async (req, res) => {
   const aspects = Array.isArray(req.body?.aspects) ? req.body.aspects : [];
   if (title.length < 3) return res.status(400).json({ success: false, error: 'Enter a title first.' });
   if (!aspects.length) return res.status(400).json({ success: false, error: 'Choose an eBay category first so its item specifics can load.' });
-  const { fillItemSpecifics } = require('../services/aspectFillerService');
+  const { fillEditorAspects } = require('../services/listingAspectFillService');
   return runAiAction(req, res, {
     kind: 'aspects', costKey: 'AI_ASPECTS', enabledKey: 'aiAspectsEnabled',
-    run: () => fillItemSpecifics({
-      title, categoryName: String(req.body?.categoryName || '').slice(0, 160), description: req.body?.description,
-      bulletPoints: req.body?.bulletPoints, specifications: req.body?.specifications, aspects, existing: req.body?.existing || {},
-    }),
+    run: async () => {
+      // With the category (and the account, for its eBay site) the answer is checked the way publishing checks it.
+      const categoryId = String(req.body?.categoryId || '').trim();
+      let marketplaceId = null;
+      if (categoryId) {
+        const accounts = await listEbayAccounts(req.userId).catch(() => []);
+        const wanted = req.body?.accountId ? accounts.find((a) => a.id === req.body.accountId) : null;
+        const account = wanted || accounts.find((a) => a.isActive) || accounts[0];
+        marketplaceId = (account && account.marketplaceId) || 'EBAY_US';
+      }
+      return fillEditorAspects({
+        title, categoryName: String(req.body?.categoryName || '').slice(0, 160), description: req.body?.description,
+        bulletPoints: req.body?.bulletPoints, specifications: req.body?.specifications, aspects, existing: req.body?.existing || {},
+        categoryId: categoryId || null, marketplaceId,
+      });
+    },
   });
 });
 

@@ -676,6 +676,44 @@ router.patch('/bulk-settings', requireAuth, async (req, res) => {
   res.json({ success: true, updated, skipped });
 });
 
+const MAX_AI_BATCH = 25;
+
+/** GET /api/listings/bulk-aspects/cost - what one AI item-specifics fill costs right now (the admin sets it). */
+router.get('/bulk-aspects/cost', requireAuth, (req, res) => {
+  res.json({ success: true, cost: Number(ACTION_COSTS.AI_ASPECTS || 0) });
+});
+
+/**
+ * POST /api/listings/bulk-aspects   { ids: [...] }
+ *
+ * AI fills and SAVES the eBay item specifics of every selected draft (see services/listingAspectFillService.js), so publishing
+ * them does not stop on a missing specific. Each draft that really gets new specifics costs the admin-set AI_ASPECTS credits
+ * (10 drafts at 2 credits = 20); a draft that is skipped, fails, or where the AI adds nothing costs nothing. One draft failing
+ * never stops the others. At most 25 per request - the app sends bigger selections in several requests.
+ */
+router.post('/bulk-aspects', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_AI_BATCH) return res.status(400).json({ success: false, error: `Please fill at most ${MAX_AI_BATCH} drafts per request.` });
+  try {
+    const { getAiSettings } = require('../models/settingsModel');
+    const settings = await getAiSettings();
+    if (!settings.aiAspectsEnabled) return res.status(403).json({ success: false, error: 'This AI feature is turned off by the administrator.' });
+    const { fillManyDraftAspects } = require('../services/listingAspectFillService');
+    const results = await fillManyDraftAspects(req.userId, ids);
+    res.json({
+      success: true,
+      results,
+      filled: results.filter((r) => r.status === 'filled').length,
+      creditsUsed: results.reduce((sum, r) => sum + (r.creditsUsed || 0), 0),
+      cost: Number(ACTION_COSTS.AI_ASPECTS || 0),
+    });
+  } catch (err) {
+    console.error('bulk aspects error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not fill the item specifics. Please try again.' });
+  }
+});
+
 /**
  * POST /api/listings/:id/pause
  * Withdraws the eBay offer but keeps the offer object and ELMS listing.
