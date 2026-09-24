@@ -138,13 +138,6 @@ async function handleCustomerMessage(ticketId, { followUp = false } = {}) {
   if (!ticket) return { action: 'skipped', reason: 'missing' };
   if (ticket.source === 'appeal') return { action: 'skipped', reason: 'appeal' }; // appeals are only ever answered by an admin
 
-  if (ticket.adminEngaged && !ticket.escalated) {
-    // An admin answered and the customer writes back: it is pending for the admin again (the assistant stays out of it).
-    await SupportTicket.updateOne({ _id: ticket._id }, { $set: { escalated: true, urgent: false, escalationReason: 'The customer replied after your answer.' } });
-    await alertAdmin(ticket, { urgent: false, reason: 'The customer replied after an admin answered.', followUp: true });
-    return { action: 'skipped', reason: 'admin_engaged' };
-  }
-
   if (ticket.escalated) {
     // A person already owns this ticket; a new customer message only re-alerts them (not more than every few minutes).
     const recentlyAlerted = ticket.lastAlertAt && Date.now() - new Date(ticket.lastAlertAt).getTime() < FOLLOW_UP_ALERT_GAP_MS;
@@ -213,12 +206,6 @@ async function requestAdmin(ticketId) {
   const SupportTicket = require('../models/schemas/SupportTicket');
   const ticket = await SupportTicket.findById(ticketId).lean();
   if (!ticket) return false;
-  if (ticket.adminEngaged && !ticket.escalated) {
-    // The customer asks for the admin who already answered: pending again.
-    await SupportTicket.updateOne({ _id: ticket._id }, { $set: { escalated: true, urgent: false, escalationReason: 'The customer asked for an admin again.' }, $push: { thread: { from: 'system', text: 'The customer asked for an admin again.', at: new Date() } } });
-    await alertAdmin(ticket, { urgent: false, reason: 'The customer asked for an admin again.', followUp: true });
-    return true;
-  }
   if (ticket.escalated) {
     await SupportTicket.updateOne({ _id: ticket._id }, { $push: { thread: { from: 'system', text: 'The customer asked for an admin again.', at: new Date() } } });
     const recentlyAlerted = ticket.lastAlertAt && Date.now() - new Date(ticket.lastAlertAt).getTime() < FOLLOW_UP_ALERT_GAP_MS;

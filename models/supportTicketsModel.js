@@ -39,26 +39,10 @@ async function listAllTickets() {
  */
 async function resolveTicket(id, adminReply) {
   const reply = adminReply && String(adminReply).trim() ? String(adminReply).trim() : null;
-  // Resolved = nothing pending any more, and the next message starts fresh (the assistant answers first again).
-  const update = { status: 'resolved', adminReply: reply, resolvedAt: new Date(), escalated: false, urgent: false, adminEngaged: false };
+  const update = { status: 'resolved', adminReply: reply, resolvedAt: new Date() };
   const doc = await SupportTicket.findByIdAndUpdate(
     id,
     reply ? { ...update, $push: { thread: { from: 'admin', text: reply, at: new Date() } } } : update,
-    { new: true }
-  );
-  return doc ? serialize(doc) : null;
-}
-
-/**
- * Admin-only: answers in the conversation and keeps the ticket open. The pending request is cleared (the ball is with the
- * customer now) and the assistant stays out until the ticket is closed. Answers on a resolved ticket reopen it.
- */
-async function adminReplyToTicket(id, text) {
-  const reply = String(text || '').trim();
-  if (!reply) return null;
-  const doc = await SupportTicket.findByIdAndUpdate(
-    id,
-    { $set: { status: 'open', resolvedAt: null, escalated: false, urgent: false, adminEngaged: true }, $push: { thread: { from: 'admin', text: reply, at: new Date() } } },
     { new: true }
   );
   return doc ? serialize(doc) : null;
@@ -82,7 +66,6 @@ function serialize(doc) {
     thread: Array.isArray(obj.thread) ? obj.thread.map((t) => ({ from: t.from, text: t.text, at: t.at })) : [],
     aiStatus: obj.aiStatus || null,
     escalated: !!obj.escalated,
-    adminEngaged: !!obj.adminEngaged,
     urgent: !!obj.urgent,
     // What the assistant answered (the customer sees it in their ticket list).
     aiReply: (Array.isArray(obj.thread) ? [...obj.thread].reverse().find((t) => t.from === 'ai') : null)?.text || null,
@@ -130,7 +113,7 @@ async function addCustomerMessage(userId, id, text) {
 async function closeTicketByCustomer(userId, id) {
   const doc = await SupportTicket.findOneAndUpdate(
     { _id: id, userId, status: { $ne: 'resolved' } },
-    { $set: { status: 'resolved', resolvedAt: new Date(), escalated: false, urgent: false, adminEngaged: false }, $push: { thread: { from: 'system', text: 'The customer marked this as solved and closed the ticket.', at: new Date() } } },
+    { $set: { status: 'resolved', resolvedAt: new Date() }, $push: { thread: { from: 'system', text: 'The customer marked this as solved and closed the ticket.', at: new Date() } } },
     { new: true }
   );
   if (doc) return serialize(doc);
@@ -138,4 +121,4 @@ async function closeTicketByCustomer(userId, id) {
   return existing ? serialize(existing) : null;
 }
 
-module.exports = { createTicket, listTicketsForUser, listAllTickets, resolveTicket, adminReplyToTicket, getTicketForUser, addCustomerMessage, closeTicketByCustomer, countTicketsSince };
+module.exports = { createTicket, listTicketsForUser, listAllTickets, resolveTicket, getTicketForUser, addCustomerMessage, closeTicketByCustomer, countTicketsSince };
