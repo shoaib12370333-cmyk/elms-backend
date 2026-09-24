@@ -11,7 +11,10 @@ const {
   findProductCategories,
   gradeListing,
   extractAsinFromUrl,
+  detectCountryFromUrl,
 } = require('../services/canopyAmazonService');
+const { getActiveEbayAccount } = require('../models/ebayAccountsModel');
+const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
 
 /**
  * Small helper: routes below accept either an asin or a full Amazon url -
@@ -21,6 +24,24 @@ function resolveAsin(req) {
   if (req.query.asin) return req.query.asin;
   if (req.query.url) return extractAsinFromUrl(req.query.url);
   return null;
+}
+
+/**
+ * Which Amazon site a research call looks at: the one asked for (?country=), else the site of the link that was pasted, else the
+ * site that matches the seller's active eBay store (a UK seller researches amazon.co.uk), else the US. The page sends only the ASIN,
+ * so without this every tool looked at amazon.com whatever store the seller sells on.
+ */
+async function countryOf(req) {
+  let asked = String(req.query.country || '').trim().toUpperCase();
+  if (asked === 'UK') asked = 'GB';
+  if (asked) return asked;
+  if (req.query.url && /^https?:\/\//i.test(String(req.query.url))) return detectCountryFromUrl(String(req.query.url));
+  try {
+    const account = await getActiveEbayAccount(req.userId);
+    const country = account && getMarketplaceConfig(account.marketplaceId)?.country;
+    if (country) return country;
+  } catch (_) { /* no store: the US */ }
+  return 'US';
 }
 
 /**
@@ -51,7 +72,7 @@ router.get('/review-analyzer', requireAuth, async (req, res) => {
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
-  await billed(req, res, 'REVIEW_ANALYZER', 'Could not fetch reviews for this product.', () => fetchProductReviews(asin, req.query.country || 'US'));
+  await billed(req, res, 'REVIEW_ANALYZER', 'Could not fetch reviews for this product.', async () => fetchProductReviews(asin, await countryOf(req)));
 });
 
 /**
@@ -69,7 +90,7 @@ router.get('/keyword-rank', requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: 'Both a keyword and an asin (or url) are required.' });
   }
   // A search that fails (not just "not found") gives the credit back: the user got no usable result.
-  await billed(req, res, 'KEYWORD_RANK_CHECKER', 'Could not check keyword rank.', async () => ({ keyword, asin, ...(await findKeywordRank(keyword, asin, { country: req.query.country || 'US' })) }));
+  await billed(req, res, 'KEYWORD_RANK_CHECKER', 'Could not check keyword rank.', async () => ({ keyword, asin, ...(await findKeywordRank(keyword, asin, { country: await countryOf(req) })) }));
 });
 
 /**
@@ -84,7 +105,7 @@ router.get('/category-finder', requireAuth, async (req, res) => {
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
-  await billed(req, res, 'CATEGORY_FINDER', 'Could not find categories for this product.', () => findProductCategories(asin, req.query.country || 'US'));
+  await billed(req, res, 'CATEGORY_FINDER', 'Could not find categories for this product.', async () => findProductCategories(asin, await countryOf(req)));
 });
 
 /**
@@ -99,8 +120,8 @@ router.get('/bestseller-explorer', requireAuth, async (req, res) => {
   if (!categoryId) {
     return res.status(400).json({ success: false, error: 'A categoryId is required.' });
   }
-  await billed(req, res, 'BESTSELLER_EXPLORER', 'Could not load this category.', () => fetchCategoryDetails(categoryId, {
-    country: req.query.country || 'US',
+  await billed(req, res, 'BESTSELLER_EXPLORER', 'Could not load this category.', async () => fetchCategoryDetails(categoryId, {
+    country: await countryOf(req),
     page: page ? Number(page) : undefined,
     sort: 'FEATURED',
   }));
@@ -120,7 +141,7 @@ router.get('/image-extractor', requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
   await billed(req, res, 'IMAGE_EXTRACTOR', 'Could not fetch images for this product.', async () => {
-    const product = await fetchProductByAsin(asin, req.query.country || 'US');
+    const product = await fetchProductByAsin(asin, await countryOf(req));
     return { asin, title: product.title, images: product.images };
   });
 });
@@ -138,7 +159,8 @@ router.get('/listing-grader', requireAuth, async (req, res) => {
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
-  await billed(req, res, 'LISTING_GRADER', 'Could not grade this listing.', () => gradeListing(asin, req.query.country || 'US'));
+  await billed(req, res, 'LISTING_GRADER', 'Could not grade this listing.', async () => gradeListing(asin, await countryOf(req)));
 });
 
 module.exports = router;
+module.exports.countryOf = countryOf;

@@ -1,5 +1,8 @@
 const cron = require('node-cron');
-const { checkAvailabilityByAsin } = require('../services/canopyAmazonService');
+const { checkAvailabilityByAsin, detectCountryFromUrl } = require('../services/canopyAmazonService');
+const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
+const { sourceCurrency } = require('../config/amazonDomains');
+const { convertAmount } = require('../services/currencyService');
 const { withdrawListing, updateOfferPrice, updateOfferQuantity } = require('../services/ebayListingService');
 const { getSavedMargin, calculateRepricedSellPrice } = require('../services/repricingService');
 const { listPublishedListings, markEnded, updateListing } = require('../models/listingsModel');
@@ -13,6 +16,16 @@ const {
   listUsersDueForStockCheck,
   markStockCheckRan,
 } = require('../models/usersModel');
+
+/**
+ * The Amazon site a listing's product is read from. Its own link says so; when that is missing, the site that matches the eBay
+ * store (a UK store sells amazon.co.uk products). An ASIN asked of the wrong site is usually "not found" there, which would
+ * look like "out of stock" and end a perfectly good listing - so this is never left to a US default when anything is known.
+ */
+function supplierCountryOf(listing) {
+  if (listing.amazon_url && /^https?:\/\//i.test(listing.amazon_url)) return detectCountryFromUrl(listing.amazon_url);
+  return getMarketplaceConfig(listing.marketplace_id)?.country || 'US';
+}
 
 /**
  * Checks stock for one user's published listings, ending any that have gone
@@ -47,7 +60,7 @@ async function runStockCheckForUser(user) {
     try {
       let availability;
       try {
-        availability = await checkAvailabilityByAsin(listing.asin);
+        availability = await checkAvailabilityByAsin(listing.asin, supplierCountryOf(listing));
       } catch (checkErr) {
         await refundCredit(user.id, ACTION_COSTS.STOCK_MONITORING).catch((e) => console.error(`[credits] REFUND FAILED for user ${user.id}: ${e.message}`));
         throw checkErr;
@@ -239,7 +252,17 @@ async function syncPriceIfChanged(user, listing, availability) {
       return;
     }
 
-    await updateOfferPrice(refreshToken, listing.ebay_offer_id, newSellPrice);
+    // The offer is in the store's currency. The listing's price is in the Amazon site's currency, which is the same for a store
+    // with an Amazon site of its own (UK, US, AU ...); for the rest the new price is converted, and with no exchange rate this
+    // round is skipped (the baseline stays, so the next check retries) rather than put a number in the wrong currency.
+    const storeCurrency = getMarketplaceConfig(listing.marketplace_id)?.currency || null;
+    const draftCurrency = sourceCurrency(listing.amazon_url, listing.currency);
+    let offerPrice = newSellPrice;
+    if (storeCurrency && draftCurrency && storeCurrency !== draftCurrency) {
+      offerPrice = (await convertAmount(newSellPrice, draftCurrency, storeCurrency)).amount;
+    }
+
+    await updateOfferPrice(refreshToken, listing.ebay_offer_id, offerPrice);
 
     await updateListing(user.id, listing.id, {
       sellPrice: newSellPrice,
@@ -317,4 +340,4 @@ function startStockMonitor() {
   console.log('[stock-monitor] Daily stock monitor scheduled.');
 }
 
-module.exports = { startStockMonitor, runStockCheck };
+module.exports = { startStockMonitor, runStockCheck, runStockCheckForUser, supplierCountryOf };

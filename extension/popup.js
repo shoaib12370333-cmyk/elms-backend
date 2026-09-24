@@ -78,7 +78,7 @@ function renderPreview(product) {
   if(!product){p.classList.add('hidden');return;}
   p.classList.remove('hidden');
   const thumb=product.images?.[0]?`<img src="${escapeHtml(product.images[0])}" alt="">`:'';
-  p.innerHTML=`${thumb}<div><strong>${escapeHtml(product.title||'Product')}</strong><div class="stats">${product.images?.length||0} images · ${product.specifications?.length||0} specs${product.price!=null?` · ${escapeHtml(Number(product.price).toFixed(2))}`:''}</div></div>`;
+  p.innerHTML=`${thumb}<div><strong>${escapeHtml(product.title||'Product')}</strong><div class="stats">${product.images?.length||0} images · ${product.specifications?.length||0} specs${product.variants?.length?` · ${product.variants.length} variants`:''}${product.price!=null?` · ${escapeHtml(Number(product.price).toFixed(2))}`:''}</div></div>`;
 }
 function escapeHtml(s){return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 
@@ -111,7 +111,7 @@ $('markup').addEventListener('change', async()=>{
 });
 
 $('import').addEventListener('click',async()=>{
-  renderPreview(null); $('status').textContent='Reading the current Amazon page…';
+  renderPreview(null); $('status').textContent='Reading the current Amazon page and its variants…';
   try {
     const data=await chrome.storage.local.get(['extensionKey','markup','sessionToken','backend']);
     const key=String(data.extensionKey||'').trim();
