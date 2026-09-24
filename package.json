@@ -43,6 +43,7 @@
     "test:vero-settings": "node tests/veroSettings.test.js",
     "test:specifics-fallback": "node tests/itemSpecificsFallback.test.js",
     "test:credits": "node tests/credits.test.js",
+    "test:bulk-pricing": "node tests/bulkPricing.test.js",
     "test:public-plans": "node tests/publicPlans.test.js",
     "test:order-images": "node tests/orderImages.test.js",
     "test:order-profit": "node tests/orderProfit.test.js",
