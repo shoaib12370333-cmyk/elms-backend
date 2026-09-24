@@ -22,6 +22,9 @@ const { fetchConversationDetail, sendMessage, updateConversationStatus } = requi
 const Order = require('../models/schemas/Order');
 const Listing = require('../models/schemas/Listing');
 const { syncConversationsForUser } = require('../jobs/conversationSync');
+const { startJob, getJob } = require('../services/backgroundJobs');
+
+const syncJobKey = (userId, accountId) => `messages:${userId}:${accountId || 'all'}`;
 
 /**
  * GET/PUT /api/notifications/ai-reply/settings
@@ -106,6 +109,13 @@ router.get('/', requireAuth, async (req, res) => {
  * Explicit refresh only. Normal page loads never call eBay directly.
  */
 router.post('/sync', requireAuth, async (req, res) => {
+  // ?background=1: start the sync and answer at once; the page asks GET /sync-status until it is done (and pressing Sync
+  // again while it runs joins the running one).
+  if (req.query.background === '1') {
+    const accountId = req.query.accountId || null;
+    const { started, job } = startJob(syncJobKey(req.userId, accountId), () => syncConversationsForUser(req.userId, accountId));
+    return res.status(202).json({ success: true, started, job });
+  }
   try {
     const result = await syncConversationsForUser(req.userId, req.query.accountId || null);
     const conversations = await listConversations(req.userId, req.query.accountId);
@@ -114,6 +124,15 @@ router.post('/sync', requireAuth, async (req, res) => {
     console.error('notifications manual sync error:', err.message);
     res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not sync eBay messages.' });
   }
+});
+
+/**
+ * GET /api/notifications/sync-status?accountId=...
+ * How the background sync of the messages is going: { status: 'running' | 'done' | 'error', error?, result? }, or job null
+ * when none was started lately. Must stay above GET /:id.
+ */
+router.get('/sync-status', requireAuth, (req, res) => {
+  res.json({ success: true, job: getJob(syncJobKey(req.userId, req.query.accountId || null)) });
 });
 
 /**
