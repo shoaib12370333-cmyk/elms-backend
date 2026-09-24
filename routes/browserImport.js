@@ -49,7 +49,44 @@ function cleanImages(images) {
   return [...new Set(images.map((x) => String(x).trim()).filter((x) => /^https?:\/\//i.test(x)))].slice(0, MAX_IMAGES);
 }
 
+const MAX_VARIANTS = 50;
+const MAX_VARIANT_IMAGES = 12;
+
+/**
+ * The colour / size / ... variants the extension read: each with its own ASIN, title, pictures, price and what makes it
+ * different (dimensions). Nothing is invented: a variant needs a real ASIN, and every field is cleaned like the product's own.
+ */
+function cleanVariants(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const v of list) {
+    const asin = cleanText(v && v.asin, 32);
+    if (!asin || !/^[A-Z0-9]{10}$/i.test(asin) || seen.has(asin.toUpperCase())) continue;
+    seen.add(asin.toUpperCase());
+    const price = v.price == null || v.price === '' ? null : Number(v.price);
+    const images = cleanImages(v.images).slice(0, MAX_VARIANT_IMAGES);
+    const image = cleanImages([v.image])[0] || images[0] || null;
+    out.push({
+      asin: asin.toUpperCase(),
+      title: cleanProductTitle(v.title) || cleanText(v.label, 200),
+      label: cleanText(v.label, 200),
+      image,
+      images: images.length ? images : (image ? [image] : []),
+      price: Number.isFinite(price) && price >= 0 ? price : null,
+      availability: cleanText(v.availability, 200),
+      isCurrentProduct: v.isCurrentProduct === true,
+      dimensions: Array.isArray(v.dimensions)
+        ? v.dimensions.map((d) => ({ name: cleanText(d && d.name, 80), value: cleanText(d && d.value, 200) })).filter((d) => d.name && d.value).slice(0, 8)
+        : [],
+    });
+    if (out.length >= MAX_VARIANTS) break;
+  }
+  return out;
+}
+
 function cleanProduct(input, amazonUrl) {
+  const variants = cleanVariants(input.variants);
   const price = input.price == null || input.price === '' ? null : Number(input.price);
   return {
     asin: cleanText(input.asin, 32),
@@ -84,12 +121,12 @@ function cleanProduct(input, amazonUrl) {
     categories: Array.isArray(input.categories) ? input.categories.map((x) => cleanText(x, 300)).filter(Boolean).slice(0, 30) : [],
     productInformation: input.productInformation && typeof input.productInformation === 'object' ? Object.fromEntries(Object.entries(input.productInformation).slice(0, 50).map(([k,v]) => [cleanText(k,100), cleanText(v,2000)]).filter(([k,v]) => k && v)) : {},
     aplusContent: input.aplusContent && typeof input.aplusContent === 'object' ? { text: cleanText(input.aplusContent.text, 30000), images: cleanImages(input.aplusContent.images) } : { text: null, images: [] },
-    variantDimensions: [],
+    variantDimensions: [...new Set(variants.flatMap((v) => v.dimensions.map((d) => d.name)))],
     sourceMarketplace: cleanText(input.sourceMarketplace, 200),
     specifications: Array.isArray(input.specifications)
       ? input.specifications.map((s) => ({ name: cleanText(s?.name, 300), value: cleanText(s?.value, 2000) })).filter((s) => s.name && s.value).slice(0, 100)
       : [],
-    variants: [],
+    variants,
   };
 }
 
@@ -181,3 +218,4 @@ router.post('/', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.cleanProduct = cleanProduct;

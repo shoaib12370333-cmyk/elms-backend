@@ -128,7 +128,12 @@ async function pollResult(queryId) {
   }
 
   const data = response.data?.data || {};
-  if (data.status === 'success') return { status: 'success', raw: data.json_result?.result || {} };
+  if (data.status === 'success') {
+    const result = data.json_result?.result || {};
+    // Documented as result.detail; the bulk data service has been seen returning the product one level up.
+    const detail = result.detail && typeof result.detail === 'object' && !Array.isArray(result.detail) ? result.detail : result;
+    return { status: 'success', raw: detail };
+  }
   if (data.status === 'failure') {
     const detail = data.json_result?.request_info?.error_details?.[0]?.message;
     return { status: 'failure', error: detail || 'Easyparser could not fetch this product.' };
@@ -136,12 +141,33 @@ async function pollResult(queryId) {
   return { status: 'pending' };
 }
 
-/** Pulls a usable URL out of an Easyparser image entry, whose exact key name isn't confirmed. */
+/** Pulls a usable URL out of an Easyparser image entry ({ link, variant } in the documentation). */
 function imageUrlOf(entry) {
   if (!entry) return null;
   if (typeof entry === 'string') return entry;
   return entry.link || entry.url || entry.src || entry.hi_res || entry.hires || entry.high_res
     || entry.large || entry.original || entry.full || entry.image_url || entry.src_url || null;
+}
+
+/**
+ * A full https link for an Amazon picture. Easyparser's `main_image.link` is documented as only the image ID
+ * (e.g. "617ecXxEdeL"), which is not a URL and used to end up as the first "image" of every product.
+ */
+function amazonImageUrl(value) {
+  const v = String(value || '').trim();
+  if (!v) return null;
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/^\/\//.test(v)) return 'https:' + v;
+  if (/^[A-Za-z0-9+_-]{8,20}$/.test(v)) return 'https://m.media-amazon.com/images/I/' + v + '.jpg';
+  return null;
+}
+
+/**
+ * The original-size picture: Amazon's resize part (._AC_SL1500_ / ._SX679_) is dropped, so one picture that comes in two
+ * sizes counts once, and eBay gets the big file.
+ */
+function fullSizeImage(url) {
+  return String(url).replace(/\._[A-Za-z0-9,_%-]+_(?=\.(?:jpe?g|png|webp)(?:$|[?#]))/i, '');
 }
 
 /** `raw.images` might not be a plain array (e.g. `{ list: [...] }` or `{ items: [...] }`) - try the common wrapper shapes too. */
@@ -155,6 +181,26 @@ function imagesArrayOf(value) {
   return [];
 }
 
+/** All of a product's pictures, the MAIN one first, at full size, each once. */
+function collectImages(raw) {
+  const entries = imagesArrayOf(raw.images);
+  const isMain = (e) => e && typeof e === 'object' && String(e.variant || '').toUpperCase() === 'MAIN';
+  const ordered = [...entries.filter(isMain), ...entries.filter((e) => !isMain(e))];
+  const listed = ordered.map((e) => amazonImageUrl(imageUrlOf(e))).filter(Boolean).map(fullSizeImage);
+  const idOf = (u) => (String(u).match(/\/images\/I\/([^./]+)/) || [])[1] || u;
+  // main_image is only an id: when the list has that picture (with its real file extension) it goes first from there,
+  // and when the list does not have it, the id's own link is put first.
+  let urls = listed;
+  const mainLink = amazonImageUrl(imageUrlOf(raw.main_image));
+  if (mainLink) {
+    const main = fullSizeImage(mainLink);
+    const at = listed.findIndex((u) => idOf(u) === idOf(main));
+    urls = at >= 0 ? [listed[at], ...listed.filter((_, i) => i !== at)] : [main, ...listed];
+  }
+  const seen = new Set();
+  return urls.filter((u) => { const k = idOf(u); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
 /** Pulls a numeric price out of an Easyparser price object, whose exact key name isn't confirmed. */
 function numberFrom(value) {
   if (value == null) return null;
@@ -163,26 +209,26 @@ function numberFrom(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+const pairsOf = (list) => (Array.isArray(list) ? list : [])
+  .map((s) => ({ name: String(s.name || s.key || s.label || s.title || '').trim(), value: String(s.value ?? s.val ?? '').trim() }))
+  .filter((s) => s.name && s.value);
+
 /**
  * Normalizes an Easyparser DETAIL result into the SAME shape
  * canopyAmazonService.normalizeProduct produces, so every caller downstream
  * (draft creation, the frontend) works unchanged regardless of provider.
  *
- * IMPORTANT: the sub-shapes of `images`, `buybox_winner.price`,
- * `buybox_winner.availability`, `specifications`, `attributes`, `categories` and
- * `variants` are taken from Easyparser's documentation field LIST (names + types),
- * not from a real response - the exact key names inside each object are not
- * confirmed. This reads them defensively (several likely key names per field) so a
- * live test run can be used to fix any that come back empty, without needing a
- * different shape for the rest of the app.
+ * The field shapes follow Easyparser's DETAIL response documentation:
+ *   images[]            { link, variant: MAIN | SIDE | BACK | PT01 ... }
+ *   main_image          { link }   - the image ID only, not a URL
+ *   variants[]          { asin, title, is_current_product, link, dimensions: [{ name, value }] }   - no picture per variant
+ *   specifications[]    { name, value }    attributes[]  { name, value }
+ *   buybox_winner       { price: { value, currency }, availability: { raw, min_quantity } }
  */
 function normalizeDetail(raw, sourceUrl) {
-  const images = imagesArrayOf(raw.images).map(imageUrlOf).filter(Boolean);
-  const mainImage = imageUrlOf(raw.main_image);
-  const allImages = mainImage ? [mainImage, ...images.filter((u) => u !== mainImage)] : images;
+  const allImages = collectImages(raw);
 
-  // TEMPORARY: only fires when 0-1 images came out, i.e. exactly the case we don't yet trust -
-  // logs the raw shape once so it can be fixed for real from a live Render log, then removed.
+  // Only fires when 0-1 images came out, so a live Render log shows what Easyparser really sent.
   if (allImages.length <= 1 && raw && typeof raw === 'object') {
     try {
       console.warn('[easyparser-debug] only ' + allImages.length + ' image(s) extracted for asin ' + (raw.asin || '?')
@@ -196,31 +242,48 @@ function normalizeDetail(raw, sourceUrl) {
   const currency = priceObj.currency || null;
 
   const availObj = raw.buybox_winner?.availability;
-  const availText = typeof availObj === 'string' ? availObj : (availObj?.message || availObj?.status || availObj?.type || null);
-  const inStock = typeof availObj === 'object' && availObj
-    ? (availObj.in_stock ?? availObj.inStock ?? availObj.available ?? null)
-    : (availText ? !/out of stock/i.test(availText) : null);
+  const availText = typeof availObj === 'string' ? availObj : (availObj?.raw || availObj?.message || availObj?.status || availObj?.type || null);
+  const inStock = typeof availObj === 'object' && availObj && (availObj.in_stock ?? availObj.inStock ?? availObj.available) != null
+    ? (availObj.in_stock ?? availObj.inStock ?? availObj.available)
+    : (availText ? !/out of stock|unavailable/i.test(availText) : null);
 
   const bulletPoints = Array.isArray(raw.feature_bullets) ? raw.feature_bullets.filter(Boolean) : [];
   const description = raw.description || (bulletPoints.length ? bulletPoints.join('\n') : '');
 
-  const specSource = (Array.isArray(raw.specifications) && raw.specifications.length ? raw.specifications : raw.attributes) || [];
-  const specifications = specSource
-    .map((s) => ({ name: s.name || s.key || s.label || s.title, value: String(s.value ?? s.val ?? '').trim() }))
-    .filter((s) => s.name && s.value);
+  // Technical specifications and the overview attributes are two lists on the page: keep both, each name once.
+  const specifications = [];
+  const have = new Set();
+  const add = (name, value) => {
+    const key = String(name).toLowerCase();
+    if (!name || !String(value || '').trim() || have.has(key)) return;
+    have.add(key);
+    specifications.push({ name: String(name), value: String(value).trim() });
+  };
+  [...pairsOf(raw.specifications), ...pairsOf(raw.attributes)].forEach((sp) => add(sp.name, sp.value));
+  // Facts that come as plain fields: they also feed the package weight / size for calculated shipping.
+  add('Manufacturer', raw.manufacturer);
+  add('Color', raw.color);
+  add('Item Weight', raw.weight);
+  add('Shipping Weight', raw.shipping_weight);
+  add('Product Dimensions', raw.dimensions);
+  add('Item model number', raw.model_number);
 
   const categories = Array.isArray(raw.categories)
     ? raw.categories.map((c) => (typeof c === 'string' ? c : c.name || c.title)).filter(Boolean)
     : [];
 
   const variants = Array.isArray(raw.variants)
-    ? raw.variants.map((v) => ({
-        asin: v.asin,
-        title: v.title || v.name || null,
-        image: imageUrlOf(v.image) || imageUrlOf(v.thumbnail) || null,
-        isCurrentProduct: v.asin === raw.asin,
-        dimensions: [],
-      }))
+    ? raw.variants.filter((v) => v && v.asin).map((v) => {
+        const dimensions = pairsOf(v.dimensions);
+        return {
+          asin: v.asin,
+          title: v.title || v.name || dimensions.map((d) => d.value).join(' ') || null,
+          image: amazonImageUrl(imageUrlOf(v.image) || imageUrlOf(v.main_image) || imageUrlOf(v.thumbnail)) || null,
+          isCurrentProduct: v.is_current_product === true || v.asin === raw.asin,
+          dimensions,
+          link: v.link || null,
+        };
+      })
     : [];
 
   return {
