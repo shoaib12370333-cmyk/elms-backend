@@ -45,7 +45,7 @@ const router = require('../routes/notifications');
 const layer = router.stack.find((l) => l.route && l.route.path === '/:id' && l.route.methods.get);
 const handler = layer.route.stack[layer.route.stack.length - 1].handle;
 const fakeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.statusCode = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
-const open = async () => { log.length = 0; const res = fakeRes(); await handler({ userId: 'u1', params: { id: 'c1' } }, res); return res; };
+const open = async (query = {}) => { log.length = 0; const res = fakeRes(); await handler({ userId: 'u1', params: { id: 'c1' }, query }, res); return res; };
 const baseConv = () => ({ id: 'c1', ebay_account_id: 'a1', ebay_conversation_id: 'e1', conversation_type: 'FROM_MEMBERS', other_party_username: 'buyer1', reference_id: '123', buyer_profile: null });
 
 (async () => {
@@ -58,6 +58,16 @@ const baseConv = () => ({ id: 'c1', ebay_account_id: 'a1', ebay_conversation_id:
   assert.ok(log.includes('markRead'));
   assert.strictEqual(res.body.context.type, 'listing');
   assert.strictEqual(res.body.context.listing_title, 'Blue lamp');
+
+  // peeking (loading ahead of time) leaves the thread unread, here and on eBay
+  res = await open({ peek: '1' });
+  assert.strictEqual(res.body.success, true);
+  assert.ok(!log.includes('markRead') && !log.includes('ebayRead'), 'a thread nobody opened stays unread');
+  // a live fetch during a peek is still saved, but not marked read
+  messages = [];
+  res = await open({ peek: '1' });
+  assert.deepStrictEqual(log, ['live', 'upsert']);
+  messages = [{ messageId: 'm1', content: 'hello', isSelf: false, readStatus: false }];
 
   // a fresh profile is not refreshed
   profileCalls = 0;

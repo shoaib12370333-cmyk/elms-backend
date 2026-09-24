@@ -121,6 +121,8 @@ router.post('/sync', requireAuth, async (req, res) => {
  * Requires a valid session token.
  * Returns the full message thread for one conversation, and marks it as
  * read (since the user is now viewing it).
+ * With ?peek=1 it only returns the thread: the page uses that to load threads ahead of time, and a thread
+ * nobody has opened must stay unread (here and on eBay).
  */
 router.get('/:id', requireAuth, async (req, res) => {
   const loaded = await getConversationForThread(req.userId, req.params.id);
@@ -128,6 +130,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     return res.status(404).json({ success: false, error: 'Conversation not found.' });
   }
   const { conversation, storedBuyerProfile } = loaded;
+  const peek = req.query.peek === '1';
 
   try {
     const referenceId = conversation.reference_id || conversation.item_id || null;
@@ -148,7 +151,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     const awaitingReceipt = !!lastCached && lastCached.isSelf && !lastCached.readStatus;
     const needsLive = (!cachedMessages.length || awaitingReceipt) && !!refreshToken;
     // From the local copy the read mark is written while the rest is prepared; after a live fetch it waits for it to succeed.
-    let marked = needsLive ? null : markRead();
+    let marked = needsLive || peek ? null : markRead();
     if (needsLive) {
       try {
         const live = await fetchConversationDetail(refreshToken, conversation.ebay_conversation_id, conversation.conversation_type);
@@ -157,7 +160,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       } catch (liveErr) {
         if (!cachedMessages.length) throw liveErr;
       }
-      marked = markRead();
+      if (!peek) marked = markRead();
     }
 
     // Buyer's feedback score / star / member-since is stored with the conversation (refreshed every 7 days).
@@ -175,7 +178,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       }
     }
 
-    if (refreshToken) {
+    if (refreshToken && !peek) {
       updateConversationStatus(refreshToken, conversation.ebay_conversation_id, 'READ', conversation.conversation_type).catch(() => {});
     }
     await marked; // the unread badge the page reads next must already be correct
