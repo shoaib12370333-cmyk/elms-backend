@@ -14,6 +14,7 @@ const {
   deleteListing,
   scheduleListing,
   unscheduleListing,
+  updateListing,
   updateListingSettings,
   updateListingStats,
 } = require('../models/listingsModel');
@@ -589,6 +590,82 @@ router.post('/bulk-delete', requireAuth, async (req, res) => {
   }
 
   res.json({ success: true, deletedCount, errors: errors.length ? errors : undefined });
+});
+
+const MAX_BULK_IDS = 500;
+const bulkIds = (body) => Array.from(new Set((Array.isArray(body?.ids) ? body.ids : []).map((id) => String(id || '').trim()).filter(Boolean)));
+
+/**
+ * POST /api/listings/bulk-pricing   { ids: [...], profitPercent: 10 }
+ *
+ * Puts every selected draft on the same profit: eBay price = Amazon cost + profitPercent%
+ * (the same "markup" the drafts already store and show), rounded to cents. Works for a single id too
+ * (the quick "%" box in the draft editor). Only drafts (and failed drafts) are repriced; a live listing is
+ * revised on eBay instead. A draft with no Amazon price saved cannot be priced - it is reported, not guessed.
+ * One bad id never stops the rest.
+ */
+router.post('/bulk-pricing', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please change at most ${MAX_BULK_IDS} drafts at a time.` });
+  const raw = req.body?.profitPercent;
+  const percent = raw === '' || raw === null || raw === undefined ? NaN : Number(raw);
+  if (!Number.isFinite(percent) || percent < -99 || percent > 1000) {
+    return res.status(400).json({ success: false, error: 'Enter the profit as a number between -99 and 1000.' });
+  }
+
+  let updated = 0;
+  const skipped = [];
+  const prices = {};
+  for (const id of ids) {
+    try {
+      const listing = await getListingById(req.userId, id);
+      if (!listing) { skipped.push({ id, title: null, reason: 'Not found.' }); continue; }
+      const label = listing.title || listing.sku || id;
+      if (!['draft', 'error'].includes(listing.status)) { skipped.push({ id, title: label, reason: 'Only drafts can be repriced here. Live listings are revised on eBay.' }); continue; }
+      const amazon = Number(listing.amazon_price);
+      if (!Number.isFinite(amazon) || amazon <= 0) { skipped.push({ id, title: label, reason: 'No Amazon price is saved for this product.' }); continue; }
+      const sellPrice = Number((amazon * (1 + percent / 100)).toFixed(2));
+      if (!(sellPrice > 0)) { skipped.push({ id, title: label, reason: 'That percentage gives a price of zero.' }); continue; }
+      await updateListing(req.userId, id, { sellPrice, markupPercent: percent, marginAmount: Number((sellPrice - amazon).toFixed(2)) });
+      prices[id] = sellPrice;
+      updated += 1;
+    } catch (err) {
+      console.error(`bulk pricing error for ${id}:`, err.message);
+      skipped.push({ id, title: null, reason: err.message || 'Could not update.' });
+    }
+  }
+  res.json({ success: true, updated, skipped, profitPercent: percent, prices });
+});
+
+/**
+ * PATCH /api/listings/bulk-settings   { ids: [...], useDynamicPolicies?, paymentPolicyId?, fulfillmentPolicyId?, returnPolicyId? }
+ *
+ * Changes the business policies of every selected draft at once. Only the fields sent are changed (so a policy
+ * left out stays as it is). useDynamicPolicies true = the eBay account's default policies; false = the ids apply.
+ */
+router.patch('/bulk-settings', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please change at most ${MAX_BULK_IDS} drafts at a time.` });
+  const fields = {};
+  for (const key of ['useDynamicPolicies', 'paymentPolicyId', 'fulfillmentPolicyId', 'returnPolicyId']) {
+    if (req.body?.[key] !== undefined) fields[key] = req.body[key];
+  }
+  if (!Object.keys(fields).length) return res.status(400).json({ success: false, error: 'Choose at least one policy to change.' });
+
+  let updated = 0;
+  const skipped = [];
+  for (const id of ids) {
+    try {
+      const listing = await updateListingSettings(req.userId, id, fields);
+      if (listing) updated += 1; else skipped.push({ id, title: null, reason: 'Not found.' });
+    } catch (err) {
+      console.error(`bulk settings error for ${id}:`, err.message);
+      skipped.push({ id, title: null, reason: err.message || 'Could not update.' });
+    }
+  }
+  res.json({ success: true, updated, skipped });
 });
 
 /**
