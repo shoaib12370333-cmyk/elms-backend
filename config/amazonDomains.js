@@ -18,6 +18,12 @@ function currencyForAmazonUrl(url) {
   return (m && SUFFIX_CURRENCY[m[1]]) || null;
 }
 
+/** The currency of an Amazon domain suffix as Easyparser writes it (".co.uk", ".com", ...), or null when it is not one we know. */
+function currencyForSuffix(suffix) {
+  const key = String(suffix || '').trim().toLowerCase().replace(/^\./, '');
+  return SUFFIX_CURRENCY[key] || null;
+}
+
 /**
  * The currency a product's Amazon price is in: what the Amazon site it came from says, else what was saved with it.
  * (Drafts saved with a wrong default of USD exist; the site is the truth.)
@@ -27,4 +33,4 @@ function sourceCurrency(amazonUrl, savedCurrency) {
   return c || null;
 }
 
-module.exports = { currencyForAmazonUrl, sourceCurrency, SUFFIX_CURRENCY };
+module.exports = { currencyForAmazonUrl, currencyForSuffix, sourceCurrency, SUFFIX_CURRENCY };

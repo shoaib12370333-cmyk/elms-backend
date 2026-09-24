@@ -12,6 +12,45 @@ const { getActiveEbayAccount } = require('../models/ebayAccountsModel');
 const { materializeImageUrls } = require('../services/imageStorageService');
 const { requireAsinSku } = require('../services/skuService');
 const { getCachedProduct, setCachedProduct } = require('../services/productCacheService');
+const { currencyForAmazonUrl } = require('../config/amazonDomains');
+const { convertAmount } = require('../services/currencyService');
+
+const MARKUP_MIN = -99;
+const MARKUP_MAX = 1000;
+
+/** The markup % of a request: null when it is not a number in the range the import page allows (empty counts as 0%). */
+function readMarkup(value) {
+  if (value === '' || value == null) return 0;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= MARKUP_MIN && n <= MARKUP_MAX ? n : null;
+}
+
+/**
+ * Puts the product's price in the currency of the Amazon site it came from - the currency every later step (the draft, the
+ * profit, the price that goes to eBay) takes it to be in. Easyparser used to answer an amazon.co.uk product in USD, so a
+ * price of 8.00 GBP was saved as 10.70 and published as 10.70+ GBP. A price that already is in the site's currency is left
+ * alone; one in another currency is converted, and when it cannot be (no exchange rate) nothing is saved or charged.
+ */
+async function alignPriceCurrency(product, sourceUrl) {
+  const site = currencyForAmazonUrl(sourceUrl || product.sourceUrl);
+  if (!site) return product;
+  const have = String(product.currency || '').toUpperCase();
+  if (!have || have === site || product.price == null) {
+    product.currency = site;
+    return product;
+  }
+  let fx;
+  try {
+    fx = await convertAmount(product.price, have, site);
+  } catch (err) {
+    const wrapped = new Error('The price of this product is in ' + have + ' but the Amazon site sells in ' + site + ', and the exchange rate could not be loaded (' + err.message + '). Try again in a minute.');
+    wrapped.statusCode = 503;
+    throw wrapped;
+  }
+  product.price = fx.amount;
+  product.currency = site;
+  return product;
+}
 
 /**
  * Saves an already-fetched, normalized product (see canopyAmazonService.normalizeProduct /
@@ -28,6 +67,7 @@ const { getCachedProduct, setCachedProduct } = require('../services/productCache
  */
 async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount) {
   const activeEbayAccount = knownActiveEbayAccount !== undefined ? knownActiveEbayAccount : await getActiveEbayAccount(userId);
+  await alignPriceCurrency(product, sourceUrl); // before the credit is taken: a price that cannot be put right saves nothing
   // Pays first (nothing is saved without the credit) and gives it back if saving fails.
   return withCredits(userId, ACTION_COSTS.AMAZON_IMPORT, async () => {
     let suggestedPrice = null;
@@ -219,6 +259,10 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   if (!process.env.EASYPARSER_API_KEY) {
     return res.status(503).json({ success: false, error: 'Large background imports are not configured on the server yet (EASYPARSER_API_KEY is missing).' });
   }
+  const markup = readMarkup(markupPercent);
+  if (markup === null) {
+    return res.status(400).json({ success: false, error: `Markup must be a number between ${MARKUP_MIN}% and ${MARKUP_MAX}%.` });
+  }
   const { bulkJobMax } = await require('../models/settingsModel').getLimits();
   if (amazonUrls.length > bulkJobMax) {
     return res.status(400).json({ success: false, error: 'Please import at most ' + bulkJobMax + ' links at a time.', max: bulkJobMax });
@@ -261,7 +305,7 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   const { createBulkImportJob } = require('../models/bulkImportJobsModel');
   const job = await createBulkImportJob(req.userId, {
     ebayAccountId: activeEbayAccount?.id || null,
-    markupPercent: Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0,
+    markupPercent: markup,
     items,
   });
   res.json({ success: true, jobId: job.id, total: job.total, skipped });
@@ -307,3 +351,5 @@ router.post('/bulk-job/:id/retry', requireAuth, async (req, res) => {
 module.exports = router;
 module.exports.saveProductAsDraft = saveProductAsDraft;
 module.exports.fetchAndSaveDraft = fetchAndSaveDraft;
+module.exports.alignPriceCurrency = alignPriceCurrency;
+module.exports.readMarkup = readMarkup;
