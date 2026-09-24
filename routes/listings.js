@@ -623,11 +623,19 @@ router.post('/bulk-pricing', requireAuth, async (req, res) => {
       if (!listing) { skipped.push({ id, title: null, reason: 'Not found.' }); continue; }
       const label = listing.title || listing.sku || id;
       if (!['draft', 'error'].includes(listing.status)) { skipped.push({ id, title: label, reason: 'Only drafts can be repriced here. Live listings are revised on eBay.' }); continue; }
-      const amazon = Number(listing.amazon_price);
+      // The cost the draft screen shows: the price saved on the draft, else the one on its Amazon import.
+      let amazon = Number(listing.amazon_price);
+      let fromImport = false;
+      if (!(amazon > 0) && listing.import_id) {
+        const imp = await getImportById(req.userId, listing.import_id);
+        amazon = Number(imp?.amazon_price);
+        if (!(amazon > 0)) amazon = Number(imp?.product?.price);
+        fromImport = amazon > 0;
+      }
       if (!Number.isFinite(amazon) || amazon <= 0) { skipped.push({ id, title: label, reason: 'No Amazon price is saved for this product.' }); continue; }
       const sellPrice = Number((amazon * (1 + percent / 100)).toFixed(2));
       if (!(sellPrice > 0)) { skipped.push({ id, title: label, reason: 'That percentage gives a price of zero.' }); continue; }
-      await updateListing(req.userId, id, { sellPrice, markupPercent: percent, marginAmount: Number((sellPrice - amazon).toFixed(2)) });
+      await updateListing(req.userId, id, { sellPrice, markupPercent: percent, marginAmount: Number((sellPrice - amazon).toFixed(2)), ...(fromImport ? { amazonPrice: amazon } : {}) });
       prices[id] = sellPrice;
       updated += 1;
     } catch (err) {

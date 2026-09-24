@@ -7,7 +7,10 @@ const store = {
   b: { id: 'b', status: 'error', title: 'Chair', amazon_price: 49.99 },
   c: { id: 'c', status: 'published', title: 'Live one', amazon_price: 10 },
   d: { id: 'd', status: 'draft', title: 'No price', amazon_price: null },
+  e: { id: 'e', status: 'draft', title: 'Price only on import', amazon_price: null, import_id: 'imp1' },
+  f: { id: 'f', status: 'draft', title: 'Import has product price', amazon_price: null, import_id: 'imp2' },
 };
+const imports = { imp1: { amazon_price: 30 }, imp2: { amazon_price: null, product: { price: 12.5 } } };
 const saved = {};
 const settingsCalls = [];
 const fakes = {
@@ -20,6 +23,7 @@ const fakes = {
     resetErrorToDraft: async () => null, deleteListing: async () => null, scheduleListing: async () => null, unscheduleListing: async () => null, updateListingStats: async () => null,
   },
   '../services/publishQueueService': { processOneQueuedListing: async () => ({}) },
+  '../models/importsModel': { getImportById: async (u, id) => (u === 'u1' ? imports[id] || null : null) },
   '../models/usersModel': { hasCredits: async () => true, spendCredit: async () => true, refundCredit: async () => true },
 };
 const origLoad = Module._load;
@@ -46,6 +50,13 @@ const call = async (method, p, body, userId = 'u1') => { const res = fakeRes(); 
   assert.match(why.c, /Only drafts/);
   assert.match(why.d, /No Amazon price/);
   assert.match(why.zzz, /Not found/);
+  // the cost the draft screen shows can live on the Amazon import instead of the draft
+  res = await call('post', '/bulk-pricing', { ids: ['e', 'f'], profitPercent: 10 });
+  assert.strictEqual(res.body.updated, 2);
+  assert.strictEqual(saved.e.sellPrice, 33);
+  assert.strictEqual(saved.e.amazonPrice, 30);
+  assert.strictEqual(saved.f.sellPrice, 13.75);
+  assert.ok(!saved.a || saved.a.amazonPrice === undefined, 'a draft that has its own price is not rewritten');
   assert.ok(!saved.c && !saved.d, 'nothing written for the ones that were skipped');
 
   // a negative profit (selling below cost, e.g. a clearance) is allowed within limits; nonsense is refused
