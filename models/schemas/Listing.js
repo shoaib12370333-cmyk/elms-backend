@@ -91,5 +91,6 @@ const listingSchema = new mongoose.Schema(
 // sellers may otherwise generate the same SKU from the same ASIN.
 listingSchema.index({ userId: 1, ebayAccountId: 1, sku: 1 }, { unique: true });
 listingSchema.index({ userId: 1, status: 1, updatedAt: -1 });
+listingSchema.index({ userId: 1, ebayListingId: 1 }); // a message thread finds its listing by eBay item id
 
 module.exports = mongoose.model('Listing', listingSchema);

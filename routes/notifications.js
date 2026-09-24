@@ -5,15 +5,15 @@ const {
   listConversations,
   countUnreadConversations,
   getConversationById,
+  getConversationForThread,
   markConversationRead,
   upsertConversation,
   addInternalNote,
   updateConversationState,
   trashConversation,
   restoreConversation,
-  serializeBuyerProfile,
 } = require('../models/conversationsModel');
-const { ensureBuyerProfile } = require('../services/ebayBuyerProfileService');
+const { ensureBuyerProfile, PROFILE_TTL_MS } = require('../services/ebayBuyerProfileService');
 const { saveMessageAttachment, sanitizeAttachments } = require('../services/messageAttachmentService');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { listMessages, upsertMessages } = require('../models/messagesModel');
@@ -123,22 +123,33 @@ router.post('/sync', requireAuth, async (req, res) => {
  * read (since the user is now viewing it).
  */
 router.get('/:id', requireAuth, async (req, res) => {
-  const conversation = await getConversationById(req.userId, req.params.id);
-  if (!conversation) {
+  const loaded = await getConversationForThread(req.userId, req.params.id);
+  if (!loaded) {
     return res.status(404).json({ success: false, error: 'Conversation not found.' });
   }
+  const { conversation, storedBuyerProfile } = loaded;
 
   try {
-    let detail = { conversationId: conversation.ebay_conversation_id, messages: [] };
-    const cachedMessages = await listMessages(req.userId, req.params.id);
-    if (cachedMessages.length) detail.messages = cachedMessages;
+    const referenceId = conversation.reference_id || conversation.item_id || null;
+    // Everything the thread needs that does not depend on another lookup is read together, so opening a
+    // conversation costs one round trip to the database instead of five in a row.
+    const [cachedMessages, refreshToken, order, listingByItem] = await Promise.all([
+      listMessages(req.userId, req.params.id),
+      getEbayAccountRefreshToken(req.userId, conversation.ebay_account_id),
+      referenceId ? Order.findOne({ userId: req.userId, $or: [{ ebayOrderId: referenceId }, { ebayLineItemId: referenceId }] }).populate('listingId', 'title mainImage ebayItemId').lean() : null,
+      referenceId ? Listing.findOne({ userId: req.userId, ebayListingId: referenceId }).select('title mainImage ebayItemId').lean() : null,
+    ]);
 
-    const refreshToken = await getEbayAccountRefreshToken(req.userId, conversation.ebay_account_id);
+    let detail = { conversationId: conversation.ebay_conversation_id, messages: cachedMessages };
+    const markRead = () => markConversationRead(req.userId, req.params.id, true).catch(() => {});
     // Also go live when our last message is still marked unread by the buyer, so the
     // read-receipt tick reflects what eBay says now, not what it said at the last sync.
     const lastCached = cachedMessages[cachedMessages.length - 1];
     const awaitingReceipt = !!lastCached && lastCached.isSelf && !lastCached.readStatus;
-    if ((!cachedMessages.length || awaitingReceipt) && refreshToken) {
+    const needsLive = (!cachedMessages.length || awaitingReceipt) && !!refreshToken;
+    // From the local copy the read mark is written while the rest is prepared; after a live fetch it waits for it to succeed.
+    let marked = needsLive ? null : markRead();
+    if (needsLive) {
       try {
         const live = await fetchConversationDetail(refreshToken, conversation.ebay_conversation_id, conversation.conversation_type);
         detail = live;
@@ -146,29 +157,30 @@ router.get('/:id', requireAuth, async (req, res) => {
       } catch (liveErr) {
         if (!cachedMessages.length) throw liveErr;
       }
+      marked = markRead();
     }
 
-    // Buyer's feedback score / star / member-since (cached 7 days; never blocks the thread).
+    // Buyer's feedback score / star / member-since is stored with the conversation (refreshed every 7 days).
+    // Refreshing it calls eBay, so it runs in the background: this thread shows what is stored, the next open the new one.
     if (refreshToken && conversation.conversation_type === 'FROM_MEMBERS') {
-      const account = await EbayAccount.findById(conversation.ebay_account_id).select('marketplaceId').lean().catch(() => null);
-      const existing = await require('../models/schemas/Conversation').findById(req.params.id).select('buyerProfile').lean().then((d) => d?.buyerProfile).catch(() => null);
-      const profile = await ensureBuyerProfile({
-        userId: req.userId, conversationId: req.params.id, refreshToken,
-        username: conversation.other_party_username, marketplaceId: account?.marketplaceId || 'EBAY_US', existing,
-      });
-      conversation.buyer_profile = serializeBuyerProfile(profile);
+      const fetchedAt = storedBuyerProfile?.fetchedAt ? new Date(storedBuyerProfile.fetchedAt).getTime() : 0;
+      if (!fetchedAt || Date.now() - fetchedAt >= PROFILE_TTL_MS) {
+        (async () => {
+          const account = await EbayAccount.findById(conversation.ebay_account_id).select('marketplaceId').lean().catch(() => null);
+          await ensureBuyerProfile({
+            userId: req.userId, conversationId: req.params.id, refreshToken,
+            username: conversation.other_party_username, marketplaceId: account?.marketplaceId || 'EBAY_US', existing: storedBuyerProfile,
+          });
+        })().catch(() => {});
+      }
     }
 
-    await markConversationRead(req.userId, req.params.id, true);
     if (refreshToken) {
       updateConversationStatus(refreshToken, conversation.ebay_conversation_id, 'READ', conversation.conversation_type).catch(() => {});
     }
+    await marked; // the unread badge the page reads next must already be correct
 
-    const referenceId = conversation.reference_id || conversation.item_id || null;
-    const order = referenceId
-      ? await Order.findOne({ userId: req.userId, $or: [{ ebayOrderId: referenceId }, { ebayLineItemId: referenceId }] }).populate('listingId')
-      : null;
-    const listing = order?.listingId || (referenceId ? await Listing.findOne({ userId: req.userId, ebayListingId: referenceId }) : null);
+    const listing = order?.listingId || listingByItem;
 
     res.json({
       success: true,
