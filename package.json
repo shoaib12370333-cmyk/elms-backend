@@ -44,6 +44,7 @@
     "test:specifics-fallback": "node tests/itemSpecificsFallback.test.js",
     "test:order-images": "node tests/orderImages.test.js",
     "test:order-profit": "node tests/orderProfit.test.js",
+    "test:order-import": "node tests/orderImport.test.js",
     "test:message-thread": "node tests/messageThread.test.js"
   },
   "engines": {

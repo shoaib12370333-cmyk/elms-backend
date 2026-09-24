@@ -288,3 +288,4 @@ router.post('/bulk-job/:id/retry', requireAuth, async (req, res) => {
 
 module.exports = router;
 module.exports.saveProductAsDraft = saveProductAsDraft;
+module.exports.fetchAndSaveDraft = fetchAndSaveDraft;

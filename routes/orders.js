@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice } = require('../models/ordersModel');
+const { listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing } = require('../models/ordersModel');
 const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
@@ -8,6 +8,12 @@ const { syncAccountOrders } = require('../services/orderSyncService');
 const { backfillOrderImagesForUser, fillMissingOrderImages } = require('../services/orderImageService');
 const { convertTracking } = require('../services/trackingConversionService');
 const { requireAuth } = require('../middleware/requireAuth');
+const { fetchAndSaveDraft } = require('./fetchProduct');
+const { getEbayAccountById } = require('../models/ebayAccountsModel');
+const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
+const { hasCredits } = require('../models/usersModel');
+const { ACTION_COSTS } = require('../config/actionCosts');
+const { isValidAmazonUrl, COUNTRY_TO_AMAZON_DOMAIN } = require('../services/validationService');
 
 /**
  * GET /api/orders?accountId=...
@@ -186,6 +192,45 @@ router.get('/:id', requireAuth, async (req, res) => {
   const order = await getOrderById(req.userId, req.params.id);
   if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
   res.json({ success: true, order });
+});
+
+/**
+ * POST /api/orders/:id/import-product  { amazon }
+ * For an order whose product is not in ELMS: imports the same product from Amazon (a link, or just the ASIN) exactly like a
+ * normal import - it costs the same credits, refunded if saving fails, and the product also appears in Drafts - and links
+ * the order (and other orders of the same eBay item) to it, so the Amazon price becomes its cost and profit is calculated.
+ */
+router.post('/:id/import-product', requireAuth, async (req, res) => {
+  const order = await getOrderById(req.userId, req.params.id);
+  if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
+
+  let url = String(req.body?.amazon || '').trim();
+  if (/^[A-Z0-9]{10}$/i.test(url)) {
+    // just the ASIN: use the Amazon site that matches the store the order came from
+    const account = order.ebay_account_id ? await getEbayAccountById(req.userId, order.ebay_account_id) : null;
+    const country = getMarketplaceConfig(account?.marketplaceId)?.country;
+    url = `https://www.${COUNTRY_TO_AMAZON_DOMAIN[country] || 'amazon.com'}/dp/${url.toUpperCase()}`;
+  }
+  if (!isValidAmazonUrl(url)) return res.status(400).json({ success: false, error: 'Paste the Amazon product link (or its 10-character ASIN).' });
+  if (!(await hasCredits(req.userId, ACTION_COSTS.AMAZON_IMPORT))) {
+    return res.status(402).json({ success: false, error: 'You have run out of credits.' });
+  }
+
+  try {
+    const result = await fetchAndSaveDraft(req.userId, url, null, req);
+    const linked = await linkOrderToListing(req.userId, req.params.id, result.draft.id);
+    if (!linked) return res.status(500).json({ success: false, error: 'The product was imported but could not be linked to this order.' });
+    res.json({
+      success: true,
+      order: await getOrderById(req.userId, req.params.id),
+      product: { title: result.product.title, price: result.product.price ?? null, currency: result.product.currency || null },
+      priceFound: result.product.price != null,
+      linkedOrders: linked,
+    });
+  } catch (err) {
+    console.error('order import-product error:', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not import this product.' });
+  }
 });
 
 /**

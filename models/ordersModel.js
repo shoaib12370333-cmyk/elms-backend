@@ -17,10 +17,16 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     ? ((ebayAccountId && await Listing.findOne({ userId, sku: orderLineItem.sku, ebayAccountId }))
         || await Listing.findOne({ userId, sku: orderLineItem.sku }))
     : null;
+  // Items that are not ELMS listings have no SKU to match. If the seller linked an earlier order of the same eBay item
+  // to a product (Import from Amazon), a new order of that item follows it.
+  let listingId = listing ? listing._id : null;
+  if (!listingId && orderLineItem.legacyItemId) {
+    const earlier = await Order.findOne({ userId, legacyItemId: orderLineItem.legacyItemId, listingId: { $ne: null } }).select('listingId').lean();
+    listingId = earlier ? earlier.listingId : null;
+  }
 
   const fields = {
     ebayAccountId: ebayAccountId || null,
-    listingId: listing ? listing._id : null,
     ebayOrderId: orderLineItem.ebayOrderId,
     ebayLineItemId: orderLineItem.ebayLineItemId || null,
     sku: orderLineItem.sku,
@@ -52,6 +58,8 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     estDeliveryMin: orderLineItem.estDeliveryMin || null,
     estDeliveryMax: orderLineItem.estDeliveryMax || null,
   };
+  // never erase a link the seller made (eBay's order data cannot say which product an item is)
+  if (listingId) fields.listingId = listingId;
   if (orderLineItem.shippingAddress) fields.shippingAddress = orderLineItem.shippingAddress;
   if (orderLineItem.itemImage) fields.itemImage = orderLineItem.itemImage; // never overwrite a stored picture with nothing
 
@@ -232,6 +240,26 @@ function deriveOrderStatus(obj) {
   return 'awaiting_shipment';
 }
 
+/**
+ * Links an order to one of the user's listings (a product imported for it) so its cost, title and picture come from there.
+ * Other orders of the same eBay item that have no listing follow. Returns the number of orders linked, or null when the
+ * order or the listing is not this user's.
+ */
+async function linkOrderToListing(userId, id, listingId) {
+  const [order, listing] = await Promise.all([
+    Order.findOne({ _id: id, userId }).select('ebayAccountId legacyItemId').lean(),
+    Listing.findOne({ _id: listingId, userId }).select('_id').lean(),
+  ]);
+  if (!order || !listing) return null;
+  await Order.updateOne({ _id: id, userId }, { $set: { listingId: listing._id } });
+  let linked = 1;
+  if (order.legacyItemId) {
+    const more = await Order.updateMany({ userId, ebayAccountId: order.ebayAccountId, legacyItemId: order.legacyItemId, listingId: null }, { $set: { listingId: listing._id } });
+    linked += Number(more && (more.modifiedCount ?? more.nModified) || 0);
+  }
+  return linked;
+}
+
 /** The seller's own cost of one unit (null clears it). Used for profit when the listing / import carry no price. */
 async function setBuyPrice(userId, id, price) {
   const value = price === null || price === '' || price === undefined ? null : Number(price);
@@ -297,4 +325,4 @@ function serialize(doc) {
   };
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, deriveOrderStatus };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus };
