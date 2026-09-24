@@ -55,15 +55,29 @@ async function submitPendingItems(job) {
     const item = toSubmit.find((i) => i.asin === accepted.asin && toEasyparserDomain(i.country) === accepted.domain && !i.queryId);
     if (item) { item.queryId = accepted.queryId; item.submittedAt = now; }
   }
+  let waitingReason = null;
   for (const rejected of result.rejected) {
     const item = toSubmit.find((i) => i.asin === rejected.asin && toEasyparserDomain(i.country) === rejected.domain && !i.queryId);
-    if (item) { item.status = 'error'; item.error = rejected.reason || 'Rejected by Easyparser.'; }
+    if (!item) continue;
+    if (rejected.retryable) { waitingReason = rejected.reason; continue; } // dropped for the per-minute limit / credit: a later try can work
+    item.status = 'error';
+    item.error = rejected.reason || 'Rejected by Easyparser.';
   }
-  // Anything still without a queryId and not marked error is unaccounted for in the response
-  // (an undocumented rejection shape) - it will simply time out via ITEM_TIMEOUT_MS below
-  // rather than being silently lost, since submittedAt stays null and the poll step skips it.
+  // Items Easyparser did not take (and did not refuse for good) stay pending without a queryId; the next run sends them again.
+  // After MAX_SUBMIT_ATTEMPTS they end as errors, so a job never hangs on them.
+  const waiting = toSubmit.filter((i) => i.status === 'pending' && !i.queryId);
+  if (waiting.length) {
+    job.submitAttempts += 1;
+    job.lastError = waitingReason || 'Easyparser did not take ' + waiting.length + ' product' + (waiting.length === 1 ? '' : 's') + ' yet; sending them again.';
+    if (job.submitAttempts >= MAX_SUBMIT_ATTEMPTS) {
+      for (const item of waiting) { item.status = 'error'; item.error = waitingReason || 'Easyparser did not take this product.'; }
+    }
+  }
   job.status = 'polling';
 }
+
+/** True when some item was never accepted by Easyparser (no query id yet) and is still waiting to be sent. */
+const hasUnsentItems = (job) => job.items.some((i) => i.status === 'pending' && !i.queryId);
 
 /** Polls up to POLL_BATCH_SIZE outstanding items of one job. */
 async function pollItems(job, saveProductAsDraft) {
@@ -127,7 +141,7 @@ async function retrySavesForCredits(job, saveProductAsDraft) {
 }
 
 async function processOneJob(job, saveProductAsDraft) {
-  if (job.status === 'queued') await submitPendingItems(job);
+  if (job.status === 'queued' || (job.status === 'polling' && hasUnsentItems(job))) await submitPendingItems(job);
   if (job.status === 'polling') {
     await pollItems(job, saveProductAsDraft);
     await retrySavesForCredits(job, saveProductAsDraft);

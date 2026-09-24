@@ -119,5 +119,47 @@ const fakeSave = async (userId, product) => { savedDrafts.push(product.asin); re
   assert.ok(/Timed out/.test(job4.items[0].error));
   assert.strictEqual(job4.status, 'done');
 
+  // --- dropped for the per-minute limit: only that item is sent again on the next run, and the job does not hang ---
+  const job5 = makeJob([makeItem('B6', 'US', 'url6'), makeItem('B7', 'US', 'url7')]);
+  const sent = [];
+  submitImpl = async (groups) => {
+    sent.push(groups[0].asins.slice());
+    if (groups[0].asins.length === 2) return { accepted: [{ asin: 'B6', domain: '.com', queryId: 'q6' }], rejected: [{ asin: 'B7', domain: '.com', reason: '[!] Minute request limit exceeded.', retryable: true }], meta: null };
+    return { accepted: [{ asin: 'B7', domain: '.com', queryId: 'q7' }], rejected: [], meta: null };
+  };
+  pollImpl = async () => ({ status: 'pending' });
+  await processOneJob(job5, fakeSave);
+  assert.strictEqual(job5.items[1].status, 'pending', 'not an error yet: it is tried again');
+  assert.strictEqual(job5.items[1].queryId, null);
+  assert.strictEqual(job5.status, 'polling');
+  assert.strictEqual(job5.submitAttempts, 1);
+  assert.ok(/limit exceeded/.test(job5.lastError), 'the job says why some products are waiting');
+  await processOneJob(job5, fakeSave);
+  assert.deepStrictEqual(sent, [['B6', 'B7'], ['B7']], 'the second run sends only the one that was dropped');
+  assert.strictEqual(job5.items[1].queryId, 'q7');
+  pollImpl = async (queryId) => ({ status: 'success', raw: { asin: queryId === 'q6' ? 'B6' : 'B7' } });
+  hasCreditsImpl = async () => true;
+  await processOneJob(job5, fakeSave);
+  assert.strictEqual(job5.status, 'done');
+  assert.strictEqual(job5.done, 2);
+
+  // dropped every time: after MAX_SUBMIT_ATTEMPTS it is an error that says why (never a job that hangs)
+  const job6 = makeJob([makeItem('B8', 'US', 'url8')]);
+  submitImpl = async () => ({ accepted: [], rejected: [{ asin: 'B8', domain: '.com', reason: '[!] Minute request limit exceeded.', retryable: true }], meta: null });
+  for (let i = 0; i < 4; i++) { await processOneJob(job6, fakeSave); assert.strictEqual(job6.items[0].status, 'pending'); assert.strictEqual(job6.status, 'polling'); }
+  await processOneJob(job6, fakeSave);
+  assert.strictEqual(job6.items[0].status, 'error');
+  assert.ok(/limit exceeded/.test(job6.items[0].error));
+  assert.strictEqual(job6.status, 'done');
+  assert.strictEqual(job6.failed, 1);
+
+  // an item that the answer does not mention at all ends the same way instead of waiting for ever
+  const job7 = makeJob([makeItem('B9', 'US', 'url9')]);
+  submitImpl = async () => ({ accepted: [], rejected: [], meta: null });
+  for (let i = 0; i < 5; i++) await processOneJob(job7, fakeSave);
+  assert.strictEqual(job7.items[0].status, 'error');
+  assert.ok(/did not take/.test(job7.items[0].error));
+  assert.strictEqual(job7.status, 'done');
+
   console.log('bulk import job tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
