@@ -46,6 +46,7 @@ const orderSchema = new mongoose.Schema(
     // ---- Full eBay order detail (so ELMS shows the same information as Seller Hub) ----
     itemTitle: { type: String, default: null },      // eBay's own title, used when the item is not an ELMS listing
     itemImage: { type: String, default: null },      // eBay's own picture, used when the item is not an ELMS listing (or the listing has none)
+    itemImageCheckedAt: { type: Date, default: null }, // when eBay was last asked for the item's picture (services/orderImageService.js)
     legacyItemId: { type: String, default: null },   // the item number buyers see on eBay
     currency: { type: String, default: null },
     deliveryCost: { type: Number, default: null },   // shipping the buyer paid for this line

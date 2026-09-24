@@ -32,7 +32,6 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     ebayPaymentStatus: orderLineItem.ebayPaymentStatus || null,
     ebayCancelStatus: orderLineItem.ebayCancelStatus || null,
     itemTitle: orderLineItem.itemTitle || null,
-    itemImage: orderLineItem.itemImage || null,
     legacyItemId: orderLineItem.legacyItemId || null,
     currency: orderLineItem.currency || null,
     deliveryCost: orderLineItem.deliveryCost ?? null,
@@ -54,6 +53,7 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     estDeliveryMax: orderLineItem.estDeliveryMax || null,
   };
   if (orderLineItem.shippingAddress) fields.shippingAddress = orderLineItem.shippingAddress;
+  if (orderLineItem.itemImage) fields.itemImage = orderLineItem.itemImage; // never overwrite a stored picture with nothing
 
   // Match by eBay's line item ID first (rows synced before SKUs were made unique
   // may have a null SKU), then by SKU, so a re-sync never duplicates an order.
