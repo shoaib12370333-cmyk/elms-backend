@@ -17,6 +17,11 @@ const userSchema = new mongoose.Schema(
     // text). Optional because a user may have only ever used Google.
     username: { type: String, default: null, unique: true, sparse: true },
     passwordHash: { type: String, default: null },
+    // true while the password was set at sign-up (/register) and the person never proved they own the mailbox. A Google sign-in
+    // (which proves it) or a password reset with the code mailed to them clears it; until then a Google sign-in on the same
+    // address removes that password, because a stranger may have registered the address first. Missing = an account from before
+    // this existed (its password is trusted as it is).
+    unverifiedPassword: { type: Boolean, default: undefined },
 
     name: { type: String, default: null },
     picture: { type: String, default: null },
