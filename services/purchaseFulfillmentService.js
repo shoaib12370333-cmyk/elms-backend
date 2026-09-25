@@ -6,14 +6,14 @@
  * `transactionId` (the provider's payment id) makes it idempotent: the same payment reported twice
  * (a webhook retry, the return-page check racing the webhook) is credited once.
  */
-async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd, listPriceUsd = null, discountPercent = 0, referralId = null, voucherId = null, silent = false }) {
+async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd, listPriceUsd = null, discountPercent = 0, referralId = null, voucherId = null, silent = false, paymentMethod = null }) {
   const { recordPurchase } = require('../models/purchasesModel');
   const { addCredits, getUserById, setMaxEbayAccounts } = require('../models/usersModel');
   const User = require('../models/schemas/User');
 
   let purchase;
   try {
-    purchase = await recordPurchase({ userId, planId: plan.id, provider, providerTransactionId: transactionId, priceUsd, creditsGranted: plan.credits, listPriceUsd, discountPercent, referralId, voucherId });
+    purchase = await recordPurchase({ userId, planId: plan.id, provider, providerTransactionId: transactionId, priceUsd, creditsGranted: plan.credits, planName: plan.name, paymentMethod, listPriceUsd, discountPercent, referralId, voucherId });
   } catch (err) {
     if (err && err.code === 11000) return { granted: false, duplicate: true }; // the other request won the race
     throw err;
@@ -41,7 +41,7 @@ async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd
   try {
     const { sendPurchaseReceiptEmail, sendAdminAlert } = require('./emailService');
     if (!silent && buyer && buyer.email) {
-      sendPurchaseReceiptEmail({ to: buyer.email, credits: plan.credits, priceUsd, transactionId }).catch((e) => console.warn('receipt email failed:', e.message));
+      sendPurchaseReceiptEmail({ to: buyer.email, credits: plan.credits, priceUsd, transactionId, purchase }).catch((e) => console.warn('receipt email failed:', e.message));
       sendAdminAlert({
         subject: 'New payment: $' + Number(priceUsd).toFixed(2),
         lines: ['User: ' + buyer.email, 'Plan: ' + plan.name, 'Credits: ' + plan.credits, 'Amount: $' + Number(priceUsd).toFixed(2) + (discountPercent > 0 && listPriceUsd ? ' (list price $' + Number(listPriceUsd).toFixed(2) + ', ' + discountPercent + '% referral discount)' : ''), 'Provider: ' + provider, 'Payment: ' + transactionId],

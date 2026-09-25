@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const mailTemplate = require('./mailTemplate');
 
 let transporters = new Map();
 
@@ -138,7 +139,13 @@ async function sendPasswordResetOtp({ to, code }) {
     to,
     subject: `${appName} password reset code`,
     text: `Your ${appName} password reset code is ${code}. It expires in 10 minutes. If you did not request this, you can ignore this email.`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto"><h2>${appName} password reset</h2><p>Your verification code is:</p><div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0">${code}</div><p>This code expires in <strong>10 minutes</strong>. If you did not request a password reset, you can safely ignore this email.</p></div>`,
+    html: mailTemplate.layout({
+      title: 'Your password reset code',
+      preheader: 'Your code is ' + code + '. It expires in 10 minutes.',
+      bodyHtml: mailTemplate.paragraphsHtml('Use this code to choose a new password:')
+        + '<div style="margin:4px 0 18px;padding:16px;text-align:center;background:#f3f5f9;border-radius:10px;font-size:32px;font-weight:bold;letter-spacing:8px;color:#111827">' + mailTemplate.esc(code) + '</div>'
+        + mailTemplate.paragraphsHtml('The code expires in 10 minutes. If you did not ask for a password reset, you can ignore this email. Your password stays as it is.'),
+    }),
   };
 
   const configuredPort = Number(process.env.SMTP_PORT || 587);
@@ -200,15 +207,18 @@ function frontendUrl(path) {
   return base + (path || '');
 }
 
-function wrapHtml(title, bodyHtml, footerHtml) {
-  return '<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937"><h2 style="margin:0 0 14px">' + esc(title) + '</h2>' + bodyHtml + (footerHtml || '') + '</div>';
+function wrapHtml(title, bodyHtml, footerHtml, opts = {}) {
+  return mailTemplate.layout({ title, bodyHtml, footerHtml: footerHtml ? '<br><br>' + footerHtml : '', preheader: opts.preheader, cta: opts.cta });
 }
 
-function paragraphsHtml(text) {
-  return String(text || '').split(/\n{2,}/).map((p) => '<p style="margin:0 0 14px;line-height:1.55">' + esc(p).replace(/\n/g, '<br>') + '</p>').join('');
-}
+const paragraphsHtml = mailTemplate.paragraphsHtml;
 
-async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, when }) {
+/** Sends the invoice for a purchase. `purchase` (the recorded purchase) gives the full invoice with its PDF; without it a short receipt goes out. */
+async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, when, purchase }) {
+  if (purchase) {
+    const sent = await require('./invoiceService').sendInvoiceForPurchase(purchase);
+    if (sent) return sent;
+  }
   const appName = process.env.APP_NAME || 'ELMS';
   const lines = [
     'Thank you for your purchase.',
@@ -223,8 +233,13 @@ async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, 
     to,
     subject: appName + ' receipt: ' + Number(credits).toLocaleString('en-US') + ' credits',
     text: lines.join('\n\n'),
-    html: wrapHtml(appName + ' receipt', paragraphsHtml(lines.join('\n\n'))),
+    html: wrapHtml('Thanks for your purchase', paragraphsHtml(lines.join('\n\n')), '', { preheader: Number(credits).toLocaleString('en-US') + ' credits added' }),
   }, 'Receipt');
+}
+
+/** A prepared invoice mail (subject, text, html) with the PDF attached. */
+async function sendInvoiceEmail({ to, subject, text, html, attachments }) {
+  return sendFrom('billing', { to, subject, text, html, ...(attachments ? { attachments } : {}) }, 'Invoice');
 }
 
 // ref: the ticket's short code, put in the subject so the customer's answer finds its ticket again.
@@ -245,7 +260,10 @@ async function sendVoucherEmail({ to, what, note, expiresAt, redeem }) {
     to,
     subject: appName + ': you have a new voucher',
     text: lines.join('\n\n'),
-    html: wrapHtml('You have a new voucher', paragraphsHtml(lines.join('\n\n'))),
+    html: wrapHtml('You have a new voucher', paragraphsHtml(lines.slice(0, -1).join('\n\n')), '', {
+      preheader: what,
+      cta: { text: redeem ? 'Redeem voucher' : 'Buy credits', url: frontendUrl(redeem ? '/vouchers' : '/pricing') },
+    }),
   }, 'Voucher');
 }
 
@@ -295,13 +313,18 @@ async function sendAnnouncementEmail({ to, subject, body, unsubscribeUrl, listUn
 function buildSecurityMessage({ to, subject, title, paragraphs, kind = 'security' }) {
   const appName = process.env.APP_NAME || 'ELMS';
   const safe = (value) => String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const htmlParagraphs = paragraphs.map((p) => `<p style="margin:0 0 14px;line-height:1.55">${safe(p)}</p>`).join('');
+  const htmlParagraphs = paragraphs.map((p) => `<p style="margin:0 0 14px;line-height:1.6;font-size:15px;color:#374151">${safe(p)}</p>`).join('');
   return {
     ...withSender({}, kind),
     to,
     subject,
     text: `${title}\n\n${paragraphs.join('\n\n')}\n\nRegards,\n${appName} Support Team`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937"><h2>${safe(title)}</h2>${htmlParagraphs}<p style="margin-top:24px">Regards,<br><strong>${safe(appName)} Support Team</strong></p></div>`,
+    html: mailTemplate.layout({
+      title,
+      preheader: paragraphs[0] || '',
+      bodyHtml: htmlParagraphs + '<p style="margin:22px 0 0;font-size:14px;line-height:1.6;color:#374151">Regards,<br><strong>' + safe(appName) + ' Support Team</strong></p>',
+      cta: { text: 'Open account security', url: frontendUrl('/settings') },
+    }),
   };
 }
 
@@ -386,4 +409,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };

@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/requireAuth');
 const { listActivePlans, getPlanById } = require('../models/plansModel');
-const { listPurchasesForUser } = require('../models/purchasesModel');
+const { listPurchasesForUser, getPurchaseById } = require('../models/purchasesModel');
+const invoices = require('../services/invoiceService');
 const referrals = require('../services/referralService');
 const vouchers = require('../services/voucherService');
 const { getUserById } = require('../models/usersModel');
@@ -72,6 +73,22 @@ router.get('/plans', requireAuth, async (req, res) => {
 router.get('/history', requireAuth, async (req, res) => {
   const purchases = await listPurchasesForUser(req.userId);
   res.json({ success: true, purchases });
+});
+
+/**
+ * GET /api/payments/invoice/:id
+ * The invoice (PDF) for one of the signed-in user's own purchases. It is numbered the first time it is asked for.
+ * ?format=json returns the same invoice as data.
+ */
+router.get('/invoice/:id', requireAuth, async (req, res) => {
+  const purchase = await getPurchaseById(req.params.id);
+  if (!purchase || purchase.userId !== String(req.userId)) return res.status(404).json({ success: false, error: 'Purchase not found.' });
+  const invoice = await invoices.invoiceForPurchase(purchase);
+  if (!invoice) return res.status(404).json({ success: false, error: 'This purchase has no invoice (it was a free plan from a voucher).' });
+  if (req.query.format === 'json') return res.json({ success: true, invoice });
+  const pdf = await invoices.invoicePdf(invoice);
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': 'attachment; filename="' + invoice.number + '.pdf"', 'Access-Control-Expose-Headers': 'Content-Disposition', 'Cache-Control': 'private, no-store' });
+  res.send(pdf);
 });
 
 /**

@@ -33,6 +33,7 @@
     "test:cashtap": "node tests/cashtap.test.js",
     "test:admin-overview": "node tests/adminOverview.test.js",
     "test:super-admin": "node tests/superAdmin.test.js",
+    "test:invoice": "node tests/invoice.test.js",
     "test:support-chat": "node tests/supportChatRoutes.test.js",
     "test:transient-publish": "node tests/transientPublish.test.js",
     "test:listing-ids": "node tests/listingSerializeIds.test.js",
@@ -92,7 +93,8 @@
     "mailparser": "^3.9.28",
     "mongoose": "^8.7.0",
     "node-cron": "^3.0.3",
-    "nodemailer": "^7.0.6"
+    "nodemailer": "^7.0.6",
+    "pdfkit": "^0.20.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
