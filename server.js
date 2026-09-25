@@ -41,6 +41,7 @@ const { startStatsSync } = require('./jobs/statsSync');
 const { startAnnouncementSender } = require('./jobs/announcementSender');
 const { startSupportInbox } = require('./jobs/supportInbox');
 const { startBulkImportProcessor } = require('./jobs/bulkImportProcessor');
+const { startPlanExpiry } = require('./jobs/planExpiry');
 const { startPublishQueue, runPublishQueue } = require('./jobs/publishQueue');
 
 const app = express();
@@ -238,6 +239,7 @@ async function start() {
   // a restart never silently reverts prices the admin changed in the panel
   // back to the code defaults.
   await applyActionCostOverridesOnStartup();
+  startPlanExpiry();
 
   // The super admin is always an admin, also in the database (the stats and access screens read the stored role).
   try {

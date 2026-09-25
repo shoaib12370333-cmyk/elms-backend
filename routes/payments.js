@@ -4,6 +4,8 @@ const { requireAuth } = require('../middleware/requireAuth');
 const { listActivePlans, getPlanById } = require('../models/plansModel');
 const { listPurchasesForUser, getPurchaseById } = require('../models/purchasesModel');
 const invoices = require('../services/invoiceService');
+const planPricing = require('../services/planPricing');
+const { getCustomPlanSettings } = require('../models/settingsModel');
 const referrals = require('../services/referralService');
 const vouchers = require('../services/voucherService');
 const { getUserById } = require('../models/usersModel');
@@ -36,7 +38,14 @@ router.get('/public-plans', async (req, res) => {
  */
 router.get('/plans', requireAuth, async (req, res) => {
   const provider = cashtapPayments.activeProvider();
-  const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId);
+  // Yearly plans and the custom plan are CashTap-only (Paddle prices are fixed inside Paddle).
+  const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId).map((p) => (provider === 'cashtap' ? p : { ...p, yearlyPriceUsd: null }));
+  const custom = provider === 'cashtap' ? await getCustomPlanSettings() : null;
+  const me = await getUserById(req.userId).catch(() => null);
+  const extra = {
+    custom: custom && custom.enabled ? custom : null,
+    myPlan: me && me.planExpiresAt ? { planName: me.planName, term: me.planTerm, expiresAt: me.planExpiresAt } : null,
+  };
   // A voucher the buyer picked on the page: the plans show the price with it (CashTap checkout only).
   if (req.query.voucherId && provider === 'cashtap') {
     try {
@@ -44,7 +53,8 @@ router.get('/plans', requireAuth, async (req, res) => {
       return res.json({
         success: true,
         provider,
-        plans: plans.map((p) => (vouchers.appliesToPlan(v, p) ? { ...p, discountedPriceUsd: vouchers.priceWith(p.priceUsd, v) } : { ...p, voucherNotValid: true })),
+        ...extra,
+        plans: plans.map((p) => (vouchers.appliesToPlan(v, p) ? { ...p, discountedPriceUsd: vouchers.priceWith(p.priceUsd, v), ...(p.yearlyPriceUsd ? { discountedYearlyPriceUsd: vouchers.priceWith(p.yearlyPriceUsd, v) } : {}) } : { ...p, voucherNotValid: true })),
         referralDiscount: null,
         voucher: { id: v.id, description: vouchers.describe(v, (plans.find((p) => p.id === v.planId) || {}).name), expiresAt: v.expiresAt },
       });
@@ -60,9 +70,26 @@ router.get('/plans', requireAuth, async (req, res) => {
   res.json({
     success: true,
     provider,
-    plans: plans.map((p) => (discount ? { ...p, discountedPriceUsd: referrals.priceAfterDiscount(p.priceUsd, discount.percent) } : p)),
+    ...extra,
+    plans: plans.map((p) => (discount ? { ...p, discountedPriceUsd: referrals.priceAfterDiscount(p.priceUsd, discount.percent), ...(p.yearlyPriceUsd ? { discountedYearlyPriceUsd: referrals.priceAfterDiscount(p.yearlyPriceUsd, discount.percent) } : {}) } : p)),
     referralDiscount: discount ? { percent: discount.percent, usesLeft: discount.usesLeft, expiresAt: discount.expiresAt } : null,
   });
+});
+
+/**
+ * GET /api/payments/custom-quote?amountUsd=120&billing=monthly|yearly&extraStores=0
+ * What the custom plan costs and gives for these choices (the same numbers the checkout will use).
+ */
+router.get('/custom-quote', requireAuth, async (req, res) => {
+  if (cashtapPayments.activeProvider() !== 'cashtap') return res.status(404).json({ success: false, error: 'The custom plan is not available.' });
+  try {
+    const offer = planPricing.customOffer(await getCustomPlanSettings(), { amountUsd: Number(req.query.amountUsd), billing: req.query.billing, extraStores: req.query.extraStores });
+    let discount = null;
+    try { discount = await referrals.discountFor(req.userId); } catch (_) { /* no discount */ }
+    res.json({ success: true, offer, discountedPriceUsd: discount ? referrals.priceAfterDiscount(offer.priceUsd, discount.percent) : null, referralPercent: discount ? discount.percent : 0 });
+  } catch (err) {
+    res.status(err.userFacing ? err.statusCode : 500).json({ success: false, error: err.userFacing ? err.message : 'Could not work out that plan.' });
+  }
 });
 
 /**
@@ -102,13 +129,14 @@ router.get('/invoice/:id', requireAuth, async (req, res) => {
  */
 router.post('/checkout', requireAuth, async (req, res) => {
   const { planId } = req.body;
+  const wantsCustom = !!req.body.custom;
 
-  if (!planId) {
+  if (!planId && !wantsCustom) {
     return res.status(400).json({ success: false, error: 'A planId is required.' });
   }
 
-  const plan = await getPlanById(planId);
-  if (!plan || !plan.active) {
+  const plan = wantsCustom ? null : await getPlanById(planId);
+  if (!wantsCustom && (!plan || !plan.active)) {
     return res.status(404).json({ success: false, error: 'This plan is not available.' });
   }
 
@@ -118,12 +146,23 @@ router.post('/checkout', requireAuth, async (req, res) => {
   }
 
   const provider = cashtapPayments.activeProvider();
+  if ((wantsCustom || String(req.body.billing || '') === 'yearly') && provider !== 'cashtap') {
+    return res.status(400).json({ success: false, error: 'This option is not available right now.' });
+  }
   try {
     if (provider === 'cashtap') {
+      // The plan for the chosen term (or the custom plan the buyer built): price, credits and term are worked out here, never taken from the browser.
+      let offer;
+      if (wantsCustom) {
+        if (req.body.voucherId) return res.status(400).json({ success: false, error: 'A voucher cannot be used on the custom plan.' });
+        offer = planPricing.customOffer(await getCustomPlanSettings(), { ...req.body.custom, billing: req.body.billing || req.body.custom.billing });
+      } else {
+        offer = planPricing.planOffer(plan, req.body.billing);
+      }
       // A voucher the buyer chose is used instead of the referral discount.
       const voucher = req.body.voucherId ? await vouchers.usableForPurchase(req.userId, String(req.body.voucherId), plan) : null;
       const discount = voucher ? null : await referrals.discountFor(req.userId).catch((err) => { console.error('referral discount lookup failed:', err.message); return null; });
-      const { sessionId, url } = await cashtapPayments.startCheckout({ user, plan, discount, voucher });
+      const { sessionId, url } = await cashtapPayments.startCheckout({ user, plan: offer, discount, voucher });
       return res.json({ success: true, provider, sessionId, url, discountPercent: discount ? discount.percent : 0, voucherApplied: !!voucher });
     }
     if (!plan.paddlePriceId) return res.status(404).json({ success: false, error: 'This plan is not available.' });

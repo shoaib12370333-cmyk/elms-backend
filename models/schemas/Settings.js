@@ -62,6 +62,9 @@ const settingsSchema = new mongoose.Schema(
     referralDiscountDays: { type: Number, default: 0, min: 0, max: 3650 },
     referralRewardCredits: { type: Number, default: 0, min: 0, max: 1000000 },
 
+    // The custom plan a buyer builds (Admin -> Plans): see services/planPricing.js for the fields.
+    customPlan: { type: mongoose.Schema.Types.Mixed, default: null },
+
     actionCosts: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }

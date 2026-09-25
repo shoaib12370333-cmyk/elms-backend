@@ -13,18 +13,28 @@ async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd
 
   let purchase;
   try {
-    purchase = await recordPurchase({ userId, planId: plan.id, provider, providerTransactionId: transactionId, priceUsd, creditsGranted: plan.credits, planName: plan.name, paymentMethod, listPriceUsd, discountPercent, referralId, voucherId });
+    purchase = await recordPurchase({ userId, planId: /^[a-f0-9]{24}$/i.test(String(plan.id)) ? plan.id : null, billing: plan.billing || null, termMonths: plan.termMonths || 0, provider, providerTransactionId: transactionId, priceUsd, creditsGranted: plan.credits, planName: plan.name, paymentMethod, listPriceUsd, discountPercent, referralId, voucherId });
   } catch (err) {
     if (err && err.code === 11000) return { granted: false, duplicate: true }; // the other request won the race
     throw err;
   }
   if (!purchase) return { granted: false, duplicate: true };
 
+  // An earlier plan that has run out is closed first (its credits end), so the new credits start clean.
+  await require('./planExpiryService').expireIfDue(userId).catch((err) => console.warn('plan expiry check failed:', err.message));
   await addCredits(userId, plan.credits);
   const buyer = await getUserById(userId);
   const limit = Number(plan.maxEbayAccounts) || 0;
   if (limit > 0 && buyer && (Number(buyer.maxEbayAccounts) || 0) < limit) await setMaxEbayAccounts(userId, limit);
   await User.updateOne({ _id: userId }, { $set: { planName: plan.name } }).catch(() => {});
+  // A monthly / yearly plan: it runs one term from now, or one term on from where the running plan ends (buying early adds up).
+  if (plan.termMonths > 0 && buyer) {
+    const now = new Date();
+    const running = buyer.planExpiresAt && new Date(buyer.planExpiresAt) > now;
+    const set = { planExpiresAt: require('./planPricing').addMonths(running ? new Date(buyer.planExpiresAt) : now, plan.termMonths), planTerm: plan.billing === 'yearly' ? 'yearly' : 'monthly' };
+    if (!running) set.planPrevMaxEbayAccounts = Math.max(1, Number(buyer.maxEbayAccounts) || 1);
+    await User.updateOne({ _id: userId }, { $set: set }).catch(() => {});
+  }
 
   // Referral programme: count a used discount, and reward the person who brought this buyer (once, for their first purchase).
   // afterPurchase never throws - the buyer already has their credits.

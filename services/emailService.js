@@ -237,6 +237,23 @@ async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, 
   }, 'Receipt');
 }
 
+/** Tells a buyer their monthly / yearly plan has ended (credits ended with it). */
+async function sendPlanEndedEmail({ to, planName, endedAt }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const what = planName ? 'Your ' + planName + ' plan' : 'Your plan';
+  const day = new Date(endedAt || Date.now()).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const lines = [
+    what + ' ended on ' + day + '. The credits that came with it have ended too, and your eBay account limit is back to what it was before the plan.',
+    'Your listings, drafts and orders are all still there. Choose a plan again whenever you are ready and everything works as before.',
+  ];
+  return sendFrom('billing', {
+    to,
+    subject: appName + ': your plan has ended',
+    text: lines.join('\n\n') + '\n\n' + frontendUrl('/pricing'),
+    html: wrapHtml('Your plan has ended', paragraphsHtml(lines.join('\n\n')), '', { preheader: what + ' ended on ' + day, cta: { text: 'Choose a plan', url: frontendUrl('/pricing') } }),
+  }, 'Plan ended');
+}
+
 /** A prepared invoice mail (subject, text, html) with the PDF attached. */
 async function sendInvoiceEmail({ to, subject, text, html, attachments }) {
   return sendFrom('billing', { to, subject, text, html, ...(attachments ? { attachments } : {}) }, 'Invoice');
@@ -409,4 +426,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };

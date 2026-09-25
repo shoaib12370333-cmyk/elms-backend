@@ -44,7 +44,7 @@ async function startCheckout({ user, plan, discount = null, voucher = null }) {
     amount,
     lineItems: [{
       name: plan.name + (voucher ? ' (voucher)' : percent > 0 ? ' (' + percent + '% referral discount)' : ''),
-      description: plan.credits.toLocaleString('en-US') + ' credits' + (plan.maxEbayAccounts ? ' + ' + plan.maxEbayAccounts + ' eBay account' + (plan.maxEbayAccounts === 1 ? '' : 's') : ''),
+      description: plan.credits.toLocaleString('en-US') + ' credits' + (plan.termMonths ? ', valid for ' + (plan.termMonths === 12 ? '1 year' : '1 month') : '') + (plan.maxEbayAccounts ? ' + ' + plan.maxEbayAccounts + ' eBay account' + (plan.maxEbayAccounts === 1 ? '' : 's') : ''),
       quantity: 1,
       unit_amount: amount,
     }],
@@ -54,6 +54,8 @@ async function startCheckout({ user, plan, discount = null, voucher = null }) {
     metadata: {
       elms_user_id: String(user.id),
       elms_plan_id: String(plan.id),
+      ...(plan.billing ? { elms_billing: plan.billing } : {}),
+      ...(plan.custom ? { elms_price: String(plan.priceUsd), elms_credits: String(plan.credits), elms_stores: String(plan.maxEbayAccounts), elms_months: String(plan.termMonths), elms_label: plan.name } : {}),
       ...(percent > 0 ? { elms_discount_percent: String(percent), elms_referral_id: String(discount.referralId) } : {}),
       ...(voucher ? { elms_voucher_id: String(voucher.id) } : {}),
     },
@@ -84,7 +86,9 @@ async function grantForSession(session, { expectUserId } = {}) {
   }
   if (expectUserId && String(expectUserId) !== String(userId)) return { status: 'completed', granted: false, reason: 'not_yours' };
 
-  const plan = await getPlanById(planId);
+  // A standard plan is read from the database; the custom plan (and the term) from what our server put in the session.
+  const stored = planId === 'custom' ? null : await getPlanById(planId);
+  const plan = require('./planPricing').offerFromMetadata(meta, stored);
   if (!plan) {
     await alertAdmin('CashTap payment for a deleted plan', ['Session: ' + session.id, 'User id: ' + userId, 'Plan id: ' + planId, 'Amount: $' + session.amount, 'The plan no longer exists, so nobody was credited.']);
     return { status: 'completed', granted: false, reason: 'no_plan' };
@@ -96,7 +100,7 @@ async function grantForSession(session, { expectUserId } = {}) {
   const referralId = discountPercent > 0 && /^[a-f0-9]{24}$/i.test(String(meta.elms_referral_id || '')) ? String(meta.elms_referral_id) : null;
   // A voucher: it must be this buyer's, a purchase discount, and valid for this plan; the price it gives is what was asked.
   let voucher = null;
-  if (/^[a-f0-9]{24}$/i.test(String(meta.elms_voucher_id || ''))) {
+  if (!plan.custom && /^[a-f0-9]{24}$/i.test(String(meta.elms_voucher_id || ''))) {
     const found = await require('../models/vouchersModel').getById(String(meta.elms_voucher_id));
     if (found && found.userId === String(userId) && vouchers.appliesToPlan(found, plan)) voucher = found;
   }

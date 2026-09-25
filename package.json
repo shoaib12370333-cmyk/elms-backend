@@ -34,6 +34,7 @@
     "test:admin-overview": "node tests/adminOverview.test.js",
     "test:super-admin": "node tests/superAdmin.test.js",
     "test:invoice": "node tests/invoice.test.js",
+    "test:plan-terms": "node tests/planTerms.test.js && node tests/cashtapTerms.test.js",
     "test:support-chat": "node tests/supportChatRoutes.test.js",
     "test:transient-publish": "node tests/transientPublish.test.js",
     "test:listing-ids": "node tests/listingSerializeIds.test.js",
