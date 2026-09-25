@@ -50,12 +50,15 @@ function showDisconnected() {
   renderInfo();
 }
 
+// What an import costs, the way people read it: "Free" when the admin made it free.
+const costLabel = (n) => (n === 0 ? 'Free' : n + ' credit' + (n === 1 ? '' : 's'));
+
 // Credits and stores (free): shown under the account and in the store list.
 function renderInfo() {
   const stores = info?.stores || [];
   const credits = info?.credits;
   $('credits').innerHTML = credits
-    ? (credits.unlimited ? '<b>Unlimited</b> credits' : `You have <b>${credits.balance}</b> credit${credits.balance === 1 ? '' : 's'}`) + ` &middot; an import costs <b>${credits.importCost}</b>`
+    ? (credits.unlimited ? '<b>Unlimited</b> credits' : `You have <b>${credits.balance}</b> credit${credits.balance === 1 ? '' : 's'}`) + (credits.importCost === 0 ? ' &middot; an import is <b>free</b>' : ` &middot; an import costs <b>${credits.importCost}</b>`)
     : '';
   $('storeField').classList.toggle('hidden', stores.length < 2);
   const chosen = chosenStoreId();
@@ -201,8 +204,8 @@ $('import').addEventListener('click',async()=>{
         if(here && here.status==='draft'){
           askedAbout.add(product.asin);
           holdLabel=true;
-          button.textContent=`Refresh the draft · ${info.credits.importCost} credit`;
-          $('status').innerHTML=`<span class="warn-text">Already in your Drafts.</span>\nImporting again refreshes it and costs ${info.credits.importCost} credit. Press the button again to do it.`;
+          button.textContent=`Refresh the draft · ${costLabel(info.credits.importCost)}`;
+          $('status').innerHTML=`<span class="warn-text">Already in your Drafts.</span>\nImporting again refreshes it${info.credits.importCost === 0 ? ' (free)' : ' and costs ' + costLabel(info.credits.importCost)}. Press the button again to do it.`;
           return;
         }
       }
