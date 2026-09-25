@@ -88,6 +88,8 @@ assert.match(popup, /credits\.importCost === 0/, 'the popup says "free" for a pr
 
 // ---- the version moved, so Chrome offers the update ----
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-assert.strictEqual(manifest.version, '3.7.1');
+assert.strictEqual(manifest.version, '3.7.2');
+assert.ok(manifest.description.length <= 132, 'the Chrome Web Store refuses a manifest description over 132 characters (was ' + manifest.description.length + ')');
+assert.ok(manifest.name.length <= 45, 'and a name over 45 characters');
 
 console.log('extension import rules tests passed');
