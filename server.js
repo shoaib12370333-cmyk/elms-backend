@@ -239,6 +239,13 @@ async function start() {
   // back to the code defaults.
   await applyActionCostOverridesOnStartup();
 
+  // The super admin is always an admin, also in the database (the stats and access screens read the stored role).
+  try {
+    await require('./models/schemas/User').updateOne({ email: require('./services/superAdmin').superAdminEmail(), role: { $ne: 'admin' } }, { $set: { role: 'admin' } });
+  } catch (err) {
+    console.warn('Could not make sure the super admin has the admin role:', err.message);
+  }
+
   app.get('/', (req, res) => res.json({ service: 'elms-backend', status: 'ok' }));
 
 app.listen(PORT, () => {
