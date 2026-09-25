@@ -85,6 +85,7 @@ const listingSchema = new mongoose.Schema(
     views: { type: Number, default: null },
     watchers: { type: Number, default: null },
     statsSyncedAt: { type: Date, default: null },
+    viewsSyncedAt: { type: Date, default: null }, // when the view count was last read (the bulk read may not include it, see services/listingStatsService.js)
   },
   { timestamps: true } // adds createdAt and updatedAt
 );

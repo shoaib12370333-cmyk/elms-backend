@@ -29,6 +29,17 @@ const {
 router.use(requireAuth, requireAdmin);
 
 /**
+ * GET /api/admin/ebay-usage
+ * How much of eBay's daily Trading API allowance is used today (all sellers together) and what the last background
+ * statistics run did. `viewsInBulk: false` means eBay's bulk answer carries no view counts (they are then read a few at a time).
+ */
+router.get('/ebay-usage', async (req, res) => {
+  const { snapshot } = require('../services/ebayCallBudget');
+  const { getLastRun } = require('../services/listingStatsService');
+  res.json({ success: true, usage: await snapshot(), lastStatsRun: getLastRun() });
+});
+
+/**
  * Admin access. Only the super admin can see or change who has the admin panel.
  * GET /api/admin/admins            -> everyone who has it
  * POST /api/admin/admins {email}   -> gives it to an existing ELMS user

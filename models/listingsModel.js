@@ -441,8 +441,9 @@ async function updateListingSettings(userId, id, fields) {
  */
 async function updateListingStats(userId, id, { views, watchers }) {
   const update = { statsSyncedAt: new Date() };
-  if (Number.isFinite(Number(views))) update.views = Math.max(0, Math.trunc(Number(views)));
-  if (Number.isFinite(Number(watchers))) update.watchers = Math.max(0, Math.trunc(Number(watchers)));
+  // null means "eBay did not say": Number(null) is 0, which would wipe a real count.
+  if (views != null && Number.isFinite(Number(views))) { update.views = Math.max(0, Math.trunc(Number(views))); update.viewsSyncedAt = update.statsSyncedAt; }
+  if (watchers != null && Number.isFinite(Number(watchers))) update.watchers = Math.max(0, Math.trunc(Number(watchers)));
   const doc = await Listing.findOneAndUpdate({ _id: id, userId }, update, { new: true });
   return doc ? serialize(doc) : null;
 }
