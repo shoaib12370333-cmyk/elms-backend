@@ -11,6 +11,12 @@ async function createBulkImportJob(userId, { ebayAccountId, markupPercent, items
   return serialize(doc);
 }
 
+/** How many imports the user has running and how many of their products still wait to be saved (each needs a credit). */
+async function activeJobStats(userId) {
+  const rows = await BulkImportJob.find({ userId, status: { $in: ['queued', 'submitting', 'polling'] } }).select('total done failed').lean();
+  return { jobs: rows.length, pendingItems: rows.reduce((n, r) => n + Math.max(0, (r.total || 0) - (r.done || 0) - (r.failed || 0)), 0) };
+}
+
 async function getBulkImportJob(userId, id) {
   const doc = await BulkImportJob.findOne({ _id: id, userId });
   return doc ? serialize(doc) : null;
@@ -98,6 +104,7 @@ function serializeSummary(obj) {
 }
 
 module.exports = {
+  activeJobStats,
   createBulkImportJob,
   getBulkImportJob,
   listBulkImportJobs,

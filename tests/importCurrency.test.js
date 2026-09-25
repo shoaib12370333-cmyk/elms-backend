@@ -14,11 +14,14 @@ const fxCalls = [];
 let fxImpl = async (amount, from, to) => ({ amount: Number((amount * 0.75).toFixed(2)), rate: 0.75, converted: true });
 const jobsCreated = [];
 let credits = true;
+let creditLimit = Infinity; // hasCredits says yes for any amount up to this
+const creditChecks = [];
+let activeStats = { jobs: 0, pendingItems: 0 };
 
 const fakes = {
   '../models/importsModel': { createImport: async () => ({ id: 'imp1' }), updateImportImages: async () => {} },
   '../models/listingsModel': { findListingInStore: async () => null, upsertDraft: async (userId, draft) => { drafts.push(draft); return { id: 'd' + drafts.length }; } },
-  '../models/usersModel': { hasCredits: async () => credits },
+  '../models/usersModel': { hasCredits: async (userId, amount) => { creditChecks.push(amount); return credits && amount <= creditLimit; } },
   '../services/creditService': { withCredits: async (userId, cost, fn) => { charges.push(cost); return fn(); } },
   '../middleware/requireAuth': { requireAuth: (req, res, next) => next() },
   '../services/validationService': { isValidAmazonUrl: (u) => /^https?:\/\/(www\.)?amazon\./i.test(u), assertAmazonMatchesStore: () => {} },
@@ -28,7 +31,7 @@ const fakes = {
   '../services/productCacheService': { getCachedProduct: async () => null, setCachedProduct: async () => {} },
   '../services/currencyService': { convertAmount: (...args) => { fxCalls.push(args); return fxImpl(...args); } },
   '../models/settingsModel': { getLimits: async () => ({ bulkImportMax: 25, bulkJobMax: 1000 }) },
-  '../models/bulkImportJobsModel': { createBulkImportJob: async (userId, job) => { jobsCreated.push(job); return { id: 'job1', total: job.items.length }; } },
+  '../models/bulkImportJobsModel': { activeJobStats: async () => activeStats, createBulkImportJob: async (userId, job) => { jobsCreated.push(job); return { id: 'job1', total: job.items.length }; } },
 };
 const origLoad = Module._load;
 Module._load = function (request, parent) {
@@ -171,6 +174,24 @@ const reset = () => { drafts.length = 0; charges.length = 0; fxCalls.length = 0;
   assert.strictEqual(jobsCreated[1].markupPercent, 0);
   out = await call({ amazonUrls: [UK], markupPercent: '' });
   assert.strictEqual(jobsCreated[2].markupPercent, 0);
+
+  // ---------- 5. how many imports one person can run at once, and what their credits must cover ----------
+  const created = jobsCreated.length;
+  activeStats = { jobs: 3, pendingItems: 0 };
+  out = await call({ amazonUrls: [UK] });
+  assert.strictEqual(out.status, 429);
+  assert.match(out.body.error, /already have 3 imports running/);
+  assert.strictEqual(jobsCreated.length, created, 'no fourth import');
+  activeStats = { jobs: 1, pendingItems: 40 }; creditChecks.length = 0;
+  out = await call({ amazonUrls: [UK, 'https://www.amazon.co.uk/dp/B0UKSECOND'] });
+  assert.strictEqual(out.body.success, true);
+  assert.ok(creditChecks.includes(42), 'the credits must cover this list (2 products) AND what the other imports still have to save (40)');
+  creditLimit = 41; // enough for this list alone, not for this list plus the 40 that are still waiting
+  out = await call({ amazonUrls: [UK, 'https://www.amazon.co.uk/dp/B0UKSECOND'] });
+  assert.strictEqual(out.status, 402);
+  assert.match(out.body.error, /needs 42 credits in all \(40 more from your other imports are still waiting to be saved\)/);
+  assert.strictEqual(jobsCreated.length, created + 1, 'only the list that was covered was started');
+  activeStats = { jobs: 0, pendingItems: 0 }; creditLimit = Infinity;
 
   Module._load = origLoad;
   console.log('import currency tests passed');

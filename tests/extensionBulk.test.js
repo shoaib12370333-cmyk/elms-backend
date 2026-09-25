@@ -40,7 +40,7 @@ stub('services/productCacheService', { getCachedProduct: async () => null, setCa
 const realCanopy = require('../services/canopyAmazonService');
 stub('services/canopyAmazonService', { ...realCanopy, fetchProductByUrl: async (url) => ({ asin: realCanopy.extractAsinFromUrl(url), title: 'Widget ' + url.slice(-10), price: 8, currency: 'GBP', images: [], bulletPoints: [], specifications: [], sourceUrl: url }) });
 stub('models/settingsModel', { getLimits: async () => ({ bulkImportMax: 25, bulkJobMax: 1000 }) });
-stub('models/bulkImportJobsModel', { createBulkImportJob: async (userId, job) => { db.jobs.push(job); return { id: 'J1', total: job.items.length }; } });
+stub('models/bulkImportJobsModel', { activeJobStats: async () => ({ jobs: 0, pendingItems: 0 }), createBulkImportJob: async (userId, job) => { db.jobs.push(job); return { id: 'J1', total: job.items.length }; } });
 stub('middleware/requireAuth', { requireAuth: (req, res, next) => next() });
 
 const extension = require('../services/extensionService');
