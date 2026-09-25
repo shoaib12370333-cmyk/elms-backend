@@ -15,6 +15,9 @@ const { getCachedProduct, setCachedProduct } = require('../services/productCache
 const { currencyForAmazonUrl } = require('../config/amazonDomains');
 const { convertAmount } = require('../services/currencyService');
 const { storeForImport, assertStoreForImport, bulkCostFor, alreadyListedMessage } = require('../services/extensionService');
+const { priceByRule, markupGiven } = require('../services/importPricingService');
+const { getPricingRule } = require('../models/usersModel');
+const { normalizeRule } = require('../services/pricingService');
 
 const MAX_ACTIVE_BULK_JOBS = 3; // background imports one person can have running at once
 const MARKUP_MIN = -99;
@@ -68,16 +71,21 @@ async function alignPriceCurrency(product, sourceUrl) {
  * env var is set (see imageStorageService.publicBaseUrl) - the background job passes a minimal
  * stand-in object since it has no real HTTP request.
  */
-async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount, { alreadyCharged = false, cost = ACTION_COSTS.AMAZON_IMPORT } = {}) {
+async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount, { alreadyCharged = false, cost = ACTION_COSTS.AMAZON_IMPORT, pricingRule } = {}) {
   const activeEbayAccount = knownActiveEbayAccount !== undefined ? knownActiveEbayAccount : await getActiveEbayAccount(userId);
   await alignPriceCurrency(product, sourceUrl); // before the credit is taken: a price that cannot be put right saves nothing
+  // The seller's pricing rule (Settings > Pricing) prices the product when the request has no markup % of its own; null = the markup
+  // below works exactly as it always did. Also before the credit: a rule that cannot be used saves nothing and costs nothing.
+  const ruled = await priceByRule({ userId, price: product.price, currency: product.currency, markupPercent, pricingRule });
   // A listing that is already live (or paused, scheduled, ended ...) is never changed by an import: refuse before any credit is spent.
   const already = product.asin ? alreadyListedMessage(await findListingInStore(userId, product.asin, activeEbayAccount?.id || null), activeEbayAccount) : null;
   if (already) throw Object.assign(new Error(already), { statusCode: 409, alreadyListed: true });
   // Pays first (nothing is saved without the credit) and gives it back if saving fails.
   const save = async () => {
     let suggestedPrice = null;
-    if (product.price != null && markupPercent != null) {
+    if (ruled) {
+      suggestedPrice = ruled.sellPrice;
+    } else if (product.price != null && markupPercent != null) {
       const markup = Number(markupPercent);
       if (!Number.isNaN(markup)) {
         suggestedPrice = Number((product.price * (1 + markup / 100)).toFixed(2));
@@ -98,7 +106,7 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
       title: product.title,
       mainImage: (product.images && product.images[0]) || null,
       sellPrice: suggestedPrice ?? product.price,
-      markupPercent: Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0,
+      markupPercent: ruled ? ruled.markupPercent : (Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0),
       currency: product.currency,
       quantity: 1,
       categoryId: null,
@@ -107,10 +115,11 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
       specifications: product.specifications || [],
       ebayAspects: product.ebayAspects || {},
       amazonPrice: product.price,
-      marginAmount: suggestedPrice != null && product.price != null ? Number((suggestedPrice - product.price).toFixed(2)) : null,
+      marginAmount: ruled ? ruled.marginAmount : (suggestedPrice != null && product.price != null ? Number((suggestedPrice - product.price).toFixed(2)) : null),
+      pricingRule: ruled ? ruled.pricingRule : null,
     });
 
-    return { product, suggestedPrice, importId: importRecord.id, draft };
+    return { product, suggestedPrice, importId: importRecord.id, draft, pricing: ruled ? ruled.breakdown : null };
   };
   return alreadyCharged ? save() : withCredits(userId, cost, save);
 }
@@ -298,6 +307,17 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   if (markup === null) {
     return res.status(400).json({ success: false, error: `Markup must be a number between ${MARKUP_MIN}% and ${MARKUP_MAX}%.` });
   }
+  // No markup % typed: the seller's pricing rule (when it is switched on) prices the whole list. The rule is kept with the job, so
+  // the list is priced by the rule of the moment it was started, whatever is changed in Settings while it runs.
+  let jobRule = null;
+  if (!markupGiven(markupPercent)) {
+    const stored = await getPricingRule(req.userId);
+    if (stored && stored.enabled === true) {
+      const checked = normalizeRule(stored);
+      if (!checked.rule) return res.status(409).json({ success: false, error: 'Your pricing rule is not valid (' + checked.errors[0] + ') Open Settings > Pricing and save it again.' });
+      jobRule = checked.rule;
+    }
+  }
   const { bulkJobMax } = await require('../models/settingsModel').getLimits();
   if (amazonUrls.length > bulkJobMax) {
     return res.status(400).json({ success: false, error: 'Please import at most ' + bulkJobMax + ' links at a time.', max: bulkJobMax });
@@ -354,6 +374,7 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   const job = await createBulkImportJob(req.userId, {
     ebayAccountId: activeEbayAccount?.id || null,
     markupPercent: markup,
+    pricingRule: jobRule,
     source: source === 'extension' ? 'extension' : 'website',
     items,
   });

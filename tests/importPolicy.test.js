@@ -16,6 +16,7 @@ stub('models/schemas/Settings', {
 // ---- the rest of the world
 const db = { balance: 50, spent: [], drafts: [], jobs: [], accounts: [], seq: 0 };
 stub('models/usersModel', {
+  getPricingRule: async () => null, // these sellers have no pricing rule: imports are priced by markup % as before
   hasCredits: async (id, n) => db.balance >= n,
   spendCredit: async (id, n) => { if (db.balance < n) return false; db.balance -= n; db.spent.push(n); return true; },
   refundCredit: async (id, n) => { db.balance += n; },

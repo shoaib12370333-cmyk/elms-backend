@@ -6,6 +6,7 @@ const { hasCredits, getUserById } = require('../models/usersModel');
 const { withCredits } = require('../services/creditService');
 const { requireAuth } = require('../middleware/requireAuth');
 const { isValidAmazonUrl, assertAmazonMatchesStore } = require('../services/validationService');
+const { priceByRule } = require('../services/importPricingService');
 const { storeForImport, assertStoreForImport, alreadyListedMessage } = require('../services/extensionService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { materializeImageUrls } = require('../services/imageStorageService');
@@ -178,8 +179,13 @@ router.post('/', requireAuth, async (req, res) => {
       });
     }
 
+    // The seller's pricing rule (Settings > Pricing) prices the product when the extension sent no markup %; before the credit is taken,
+    // so a rule that cannot be used saves nothing and costs nothing. null = the markup below, exactly as it always was.
+    const ruled = await priceByRule({ userId: req.userId, price: normalized.price, currency: normalized.currency, markupPercent });
     let suggestedPrice = normalized.price;
-    if (normalized.price != null && markupPercent != null && markupPercent !== '') {
+    if (ruled) {
+      suggestedPrice = ruled.sellPrice;
+    } else if (normalized.price != null && markupPercent != null && markupPercent !== '') {
       const markup = Number(markupPercent);
       if (Number.isFinite(markup) && markup >= -99 && markup <= 1000) {
         suggestedPrice = Number((normalized.price * (1 + markup / 100)).toFixed(2));
@@ -206,7 +212,7 @@ router.post('/', requireAuth, async (req, res) => {
         mainImage: storedImages[0] || null,
         images: storedImages,
         sellPrice: suggestedPrice,
-        markupPercent: Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0,
+        markupPercent: ruled ? ruled.markupPercent : (Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0),
         currency: normalized.currency,
         quantity: 1,
         categoryId: null,
@@ -215,7 +221,8 @@ router.post('/', requireAuth, async (req, res) => {
         specifications: normalized.specifications || [],
         ebayAspects: normalized.ebayAspects || {},
         amazonPrice: normalized.price,
-        marginAmount: suggestedPrice != null && normalized.price != null ? Number((suggestedPrice - normalized.price).toFixed(2)) : null,
+        marginAmount: ruled ? ruled.marginAmount : (suggestedPrice != null && normalized.price != null ? Number((suggestedPrice - normalized.price).toFixed(2)) : null),
+        pricingRule: ruled ? ruled.pricingRule : null,
       });
     });
 
@@ -227,7 +234,7 @@ router.post('/', requireAuth, async (req, res) => {
     } catch (_) { /* the import is saved either way */ }
 
     return res.json({
-      success: true, source: 'browser', product: normalized, suggestedPrice, importId: importRecord.id, draft, creditsLeft,
+      success: true, source: 'browser', product: normalized, suggestedPrice, importId: importRecord.id, draft, creditsLeft, pricing: ruled ? ruled.breakdown : null,
       store: activeEbayAccount ? { id: activeEbayAccount.id, label: activeEbayAccount.label } : null,
       appUrl: require('../services/extensionService').frontendUrl(),
     });

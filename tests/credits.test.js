@@ -10,6 +10,7 @@ const isAdmin = (id) => id === 'admin';
 const log = { spent: [], refunded: [] };
 let refundFails = false;
 stub('models/usersModel', {
+  getPricingRule: async () => null, // these sellers have no pricing rule: imports are priced by markup % as before
   hasCredits: async (id, n = 1) => n <= 0 || isAdmin(id) || (balance[id] || 0) >= n,
   spendCredit: async (id, n = 1) => {
     if (n <= 0 || isAdmin(id)) return true;

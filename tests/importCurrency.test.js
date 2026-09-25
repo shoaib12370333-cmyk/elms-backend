@@ -21,7 +21,7 @@ let activeStats = { jobs: 0, pendingItems: 0 };
 const fakes = {
   '../models/importsModel': { createImport: async () => ({ id: 'imp1' }), updateImportImages: async () => {} },
   '../models/listingsModel': { findListingInStore: async () => null, upsertDraft: async (userId, draft) => { drafts.push(draft); return { id: 'd' + drafts.length }; } },
-  '../models/usersModel': { hasCredits: async (userId, amount) => { creditChecks.push(amount); return credits && amount <= creditLimit; } },
+  '../models/usersModel': { getPricingRule: async () => null, hasCredits: async (userId, amount) => { creditChecks.push(amount); return credits && amount <= creditLimit; } },
   '../services/creditService': { withCredits: async (userId, cost, fn) => { charges.push(cost); return fn(); } },
   '../middleware/requireAuth': { requireAuth: (req, res, next) => next() },
   '../services/validationService': { isValidAmazonUrl: (u) => /^https?:\/\/(www\.)?amazon\./i.test(u), assertAmazonMatchesStore: () => {} },

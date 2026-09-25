@@ -130,7 +130,9 @@ async function trySave(job, item, saveProductAsDraft, hooks = {}) {
       store = await require('../models/ebayAccountsModel').getEbayAccountById(job.userId, String(job.ebayAccountId));
       if (!store) throw new Error('The eBay store of this import is no longer connected.');
     }
-    const saved = await saveProductAsDraft(job.userId, item.product, job.markupPercent, item.amazonUrl, FAKE_REQ, store, { cost });
+    // A job started under a pricing rule is priced by that rule (no markup % is passed then); any other job by its markup %, as always.
+    const rule = job.pricingRule && typeof job.pricingRule === 'object' ? job.pricingRule : undefined;
+    const saved = await saveProductAsDraft(job.userId, item.product, rule ? null : job.markupPercent, item.amazonUrl, FAKE_REQ, store, rule ? { cost, pricingRule: rule } : { cost });
     item.status = 'done';
     item.draftId = saved.draft?.id || null;
     item.outOfCredits = false;

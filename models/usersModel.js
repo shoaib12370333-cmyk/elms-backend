@@ -374,6 +374,18 @@ async function setAutoOrderSettings(userId, { autoOrderMode, confirmFullAuto }) 
   return user ? serialize(user) : null;
 }
 
+/** The user's saved pricing rule (already cleaned when it was saved), or null when they never set one. */
+async function getPricingRule(userId) {
+  const user = await User.findById(userId).select('pricingRule').lean();
+  return user && user.pricingRule && typeof user.pricingRule === 'object' ? user.pricingRule : null;
+}
+
+/** Saves a pricing rule that normalizeRule (services/pricingService.js) has already checked. */
+async function setPricingRule(userId, rule) {
+  const user = await User.findByIdAndUpdate(userId, { pricingRule: rule }, { new: true }).select('pricingRule').lean();
+  return user ? user.pricingRule : null;
+}
+
 async function setOrderSyncSettings(userId, { orderSyncMode, orderSyncIntervalMinutes }) {
   const update = {};
   if (orderSyncMode !== undefined) update.orderSyncMode = orderSyncMode;
@@ -523,6 +535,8 @@ module.exports = {
   addEbayAccountSlots,
   setOrderSyncSettings,
   setAutoOrderSettings,
+  getPricingRule,
+  setPricingRule,
   getOrCreateExtensionKey,
   regenerateExtensionKey,
   getUserByExtensionKey,

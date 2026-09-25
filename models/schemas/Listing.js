@@ -23,6 +23,9 @@ const listingSchema = new mongoose.Schema(
     amazonPrice: { type: Number, default: null },
     // Fixed cash margin preserved when source price changes.
     marginAmount: { type: Number, default: null },
+    // The pricing rule this draft was priced with (Settings -> Pricing), with its money amounts in this listing's currency, so a later
+    // re-pricing uses the same numbers. null = priced by a markup % (or by hand): the seller's cash margin is kept, as always.
+    pricingRule: { type: mongoose.Schema.Types.Mixed, default: null },
     repricingEnabled: { type: Boolean, default: true },
     lastRepricedAt: { type: Date, default: null },
     lastStockCheckedAt: { type: Date, default: null },

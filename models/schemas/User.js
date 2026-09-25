@@ -96,6 +96,10 @@ const userSchema = new mongoose.Schema(
     autoOrderMode: { type: String, enum: ['disabled', 'semi_auto', 'full_auto'], default: 'disabled' },
     fullAutoConfirmedAt: { type: Date, default: null },
 
+    // The seller's pricing rule (Settings -> Pricing), checked and cleaned by services/pricingService.js normalizeRule before it is
+    // saved. null = never set. It only prices products imported while it is switched on (rule.enabled).
+    pricingRule: { type: mongoose.Schema.Types.Mixed, default: null },
+
     // Unique credential for the ELMS browser extension. The plaintext key is
     // never stored; it is encrypted at rest and its SHA-256 hash is used for lookup.
     extensionKeyEncrypted: { type: String, default: null },

@@ -4,7 +4,7 @@ const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
 const { sourceCurrency } = require('../config/amazonDomains');
 const { convertAmount } = require('../services/currencyService');
 const { withdrawListing, updateOfferPrice, updateOfferQuantity } = require('../services/ebayListingService');
-const { getSavedMargin, calculateRepricedSellPrice } = require('../services/repricingService');
+const { getSavedMargin, repriceFor } = require('../services/repricingService');
 const { listPublishedListings, markEnded, updateListing } = require('../models/listingsModel');
 const { updateImportPrice } = require('../models/importsModel');
 const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
@@ -237,12 +237,14 @@ async function syncPriceIfChanged(user, listing, availability) {
     const effectiveMargin = margin != null
       ? margin
       : Number((Number(listing.sell_price) - oldAmazonPrice).toFixed(2));
-    const newSellPrice = calculateRepricedSellPrice(newAmazonPrice, effectiveMargin);
+    // A listing priced by a pricing rule is priced by that rule again; any other keeps its cash margin.
+    const repriced = repriceFor(listing, newAmazonPrice, effectiveMargin);
 
-    if (newSellPrice == null) {
+    if (repriced == null) {
       console.error(`[price-monitor] ${listing.sku}: calculated eBay price is invalid (source=${newAmazonPrice}, margin=${effectiveMargin}); baseline retained for retry.`);
       return;
     }
+    const newSellPrice = repriced.sellPrice;
 
     const refreshToken = listing.ebay_account_id
       ? await getEbayAccountRefreshToken(user.id, listing.ebay_account_id)
@@ -267,13 +269,14 @@ async function syncPriceIfChanged(user, listing, availability) {
     await updateListing(user.id, listing.id, {
       sellPrice: newSellPrice,
       amazonPrice: newAmazonPrice,
-      marginAmount: effectiveMargin,
+      marginAmount: repriced.marginAmount,
+      ...(repriced.rule ? { pricingRule: repriced.rule } : {}), // the rule stays with the listing (a plain price save would end it)
       lastRepricedAt: new Date(),
       lastStockCheckedAt: new Date(),
       markDraftCustomized: false,
     });
 
-    console.log(`[price-monitor] ${listing.sku}: Amazon ${oldAmazonPrice} -> ${newAmazonPrice}, eBay ${listing.sell_price} -> ${newSellPrice}, fixed margin ${effectiveMargin}.`);
+    console.log(`[price-monitor] ${listing.sku}: Amazon ${oldAmazonPrice} -> ${newAmazonPrice}, eBay ${listing.sell_price} -> ${newSellPrice}, ${repriced.rule ? 'by the pricing rule' : 'fixed margin ' + effectiveMargin}.`);
   } catch (err) {
     console.error(`[price-monitor] Could not update eBay price for ${listing.sku}: ${err.message}`);
   } finally {

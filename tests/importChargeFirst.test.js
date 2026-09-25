@@ -7,6 +7,7 @@ const stub = (rel, exports) => { const p = require.resolve(path.join('..', rel))
 const balance = { u1: 1 };
 const log = { spent: 0, refunded: 0 };
 stub('models/usersModel', {
+  getPricingRule: async () => null, // these sellers have no pricing rule: imports are priced by markup % as before
   hasCredits: async (id, n = 1) => (balance[id] || 0) >= n,
   spendCredit: async (id, n = 1) => {
     await new Promise((r) => setImmediate(r)); // a real database call takes time; other requests run meanwhile

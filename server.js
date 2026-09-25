@@ -193,6 +193,7 @@ app.use('/api/tools', researchToolsRoute);
 app.use('/api/notifications', notificationsRoute);
 app.use('/api/system-notifications', systemNotificationsRoute);
 app.use('/api/dashboard', dashboardRoute);
+app.use('/api/pricing', require('./routes/pricing'));
 app.use('/api/security', require('./routes/security'));
 app.use('/api/referrals', require('./routes/referrals'));
 app.use('/api/affiliate', require('./routes/affiliates'));
