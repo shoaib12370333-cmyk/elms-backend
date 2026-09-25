@@ -7,6 +7,7 @@ const {
   registerWithPassword,
   loginWithPassword,
   getUserById,
+  markWelcomePopupSeen,
   setOrderSyncSettings,
   getOrCreateExtensionKey,
   regenerateExtensionKey,
@@ -348,6 +349,20 @@ router.get('/me', requireAuth, async (req, res) => {
     return res.status(404).json({ success: false, error: 'User not found.' });
   }
   res.json({ success: true, user });
+});
+
+/**
+ * POST /api/auth/welcome-seen
+ * The user closed the welcome popup ("you got N free credits"); it is not shown again.
+ */
+router.post('/welcome-seen', requireAuth, async (req, res) => {
+  try {
+    await markWelcomePopupSeen(req.userId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('welcome-seen error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not save that.' });
+  }
 });
 
 /**

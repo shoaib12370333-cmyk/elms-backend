@@ -213,6 +213,31 @@ function wrapHtml(title, bodyHtml, footerHtml, opts = {}) {
 
 const paragraphsHtml = mailTemplate.paragraphsHtml;
 
+/** The welcome mail for a brand-new account. `credits` is what the account was given at sign-up (0 = none). */
+async function sendWelcomeEmail({ to, name, credits = 0 }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const n = Math.max(0, Math.floor(Number(credits) || 0));
+  const first = String(name || '').trim().split(/\s+/)[0];
+  const creditsText = n.toLocaleString('en-US') + ' free credit' + (n === 1 ? '' : 's');
+  const lines = [
+    first ? 'Hi ' + first + ',' : 'Hi,',
+    'Welcome to ' + appName + '. Your account is ready.',
+    n > 0 ? 'We added ' + creditsText + ' to your account so you can try ' + appName + ' straight away. Your balance is always shown at the top of the app.' : null,
+    'Getting started takes three steps:\n1. Connect your eBay store in Settings.\n2. Paste an Amazon link on the Import page.\n3. Check the draft in Drafts and publish it to eBay.',
+    'Questions? Open Support in the app and send us a ticket.',
+  ].filter(Boolean);
+  const url = frontendUrl('/dashboard');
+  return sendFrom('noreply', {
+    to,
+    subject: n > 0 ? 'Welcome to ' + appName + ': ' + creditsText + ' to try it' : 'Welcome to ' + appName,
+    text: lines.join('\n\n') + '\n\n' + url,
+    html: wrapHtml('Welcome to ' + appName, paragraphsHtml(lines.join('\n\n')), '', {
+      preheader: n > 0 ? creditsText + ' are in your account' : 'Your account is ready',
+      cta: { text: 'Open ' + appName, url },
+    }),
+  }, 'Welcome');
+}
+
 /** Sends the invoice for a purchase. `purchase` (the recorded purchase) gives the full invoice with its PDF; without it a short receipt goes out. */
 async function sendPurchaseReceiptEmail({ to, credits, priceUsd, transactionId, when, purchase }) {
   if (purchase) {
@@ -507,4 +532,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordRemovedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendWelcomeEmail, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordRemovedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
