@@ -7,8 +7,10 @@ const {
   setActiveEbayAccount,
   updateEbayAccountDisplayName,
   getEbayAccountById,
+  getEbayAccountRefreshToken,
 } = require('../models/ebayAccountsModel');
 const { refreshStaleIdentities, refreshAccountIdentity } = require('../services/accountIdentityService');
+const { getAccountStatus, getViolations } = require('../services/ebayAccountStatusService');
 
 /**
  * GET /api/ebay-accounts
@@ -73,6 +75,42 @@ router.put('/:id/display-name', requireAuth, async (req, res) => {
   const account = await updateEbayAccountDisplayName(req.userId, req.params.id, displayName);
   if (!account) return res.status(404).json({ success: false, error: 'That eBay account was not found.' });
   res.json({ success: true, account });
+});
+
+/**
+ * GET /api/ebay-accounts/:id/status[?refresh=1]
+ * What eBay says about this store: its selling limit (items / money per month) and how many live listings break an eBay rule,
+ * by type. Remembered for 30 minutes (refresh=1 asks again, at most once a minute). A part eBay does not answer is null and
+ * explained in `errors`, so the page can simply show less.
+ */
+router.get('/:id/status', requireAuth, async (req, res) => {
+  const account = await getEbayAccountById(req.userId, req.params.id);
+  if (!account) return res.status(404).json({ success: false, error: 'That eBay account was not found.' });
+  const refreshToken = await getEbayAccountRefreshToken(req.userId, req.params.id);
+  if (!refreshToken) return res.status(400).json({ success: false, error: 'This eBay account is disconnected. Connect it again first.' });
+  try {
+    const status = await getAccountStatus(req.params.id, refreshToken, account.marketplaceId, { refresh: req.query.refresh === '1' });
+    res.json({ success: true, status });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not read the store status from eBay.' });
+  }
+});
+
+/**
+ * GET /api/ebay-accounts/:id/violations?type=ASPECTS_ADOPTION
+ * The live listings (up to 200) that break one eBay rule, with the reason eBay gives and the listing's ELMS title.
+ */
+router.get('/:id/violations', requireAuth, async (req, res) => {
+  const account = await getEbayAccountById(req.userId, req.params.id);
+  if (!account) return res.status(404).json({ success: false, error: 'That eBay account was not found.' });
+  const refreshToken = await getEbayAccountRefreshToken(req.userId, req.params.id);
+  if (!refreshToken) return res.status(400).json({ success: false, error: 'This eBay account is disconnected. Connect it again first.' });
+  try {
+    const result = await getViolations(req.userId, req.params.id, refreshToken, account.marketplaceId, req.query.type);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not read the listing problems from eBay.' });
+  }
 });
 
 module.exports = router;

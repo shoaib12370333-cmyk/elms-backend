@@ -36,7 +36,12 @@ router.use(requireAuth, requireAdmin);
 router.get('/ebay-usage', async (req, res) => {
   const { snapshot } = require('../services/ebayCallBudget');
   const { getLastRun } = require('../services/listingStatsService');
-  res.json({ success: true, usage: await snapshot(), lastStatsRun: getLastRun() });
+  const { fetchRateLimits } = require('../services/ebayRateLimitService');
+  // eBay's own count of every API allowance (Analytics API getRateLimits); shown next to ELMS's Trading budget, and left out when eBay does not answer.
+  let ebay = null;
+  let ebayError = null;
+  try { ebay = await fetchRateLimits({ force: req.query.refresh === '1' }); } catch (err) { ebayError = err.message || 'eBay did not answer.'; }
+  res.json({ success: true, usage: await snapshot(), lastStatsRun: getLastRun(), ebay, ebayError });
 });
 
 /**
