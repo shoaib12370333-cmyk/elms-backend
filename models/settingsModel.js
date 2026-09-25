@@ -152,6 +152,19 @@ async function updateReferralSettings(input = {}) {
   return getReferralSettings();
 }
 
+async function getAffiliateSettings() {
+  const doc = await Settings.findOne({ key: 'global' }).lean();
+  const rules = require('../services/affiliateRules');
+  try { return rules.normalizeSettings((doc && doc.affiliate) || {}); } catch (_) { return rules.normalizeSettings({}); }
+}
+
+async function updateAffiliateSettings(input = {}) {
+  const rules = require('../services/affiliateRules');
+  const next = rules.normalizeSettings({ ...(await getAffiliateSettings()), ...input });
+  await Settings.findOneAndUpdate({ key: 'global' }, { affiliate: next }, { new: true, upsert: true });
+  return next;
+}
+
 async function getCustomPlanSettings() {
   const doc = await Settings.findOne({ key: 'global' }).lean();
   const { normalizeCustomSettings } = require('../services/planPricing');
@@ -315,4 +328,6 @@ module.exports = {
   updateReferralSettings,
   getCustomPlanSettings,
   updateCustomPlanSettings,
+  getAffiliateSettings,
+  updateAffiliateSettings,
 };

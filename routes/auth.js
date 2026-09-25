@@ -113,7 +113,7 @@ const extensionKeyLimiter = rateLimit({
  * returns a session token the frontend should store and send on future requests.
  */
 router.post('/google', async (req, res) => {
-  const { credential, referralCode } = req.body;
+  const { credential, referralCode, affiliateCode } = req.body;
 
   if (!credential) {
     return res.status(400).json({ success: false, error: 'A Google credential is required.' });
@@ -127,6 +127,7 @@ router.post('/google', async (req, res) => {
     if (!bonus.allowed) console.warn('[signup-bonus] not given to ' + profile.email + ': ' + bonus.reason);
     const user = await findOrCreateUser(profile, { welcomeBonus: bonus.allowed });
     const referral = isNewAccount ? await tryAttachReferral(req, user, referralCode) : null;
+    if (isNewAccount && affiliateCode) await require('../services/affiliateService').attachAtSignup(user, affiliateCode);
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'google'));
 
     res.json({ success: true, sessionToken, user, ...(referral ? { referral } : {}) });
@@ -146,7 +147,7 @@ router.post('/google', async (req, res) => {
  * duplicate - so credits/drafts/history carry over either way.
  */
 router.post('/register', registerLimiter, async (req, res) => {
-  const { username, email, password, referralCode } = req.body;
+  const { username, email, password, referralCode, affiliateCode } = req.body;
 
   if (!username || !email || !password) {
     return res.status(400).json({ success: false, error: 'A username, email, and password are all required.' });
@@ -168,6 +169,7 @@ router.post('/register', registerLimiter, async (req, res) => {
     const existedBefore = await UserModel.exists({ email: email.trim().toLowerCase() }); // a Google account adding a password is not a new account
     const user = await registerWithPassword({ username: username.trim(), email: email.trim().toLowerCase(), password }, { welcomeBonus: bonus.allowed });
     const referral = existedBefore ? null : await tryAttachReferral(req, user, referralCode);
+    if (!existedBefore && affiliateCode) await require('../services/affiliateService').attachAtSignup(user, affiliateCode);
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'register'));
     res.json({ success: true, sessionToken, user, ...(referral ? { referral } : {}) });
   } catch (err) {

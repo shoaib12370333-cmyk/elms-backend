@@ -80,7 +80,7 @@ stub('models/schemas/User', {
 });
 stub('services/emailService', { sendAdminAlert: async () => {}, sendPurchaseReceiptEmail: async () => {}, sendPlanEndedEmail: async (m) => { emails.push(m); } });
 stub('models/referralsModel', { findReferralByReferred: async () => null });
-stub('models/settingsModel', { getReferralSettings: async () => ({ enabled: false, discountPercent: 0, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
+stub('models/settingsModel', { getAffiliateSettings: async () => ({ enabled: false }), getReferralSettings: async () => ({ enabled: false, discountPercent: 0, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
 const { fulfillPurchase } = require('../services/purchaseFulfillmentService');
 const { expireIfDue, expireDuePlans } = require('../services/planExpiryService');
 

@@ -24,7 +24,7 @@ stub('models/usersModel', {
 stub('models/schemas/User', { updateOne: async ({ _id }, u) => { Object.assign(users.get(String(_id)), u.$set); return { modifiedCount: 1 }; }, findOne: () => ({ lean: async () => null }) });
 stub('services/emailService', { sendAdminAlert: async () => {}, sendPurchaseReceiptEmail: async () => {}, sendPlanEndedEmail: async () => {} });
 stub('models/referralsModel', { findReferralByReferred: async () => null });
-stub('models/settingsModel', { getCustomPlanSettings: async () => custom, getReferralSettings: async () => ({ enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
+stub('models/settingsModel', { getCustomPlanSettings: async () => custom, getAffiliateSettings: async () => ({ enabled: false }), getReferralSettings: async () => ({ enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
 stub('services/cashtapService', {
   isConfigured: () => true,
   createSession: async (a) => { sessionArgs = a; return { id: 'cs_live_' + purchases.length + 'AAAAAAAAAAAAAAAAAAAA', url: 'https://checkout.cashtap.cash/pay/x' }; },

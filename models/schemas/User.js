@@ -93,6 +93,8 @@ const userSchema = new mongoose.Schema(
     // Referral programme (services/referralService.js). The code is what a friend types (or finds in ?ref=) when signing up.
     // No default, like extensionKeyHash: accounts without a code must have the field MISSING so the unique index ignores them.
     referralCode: { type: String, default: undefined },
+    // The affiliate whose link this person signed up through: they earn a percentage of this person's payments (services/affiliateService.js).
+    affiliateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Affiliate', default: undefined, index: true },
     // Set by an admin for this person as a referrer: the discount THEIR friends get (null = the default from Admin -> Referrals),
     // the credits they earn when a friend buys (null = the default), and a switch that stops their code from working.
     referralDiscountPercent: { type: Number, default: null },

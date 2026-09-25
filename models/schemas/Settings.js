@@ -64,6 +64,8 @@ const settingsSchema = new mongoose.Schema(
 
     // The custom plan a buyer builds (Admin -> Plans): see services/planPricing.js for the fields.
     customPlan: { type: mongoose.Schema.Types.Mixed, default: null },
+    // The affiliate programme (services/affiliateRules.js): on/off, default commission, hold days, minimum payout.
+    affiliate: { type: mongoose.Schema.Types.Mixed, default: null },
 
     actionCosts: { type: mongoose.Schema.Types.Mixed, default: {} },
   },

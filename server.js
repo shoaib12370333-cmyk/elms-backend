@@ -180,6 +180,7 @@ app.use('/api/stock-check', stockCheckRoute);
 app.use('/api/admin/security', require('./routes/adminSecurity'));
 app.use('/api/admin/referrals', require('./routes/adminReferrals'));
 app.use('/api/admin/vouchers', require('./routes/adminVouchers'));
+app.use('/api/admin/affiliates', require('./routes/adminAffiliates'));
 app.use('/api/admin', adminRoute);
 
 // Support tickets (user-facing: create/view own tickets)
@@ -194,6 +195,7 @@ app.use('/api/system-notifications', systemNotificationsRoute);
 app.use('/api/dashboard', dashboardRoute);
 app.use('/api/security', require('./routes/security'));
 app.use('/api/referrals', require('./routes/referrals'));
+app.use('/api/affiliate', require('./routes/affiliates'));
 app.use('/api/vouchers', require('./routes/vouchers'));
 app.use('/api/unsubscribe', require('./routes/unsubscribe'));
 app.use('/api/easyparser/callback', require('./routes/easyparserCallback'));

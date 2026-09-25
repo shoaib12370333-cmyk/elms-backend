@@ -254,6 +254,43 @@ async function sendPlanEndedEmail({ to, planName, endedAt }) {
   }, 'Plan ended');
 }
 
+/** Tells a user whether their affiliate application was approved. */
+async function sendAffiliateDecisionEmail({ to, approved, link, percent, note }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const lines = approved
+    ? [
+      'Your affiliate application was approved. You now earn ' + percent + '% of every payment made by people who sign up through your link, for as long as they keep paying.',
+      'Your link: ' + link,
+      'Commissions are held for a few days, then you can ask for a payout in USDT or USDC from the Affiliate page. Payouts are sent within 24 to 48 hours.',
+    ]
+    : ['Your affiliate application was not approved this time.'];
+  if (note) lines.push('Note from the team: ' + note);
+  return sendFrom('support', {
+    to,
+    subject: appName + ' affiliate: ' + (approved ? 'you are approved' : 'about your application'),
+    text: lines.join('\n\n'),
+    html: wrapHtml(approved ? 'You are an ELMS affiliate' : 'Your affiliate application', paragraphsHtml(lines.join('\n\n')), '', approved ? { preheader: 'Your link is ready', cta: { text: 'Open your affiliate page', url: frontendUrl('/affiliate') } } : {}),
+  }, 'Affiliate decision');
+}
+
+/** Tells an affiliate their payout was sent. */
+async function sendAffiliatePaidEmail({ to, amountUsd, network, address, txHash }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  const lines = [
+    'Your affiliate payout of $' + Number(amountUsd).toFixed(2) + ' was sent.',
+    'Network: ' + network,
+    'To: ' + address,
+    'Transaction: ' + txHash,
+    'Thank you for promoting ' + appName + '.',
+  ];
+  return sendFrom('billing', {
+    to,
+    subject: appName + ' affiliate payout sent: $' + Number(amountUsd).toFixed(2),
+    text: lines.join('\n\n'),
+    html: wrapHtml('Your payout was sent', paragraphsHtml(lines.join('\n\n')), '', { preheader: '$' + Number(amountUsd).toFixed(2) + ' on ' + network, cta: { text: 'Open your affiliate page', url: frontendUrl('/affiliate') } }),
+  }, 'Affiliate payout');
+}
+
 /** A prepared invoice mail (subject, text, html) with the PDF attached. */
 async function sendInvoiceEmail({ to, subject, text, html, attachments }) {
   return sendFrom('billing', { to, subject, text, html, ...(attachments ? { attachments } : {}) }, 'Invoice');
@@ -426,4 +463,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };

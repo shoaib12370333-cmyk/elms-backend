@@ -85,6 +85,7 @@ router.post('/', async (req, res) => {
         // purchase is null if this transaction ID was already recorded -
         // meaning we've already credited this user for it, so skip re-crediting.
         await addCredits(elmsUserId, creditsGranted);
+        await require('../services/affiliateService').recordCommission(purchase);
         try {
           const { getUserById } = require('../models/usersModel');
           const { sendPurchaseReceiptEmail, sendAdminAlert } = require('../services/emailService');
