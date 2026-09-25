@@ -44,8 +44,10 @@ const bulkImportJobSchema = new mongoose.Schema(
     submitAttempts: { type: Number, default: 0 }, // how many times we've tried to submit to Easyparser; gives up after a few
     lastError: { type: String, default: null },
     finishedAt: { type: Date, default: null },
+    lastProcessedAt: { type: Date, default: null }, // the processor takes the job that was worked on longest ago first, so one stuck job cannot hold up the others
   },
   { timestamps: true }
 );
+bulkImportJobSchema.index({ status: 1, lastProcessedAt: 1 });
 
 module.exports = mongoose.model('BulkImportJob', bulkImportJobSchema);

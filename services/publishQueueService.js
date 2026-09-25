@@ -1,5 +1,6 @@
 const {
   listPublishingListings,
+  acquirePublishLease,
   getListingById,
   markPublished,
   markError,
@@ -85,6 +86,15 @@ function normalizeError(err) {
 async function processOneQueuedListing(listing) {
   const userId = listing.userId;
   const id = listing.id;
+
+  // One worker per listing. The instant publish, the background runner and the once-a-minute queue all come through here, and a
+  // listing stays "publishing" the whole time it is being worked on, so without this two of them publish it at once (a double credit,
+  // two "published" notifications, or one of them failing and giving the credit back while the listing is live).
+  // Whoever does not get the lease leaves the listing to the one that has it. The leased copy is also the freshest one: a snapshot
+  // taken a moment earlier may not know yet that the credit was charged.
+  const leased = await acquirePublishLease(userId, id);
+  if (!leased) return (await getListingById(userId, id)) || listing;
+  listing = leased;
 
   let charged =
     !!listing.publish_credit_charged;
@@ -776,10 +786,14 @@ async function processOneQueuedListing(listing) {
 // BACKGROUND PUBLISH QUEUE
 // =============================================================
 
-async function processPublishQueue() {
+const QUEUE_MIN_AGE_MINUTES = 3;
 
+async function processPublishQueue({ afterEach } = {}) {
+
+  // Only listings that have waited a while and that nobody holds: the ones just claimed are being worked on by the request or the
+  // runner that claimed them (see acquirePublishLease). A restart that lost the runner's memory leaves such listings behind.
   const listings =
-    await listPublishingListings(50);
+    await listPublishingListings(50, QUEUE_MIN_AGE_MINUTES);
 
 
   for (
@@ -789,6 +803,9 @@ async function processPublishQueue() {
     await processOneQueuedListing(
       listing
     );
+
+    // a long queue keeps its lease while it works (jobs/publishQueue.js)
+    if (afterEach) await afterEach();
   }
 
 

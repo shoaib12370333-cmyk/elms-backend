@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 
 /**
@@ -14,6 +15,7 @@ const lockSchema = new mongoose.Schema({
   jobName: { type: String, required: true, unique: true },
   lockedAt: { type: Date, required: true },
   lockedUntil: { type: Date, required: true },
+  owner: { type: String, default: null }, // set by acquireLease: who holds it, so only the holder can renew or release it
 });
 const JobLock = mongoose.models.JobLock || mongoose.model('JobLock', lockSchema);
 
@@ -26,7 +28,7 @@ const JobLock = mongoose.models.JobLock || mongoose.model('JobLock', lockSchema)
  * call this at the exact same moment, only one succeeds - MongoDB
  * guarantees the atomicity of the single document write.
  */
-async function acquireLock(jobName, durationMs) {
+async function acquireLock(jobName, durationMs, owner = null) {
   const now = new Date();
   const lockedUntil = new Date(now.getTime() + durationMs);
 
@@ -36,7 +38,7 @@ async function acquireLock(jobName, durationMs) {
         jobName,
         $or: [{ lockedUntil: { $lte: now } }, { lockedUntil: { $exists: false } }],
       },
-      { jobName, lockedAt: now, lockedUntil },
+      { jobName, lockedAt: now, lockedUntil, owner },
       { upsert: true, new: true, includeResultMetadata: true }
     );
 
@@ -56,4 +58,41 @@ async function acquireLock(jobName, durationMs) {
   }
 }
 
-module.exports = { acquireLock };
+/**
+ * A lock that is HELD until the run is over, for a job that can take longer than its schedule (the publish queue, a bulk import).
+ * acquireLock only lasts durationMs: a run that takes longer than that is joined by the next tick and the two work on the same
+ * things (a listing published twice, an item charged twice, a mail sent twice). With a lease the next tick finds it taken and skips.
+ * If the process dies the lease simply runs out after durationMs.
+ * @returns {Promise<string|null>} a token to renew / release it with, or null when another run holds it
+ */
+async function acquireLease(jobName, durationMs) {
+  const token = crypto.randomUUID();
+  return (await acquireLock(jobName, durationMs, token)) ? token : null;
+}
+
+/** Keeps a lease for another durationMs (call it between the parts of a long run). False when it was lost. */
+async function renewLease(jobName, token, durationMs) {
+  const res = await JobLock.updateOne({ jobName, owner: token }, { $set: { lockedUntil: new Date(Date.now() + durationMs) } });
+  return !!(res && (res.modifiedCount || res.nModified || res.matchedCount));
+}
+
+/** Gives a lease back at the end of a run so the next tick can start at once. */
+async function releaseLease(jobName, token) {
+  await JobLock.updateOne({ jobName, owner: token }, { $set: { lockedUntil: new Date() } });
+}
+
+/**
+ * Runs `work({ renew })` while holding the lease of `jobName`, and always gives it back. Returns { skipped: true } without running
+ * anything when another run holds it. `renew()` extends the lease by durationMs.
+ */
+async function withLease(jobName, durationMs, work) {
+  const token = await acquireLease(jobName, durationMs).catch(() => null);
+  if (!token) return { skipped: true };
+  try {
+    return { skipped: false, result: await work({ renew: () => renewLease(jobName, token, durationMs).catch(() => false) }) };
+  } finally {
+    await releaseLease(jobName, token).catch(() => {});
+  }
+}
+
+module.exports = { acquireLock, acquireLease, renewLease, releaseLease, withLease };

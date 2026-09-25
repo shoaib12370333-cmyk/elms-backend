@@ -53,6 +53,8 @@ const listingSchema = new mongoose.Schema(
       default: 'draft',
     },
     publishStartedAt: { type: Date, default: null },
+    // While a worker is publishing the listing (status "publishing") it holds this lease; nobody else publishes it until it runs out.
+    publishLeaseUntil: { type: Date, default: null },
     publishCompletedAt: { type: Date, default: null },
     publishAttempts: { type: Number, default: 0 },
     publishCreditCharged: { type: Boolean, default: false },
@@ -92,5 +94,6 @@ const listingSchema = new mongoose.Schema(
 listingSchema.index({ userId: 1, ebayAccountId: 1, sku: 1 }, { unique: true });
 listingSchema.index({ userId: 1, status: 1, updatedAt: -1 });
 listingSchema.index({ userId: 1, ebayListingId: 1 }); // a message thread finds its listing by eBay item id
+listingSchema.index({ status: 1, publishStartedAt: 1 }); // the publish queue looks for listings that are "publishing" across all users
 
 module.exports = mongoose.model('Listing', listingSchema);

@@ -131,7 +131,7 @@ async function getListingById(userId, id) {
 async function claimListingForPublishing(userId, id) {
   const doc = await Listing.findOneAndUpdate(
     { _id: id, userId, status: { $in: ['draft', 'error'] } },
-    { $set: { status: 'publishing', publishStartedAt: new Date(), publishCompletedAt: null, errorMessage: null }, $inc: { publishAttempts: 1 } },
+    { $set: { status: 'publishing', publishStartedAt: new Date(), publishLeaseUntil: null, publishCompletedAt: null, errorMessage: null }, $inc: { publishAttempts: 1 } },
     { new: true }
   );
   return doc ? serialize(doc) : null;
@@ -141,7 +141,7 @@ async function claimListingForPublishing(userId, id) {
 async function claimScheduledForPublishing(userId, id) {
   const doc = await Listing.findOneAndUpdate(
     { _id: id, userId, status: 'scheduled' },
-    { $set: { status: 'publishing', publishStartedAt: new Date(), publishCompletedAt: null, errorMessage: null }, $inc: { publishAttempts: 1 } },
+    { $set: { status: 'publishing', publishStartedAt: new Date(), publishLeaseUntil: null, publishCompletedAt: null, errorMessage: null }, $inc: { publishAttempts: 1 } },
     { new: true }
   );
   return doc ? serialize(doc) : null;
@@ -461,6 +461,7 @@ async function markPublished(userId, id, { offerId, listingId, ebayAccountId, pu
     publishResponse: publishResponse || null,
     ebayImageUrls: Array.isArray(ebayImageUrls) ? ebayImageUrls : [],
     publishCreditCharged: false,
+    publishLeaseUntil: null,
   };
   if (ebayAccountId !== undefined) update.ebayAccountId = ebayAccountId;
 
@@ -492,6 +493,7 @@ async function markError(userId, id, errorMessage, errorDetails = null) {
       errorMessage: errorMessage || 'Unknown error',
       publishCompletedAt: new Date(),
       publishErrorDetails: errorDetails || null,
+      publishLeaseUntil: null,
     },
     { new: true }
   );
@@ -684,15 +686,52 @@ async function markPublishCreditCharged(userId, id, charged = true) {
   return doc ? serialize(doc) : null;
 }
 
-async function listPublishingListings(limit = 50) {
-  const docs = await Listing.find({ status: 'publishing' }).sort({ publishStartedAt: 1 }).limit(limit);
+// A worker (the instant publish, the background runner, the once-a-minute queue) publishes one listing at a time by holding this lease.
+// A real publish takes well under this; if the process dies the lease runs out and the queue picks the listing up.
+const PUBLISH_LEASE_MS = 10 * 60 * 1000;
+
+/** Takes the right to publish a listing that is "publishing" for the next PUBLISH_LEASE_MS. Null when another worker holds it, or it is no longer "publishing". */
+async function acquirePublishLease(userId, id, ms = PUBLISH_LEASE_MS) {
+  const now = new Date();
+  const doc = await Listing.findOneAndUpdate(
+    { _id: id, userId, status: 'publishing', $or: [{ publishLeaseUntil: null }, { publishLeaseUntil: { $lt: now } }] },
+    { $set: { publishLeaseUntil: new Date(now.getTime() + ms) } },
+    { new: true }
+  );
+  return doc ? serialize(doc) : null;
+}
+
+/**
+ * The listings the queue may publish: "publishing" for at least minAgeMinutes and held by nobody. A listing that was just claimed is
+ * being handled by the request or the runner that claimed it, so the queue leaves it alone; one that has waited (a long line, a restart
+ * that lost the runner's memory) is picked up here.
+ */
+async function listPublishingListings(limit = 50, minAgeMinutes = 0) {
+  const now = new Date();
+  const query = { status: 'publishing', $or: [{ publishLeaseUntil: null }, { publishLeaseUntil: { $lt: now } }] };
+  if (minAgeMinutes > 0) query.publishStartedAt = { $lt: new Date(now.getTime() - minAgeMinutes * 60 * 1000) };
+  const docs = await Listing.find(query).sort({ publishStartedAt: 1 }).limit(limit);
   return docs.map(serialize);
 }
 
 async function listStalePublishingListings(maxAgeMinutes = 30) {
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
-  const docs = await Listing.find({ status: 'publishing', publishStartedAt: { $lt: cutoff } }).limit(100);
+  const docs = await Listing.find({ status: 'publishing', publishStartedAt: { $lt: cutoff }, $or: [{ publishLeaseUntil: null }, { publishLeaseUntil: { $lt: new Date() } }] }).limit(100);
   return docs.map(serialize);
+}
+
+/**
+ * Turns ONE stale "publishing" listing into an error, and returns it as it was BEFORE (null when somebody else already did, or a worker
+ * took it meanwhile). Only the caller that gets it back gives the credit back, so it is refunded once even if two runs overlap.
+ */
+async function failStalePublishingListing(userId, id, maxAgeMinutes = 30) {
+  const now = new Date();
+  const doc = await Listing.findOneAndUpdate(
+    { _id: id, userId, status: 'publishing', publishStartedAt: { $lt: new Date(now.getTime() - maxAgeMinutes * 60 * 1000) }, $or: [{ publishLeaseUntil: null }, { publishLeaseUntil: { $lt: now } }] },
+    { $set: { status: 'error', errorMessage: 'Publish job was interrupted before completion. Please retry.', publishCompletedAt: now, publishErrorDetails: { code: 'PUBLISH_JOB_INTERRUPTED' }, publishCreditCharged: false, publishLeaseUntil: null } },
+    { new: false }
+  );
+  return doc ? serialize(doc) : null;
 }
 
 /**
@@ -710,7 +749,7 @@ async function recoverStalePublishingListings(maxAgeMinutes = 30) {
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
   return Listing.updateMany(
     { status: 'publishing', publishStartedAt: { $lt: cutoff } },
-    { $set: { status: 'error', errorMessage: 'Publish job was interrupted before completion. Please retry.', publishCompletedAt: new Date(), publishErrorDetails: { code: 'PUBLISH_JOB_INTERRUPTED' }, publishCreditCharged: false } }
+    { $set: { status: 'error', errorMessage: 'Publish job was interrupted before completion. Please retry.', publishCompletedAt: new Date(), publishErrorDetails: { code: 'PUBLISH_JOB_INTERRUPTED' }, publishCreditCharged: false, publishLeaseUntil: null } }
   );
 }
 
@@ -721,8 +760,10 @@ module.exports = {
   claimListingForPublishing,
   claimScheduledForPublishing,
   markPublishCreditCharged,
+  acquirePublishLease,
   listPublishingListings,
   listStalePublishingListings,
+  failStalePublishingListing,
   recoverStalePublishingListings,
   getListingStatuses,
   getListingBySku,

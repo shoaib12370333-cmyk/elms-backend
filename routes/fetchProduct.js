@@ -16,6 +16,7 @@ const { currencyForAmazonUrl } = require('../config/amazonDomains');
 const { convertAmount } = require('../services/currencyService');
 const { storeForImport, alreadyListedMessage } = require('../services/extensionService');
 
+const MAX_ACTIVE_BULK_JOBS = 3; // background imports one person can have running at once
 const MARKUP_MIN = -99;
 const MARKUP_MAX = 1000;
 
@@ -318,12 +319,19 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: 'None of those links look like valid Amazon product links.', skipped });
   }
 
-  const needed = items.length * ACTION_COSTS.AMAZON_IMPORT;
+  // The Easyparser calls of a job are paid for before anything is saved, so nobody can start more work than their credits cover: what
+  // their other running imports still have to save counts too, and only a few imports run at once.
+  const { createBulkImportJob, activeJobStats } = require('../models/bulkImportJobsModel');
+  const active = await activeJobStats(req.userId);
+  if (active.jobs >= MAX_ACTIVE_BULK_JOBS) {
+    return res.status(429).json({ success: false, error: `You already have ${active.jobs} imports running. Wait for one to finish (or cancel one), then start the next.`, skipped });
+  }
+  const needed = (active.pendingItems + items.length) * ACTION_COSTS.AMAZON_IMPORT;
   if (!(await hasCredits(req.userId, needed))) {
-    return res.status(402).json({ success: false, error: `This list has ${items.length} product${items.length === 1 ? '' : 's'} and needs ${needed} credit${needed === 1 ? '' : 's'}. You do not have enough.`, needed, products: items.length, skipped });
+    const others = active.pendingItems ? ` (${active.pendingItems} more from your other imports are still waiting to be saved)` : '';
+    return res.status(402).json({ success: false, error: `This list has ${items.length} product${items.length === 1 ? '' : 's'} and needs ${needed} credit${needed === 1 ? '' : 's'} in all${others}. You do not have enough.`, needed, products: items.length, skipped });
   }
 
-  const { createBulkImportJob } = require('../models/bulkImportJobsModel');
   const job = await createBulkImportJob(req.userId, {
     ebayAccountId: activeEbayAccount?.id || null,
     markupPercent: markup,
