@@ -18,6 +18,16 @@ const { verifyAndParseWebhook, EventName } = require('../services/paddleService'
  * crediting the same purchase twice, since Paddle may deliver the same
  * webhook more than once ("at least once" delivery, by design).
  */
+/** What the buyer used at Paddle, in words (Visa card, PayPal, Apple Pay ...); null when Paddle did not say. */
+function paddleMethodLabel(transaction) {
+  const d = transaction && transaction.payments && transaction.payments[0] && transaction.payments[0].method_details;
+  if (!d || !d.type) return null;
+  const words = (s) => String(s).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+  if (d.type === 'card') return d.card && d.card.type ? words(d.card.type) + ' card' : 'Card';
+  const named = { paypal: 'PayPal', apple_pay: 'Apple Pay', google_pay: 'Google Pay', ideal: 'iDEAL', bank_transfer: 'Bank transfer' };
+  return named[d.type] || words(d.type);
+}
+
 router.post('/', async (req, res) => {
   const signature = req.headers['paddle-signature'] || '';
 
@@ -67,6 +77,8 @@ router.post('/', async (req, res) => {
         providerTransactionId: transaction.id,
         priceUsd,
         creditsGranted,
+        planName: plan.name,
+        paymentMethod: paddleMethodLabel(transaction),
       });
 
       if (purchase) {
@@ -78,7 +90,7 @@ router.post('/', async (req, res) => {
           const { sendPurchaseReceiptEmail, sendAdminAlert } = require('../services/emailService');
           const buyer = await getUserById(elmsUserId);
           if (buyer && buyer.email) {
-            sendPurchaseReceiptEmail({ to: buyer.email, credits: creditsGranted, priceUsd, transactionId: transaction.id }).catch((e) => console.warn('receipt email failed:', e.message));
+            sendPurchaseReceiptEmail({ to: buyer.email, credits: creditsGranted, priceUsd, transactionId: transaction.id, purchase }).catch((e) => console.warn('receipt email failed:', e.message));
             sendAdminAlert({ subject: 'New payment: $' + Number(priceUsd).toFixed(2), lines: ['User: ' + buyer.email, 'Credits: ' + creditsGranted, 'Amount: $' + Number(priceUsd).toFixed(2), 'Transaction: ' + transaction.id] }).catch(() => {});
           }
         } catch (mailErr) {
