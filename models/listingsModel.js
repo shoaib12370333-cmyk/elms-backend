@@ -14,7 +14,7 @@ function normalizeAmazonPrice(value) {
 /**
  * Creates a new draft listing (before it's published to eBay), for a specific user.
  */
-async function createListing(userId, { importId, ebayAccountId, marketplaceId, sku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, repricingEnabled }) {
+async function createListing(userId, { importId, ebayAccountId, marketplaceId, sku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, repricingEnabled, pricingRule }) {
   const normalizedAmazonPrice = normalizeAmazonPrice(amazonPrice);
   const normalizedSku = requireAsinSku(sku, 'listing');
   const doc = await Listing.create({
@@ -34,6 +34,7 @@ async function createListing(userId, { importId, ebayAccountId, marketplaceId, s
         ? Number((Number(sellPrice) - normalizedAmazonPrice).toFixed(2))
         : null),
     repricingEnabled: repricingEnabled !== false,
+    pricingRule: pricingRule && typeof pricingRule === 'object' ? pricingRule : null,
     description: typeof description === 'string' ? description : '',
     bulletPoints: Array.isArray(bulletPoints) ? bulletPoints.map((v) => String(v ?? '').trim()).filter(Boolean) : [],
     specifications: Array.isArray(specifications) ? specifications : [],
@@ -56,7 +57,7 @@ async function createListing(userId, { importId, ebayAccountId, marketplaceId, s
  * if the user has already published, errored, or ended this SKU, re-fetching
  * the same product does NOT overwrite that listing's status or eBay IDs.
  */
-async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount }) {
+async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule }) {
   const normalizedSku = requireAsinSku(sku, 'draft');
   // The same Amazon product can live as a separate draft in each connected store,
   // so a listing is identified by (user, store, sku). A legacy listing with no
@@ -81,6 +82,7 @@ async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku
         title: title || null,
         mainImage: mainImage || null,
         sellPrice: sellPrice ?? null,
+        pricingRule: pricingRule && typeof pricingRule === 'object' ? pricingRule : null,
         description: typeof description === 'string' ? description : '',
         bulletPoints: Array.isArray(bulletPoints) ? bulletPoints.map((v) => String(v ?? '').trim()).filter(Boolean) : [],
         specifications: Array.isArray(specifications) ? specifications : [],
@@ -339,6 +341,16 @@ async function updateListing(userId, id, fields) {
     }
   }
 
+  // A price typed by hand ends the pricing rule for this listing: from then on a re-pricing keeps the seller's own cash margin, as it
+  // always did. Saving the same price again (an editor save that only changed the title) keeps the rule.
+  let pricingRuleUpdate;
+  if (fields.pricingRule !== undefined) {
+    pricingRuleUpdate = fields.pricingRule && typeof fields.pricingRule === 'object' ? fields.pricingRule : null;
+  } else if (fields.sellPrice !== undefined) {
+    const before = await Listing.findOne({ _id: id, userId }).select('sellPrice pricingRule').lean();
+    if (before && before.pricingRule && Math.round(Number(before.sellPrice) * 100) !== Math.round(Number(fields.sellPrice) * 100)) pricingRuleUpdate = null;
+  }
+
   const update = {};
   if (fields.title !== undefined) update.title = fields.title;
   if (fields.images !== undefined) {
@@ -351,6 +363,7 @@ async function updateListing(userId, id, fields) {
     update.mainImage = fields.mainImage || null;
   }
   if (fields.sellPrice !== undefined) update.sellPrice = fields.sellPrice;
+  if (pricingRuleUpdate !== undefined) update.pricingRule = pricingRuleUpdate;
   if (fields.amazonPrice !== undefined) {
     const sourcePrice = normalizeAmazonPrice(fields.amazonPrice);
     if (sourcePrice !== null) update.amazonPrice = sourcePrice;
@@ -617,6 +630,7 @@ function serialize(doc) {
     postal_code: obj.postalCode || null,
     stock_monitoring: obj.stockMonitoring !== false,
     price_monitoring: obj.priceMonitoring !== false,
+    pricing_rule: obj.pricingRule && typeof obj.pricingRule === 'object' ? obj.pricingRule : null,
     views: Number.isFinite(Number(obj.views)) && obj.views !== null ? Number(obj.views) : null,
     watchers: Number.isFinite(Number(obj.watchers)) && obj.watchers !== null ? Number(obj.watchers) : null,
     stats_synced_at: obj.statsSyncedAt || null,

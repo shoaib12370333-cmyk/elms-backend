@@ -18,6 +18,7 @@ const db = { listings: [], spent: [], drafts: [], jobs: [], balance: 50, seq: 0 
 const row = (sku, status, storeId, extra = {}) => ({ id: 'L' + (++db.seq), sku, status, ebay_account_id: storeId, ...extra });
 
 stub('models/usersModel', {
+  getPricingRule: async () => null, // these sellers have no pricing rule: imports are priced by markup % as before
   hasCredits: async (id, n) => db.balance >= n,
   spendCredit: async (id, n) => { if (db.balance < n) return false; db.balance -= n; db.spent.push(n); return true; },
   refundCredit: async (id, n) => { db.balance += n; },
