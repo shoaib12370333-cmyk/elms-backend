@@ -211,6 +211,7 @@ const reset = () => { users.length = 0; pending = []; events.length = 0; codeMai
   users.push(new Doc({ _id: 'g2', email: 'race@x.com', googleId: 'g-2', creditBalance: 10 }));
   res = await post('/register/confirm', { pendingToken: res.body.pendingToken, code: codeMails[0].code });
   assert.strictEqual(res.statusCode, 409);
+  assert.strictEqual(res.body.restart, true, 'the page sends the person back to the sign-up form');
   assert.strictEqual(users.length, 1);
 
   // ---------- limits ----------

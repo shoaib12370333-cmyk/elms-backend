@@ -87,10 +87,17 @@ async function confirmSignup({ pendingToken, code, ctx }) {
 
   const bonus = await welcomeBonusDecision(record.email, ctx || {});
   if (!bonus.allowed) console.warn('[signup-bonus] not given to ' + record.email + ': ' + bonus.reason);
-  const user = await registerWithPassword(
-    { username: record.username, email: record.email, passwordHash: record.passwordHash },
-    { welcomeBonus: bonus.allowed, confirmed: true },
-  );
+  let user;
+  try {
+    user = await registerWithPassword(
+      { username: record.username, email: record.email, passwordHash: record.passwordHash },
+      { welcomeBonus: bonus.allowed, confirmed: true },
+    );
+  } catch (err) {
+    // the address or the username got an account between the start and the code: this sign-up is over, the person starts again
+    if (err && err.statusCode === 409) err.restart = true;
+    throw err;
+  }
   await PendingSignup.deleteMany({ email: record.email }).catch(() => {});
   return { user, referralCode: record.referralCode, affiliateCode: record.affiliateCode };
 }
