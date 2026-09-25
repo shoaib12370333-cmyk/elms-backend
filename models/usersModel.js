@@ -413,6 +413,8 @@ async function getUserByExtensionKey(plainKey) {
   return User.findOne({ extensionKeyHash: hash });
 }
 
+const { isSuperAdminEmail } = require('../services/superAdmin');
+
 function serialize(doc) {
   const obj = doc.toObject();
   return {
@@ -422,7 +424,9 @@ function serialize(doc) {
     email: obj.email,
     name: obj.name,
     picture: obj.picture,
-    role: obj.role || 'user',
+    // the super admin is an admin whatever the stored role says
+    role: isSuperAdminEmail(obj.email) ? 'admin' : (obj.role || 'user'),
+    isSuperAdmin: isSuperAdminEmail(obj.email),
     creditBalance: obj.creditBalance ?? 0,
     stockCheckIntervalDays: obj.stockCheckIntervalDays ?? 1,
     lastStockCheckAt: obj.lastStockCheckAt || null,

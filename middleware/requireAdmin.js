@@ -16,4 +16,17 @@ async function requireAdmin(req, res, next) {
   }
 }
 
-module.exports = { requireAdmin };
+/** Like requireAdmin, but only the super admin (the owner) passes. Use after requireAuth. */
+async function requireSuperAdmin(req, res, next) {
+  try {
+    const user = await getUserById(req.userId);
+    if (!user || !user.isSuperAdmin) {
+      return res.status(403).json({ success: false, error: 'Only the super admin can do this.' });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message || 'Could not verify admin access.' });
+  }
+}
+
+module.exports = { requireAdmin, requireSuperAdmin };

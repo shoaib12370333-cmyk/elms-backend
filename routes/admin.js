@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/requireAuth');
-const { requireAdmin } = require('../middleware/requireAdmin');
+const { requireAdmin, requireSuperAdmin } = require('../middleware/requireAdmin');
+const { isSuperAdminEmail, superAdminEmail } = require('../services/superAdmin');
+const User = require('../models/schemas/User');
 const {
   listAllUsers,
   setCreditBalance,
@@ -24,6 +26,38 @@ const {
 
 // Every route in this file requires the user to be signed in AND an admin.
 router.use(requireAuth, requireAdmin);
+
+/**
+ * Admin access. Only the super admin can see or change who has the admin panel.
+ * GET /api/admin/admins            -> everyone who has it
+ * POST /api/admin/admins {email}   -> gives it to an existing ELMS user
+ * DELETE /api/admin/admins/:id     -> takes it away (never from the super admin)
+ */
+const adminRow = (u) => ({ id: String(u._id), email: u.email, name: u.name || null, isSuperAdmin: isSuperAdminEmail(u.email) });
+
+router.get('/admins', requireSuperAdmin, async (req, res) => {
+  const rows = await User.find({ $or: [{ role: 'admin' }, { email: superAdminEmail() }] }, { email: 1, name: 1 }).lean();
+  const admins = rows.map(adminRow).sort((a, b) => Number(b.isSuperAdmin) - Number(a.isSuperAdmin) || String(a.email).localeCompare(String(b.email)));
+  res.json({ success: true, admins });
+});
+
+router.post('/admins', requireSuperAdmin, async (req, res) => {
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, error: 'Enter a valid email address.' });
+  const user = await User.findOneAndUpdate({ email }, { $set: { role: 'admin' } }, { new: true, projection: { email: 1, name: 1 } }).lean();
+  if (!user) return res.status(404).json({ success: false, error: 'No ELMS user has that email. They need to sign up or sign in to ELMS once first.' });
+  res.json({ success: true, admin: adminRow(user) });
+});
+
+router.delete('/admins/:id', requireSuperAdmin, async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[a-f0-9]{24}$/i.test(id)) return res.status(404).json({ success: false, error: 'Admin not found.' });
+  const user = await User.findById(id, { email: 1, name: 1, role: 1 }).lean();
+  if (user && isSuperAdminEmail(user.email)) return res.status(403).json({ success: false, error: 'The super admin cannot be removed.' });
+  if (!user || user.role !== 'admin') return res.status(404).json({ success: false, error: 'That user is not an admin.' });
+  await User.updateOne({ _id: id }, { $set: { role: 'user' } });
+  res.json({ success: true });
+});
 
 /**
  * GET /api/admin/users
