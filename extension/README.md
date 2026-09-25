@@ -35,9 +35,14 @@ Open the panel and it shows what the product sells for on eBay in the marketplac
 ## Bulk import (v3.5)
 On a search-results or bestseller page every product gets a small **+ ELMS** badge. Tick the ones you want, open the **Bulk import** chip and press *Import N products*.
 - A product ELMS already has in the chosen store shows **In Drafts** or **In ELMS** and cannot be ticked (up to 100 products at a time).
-- The products go to the chosen store at the markup in the panel. ELMS fetches them itself (1 credit each, `POST /api/fetch-product/bulk-job` in the background - you can close the page - or, without background imports, a few at a time through `/bulk`). Variant pictures are not part of this fetch: import a product that has variants from its own page.
+- The products go to the chosen store at the markup in the panel. ELMS fetches them itself (the price the admin set per product - shown on the button, **Free** when it is 0; `POST /api/fetch-product/bulk-job` in the background - you can close the page - or, without background imports, a few at a time through `/bulk`). Variant pictures are not part of this fetch: import a product that has variants from its own page.
 - A product that cannot be imported (already live, paused, scheduled ...) is skipped **without spending a credit**; the website's bulk import and Import page follow the same rule now.
 - A background import is saved into the store it was started for (it used to use whichever store was active when the product was saved).
+
+## Import rules (v3.7)
+- **Prices are the admin's.** The button says what an import costs ("Import to Drafts · 1 credit", "· Free" when the admin set 0); the popup and the bulk panel do the same. A free import works with no credits left. The single import and the bulk import have their own prices (Admin -> Credit Costs, rows "Extension: ...").
+- **No eBay store yet is allowed** (an admin switch, on by default): the product is imported as a draft without a store and you choose the store when you publish; the panel shows a warning, not a stop. If the admin turns the switch off, the panel asks you to connect a store first and nothing is charged. With one store it is used; with more than one you choose it.
+- **Warnings never stop an import.** A loss at your markup, VeRO words, a slow delivery, a low rating ... are shown as warnings (and a loss is repeated in the message after the import). What does stop an import: not connected to ELMS, not enough credits, a product that is already live / paused / scheduled / ended, and an Amazon site that does not fit the chosen store (a UK store takes amazon.co.uk).
 
 ## Options (popup)
 - *Open the draft in ELMS after an import.*

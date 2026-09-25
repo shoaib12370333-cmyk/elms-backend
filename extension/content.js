@@ -1093,13 +1093,25 @@
     // ----- what to show -----
     function locate() { return LOGIC.locate(S.server, S.storeId); }
 
+    // May an import go ahead with no eBay store connected? ELMS says so (an admin setting); an older ELMS says nothing, which means no.
+    const storeless = () => !!(S.server && S.server.policy && S.server.policy.importWithoutStore);
+    // What one product of a bulk import costs, exactly as ELMS says (0 is free, not 1).
+    const bulkPer = (c) => (c && c.bulkImportCost != null && Number.isFinite(Number(c.bulkImportCost)) ? Number(c.bulkImportCost) : 1);
+    // A loss at the markup in use is a warning, never a reason to stop: the product is saved and the person is told once more.
+    function importLossNote() {
+      const p = S.page;
+      if (!p || p.price == null) return '';
+      const r = LOGIC.evaluate(p.price, LOGIC.priceAtMarkup(p.price, S.markup), S.fees);
+      return r && r.profit < 0 ? '\n⚠ At this markup you lose ' + money(-r.profit) + ' on every sale after eBay fees.' : '';
+    }
+
     // Why an import cannot go ahead (or null).
     function importBlock() {
       if (!S.connected) return 'Connect your ELMS account first: click the ELMS icon in the Chrome toolbar and paste your Extension Key.';
       if (!S.page) return 'Open an Amazon product page first.';
       if (!S.server) return null;
       const { store, here } = locate();
-      if (!S.server.stores.length) return 'Connect an eBay store in ELMS first.';
+      if (!S.server.stores.length && !storeless()) return 'Connect an eBay store in ELMS first.';
       if (store && store.amazonOk === false) return store.amazonMessage || 'This Amazon site does not match your store.';
       if (here && here.status !== 'draft') return 'Already ' + (LOGIC.WHERE[here.status] || here.status) + (store ? ' (' + store.label + ')' : '') + '. It cannot be imported again.';
       const c = S.server.credits;
@@ -1180,9 +1192,9 @@
       const block = importBlock();
       const { here } = locate();
       const credits = S.server && S.server.credits;
-      const cost = credits ? credits.importCost : 1;
+      const price = credits ? ' · ' + LOGIC.costLabel(credits.importCost) : ''; // "Free" when it is free; nothing until ELMS has answered
       goBtn.disabled = S.busy || !!block;
-      goBtn.textContent = S.busy ? 'Importing…' : here && here.status === 'draft' ? 'Refresh the draft · ' + cost + ' credit' : 'Import to Drafts · ' + cost + ' credit';
+      goBtn.textContent = S.busy ? 'Importing…' : here && here.status === 'draft' ? 'Refresh the draft' + price : 'Import to Drafts' + price;
       // Something to open in ELMS: the draft, or the live listing.
       openBtn.style.display = here ? 'block' : 'none';
       openBtn.textContent = here && here.status === 'draft' ? 'Open the draft in ELMS' : 'Open in ELMS';
@@ -1318,10 +1330,10 @@
       if (!picked.size) return 'Tick the products you want with the + ELMS badge on each one.';
       if (!S.server) return null;
       const { store } = locate();
-      if (!S.server.stores.length) return 'Connect an eBay store in ELMS first.';
+      if (!S.server.stores.length && !storeless()) return 'Connect an eBay store in ELMS first.';
       if (store && store.amazonOk === false) return store.amazonMessage || 'This Amazon site does not match your store.';
       const c = S.server.credits;
-      const need = picked.size * ((c && c.bulkImportCost) || 1);
+      const need = picked.size * bulkPer(c);
       if (c && !c.unlimited && c.balance < need) return 'These ' + picked.size + ' products need ' + need + ' credits and you have ' + c.balance + '.';
       return null;
     }
@@ -1329,12 +1341,12 @@
     function renderBulk() {
       const n = picked.size;
       const c = S.server && S.server.credits;
-      const per = (c && c.bulkImportCost) || 1;
+      const per = bulkPer(c);
       const b = S.bulk;
       if (document.activeElement !== bulkMarkup && shadow.activeElement !== bulkMarkup) bulkMarkup.value = S.markup;
-      bulkStats.textContent = n ? n + (n === 1 ? ' product' : ' products') + ' selected · ' + n * per + (n * per === 1 ? ' credit' : ' credits') : 'Tick the products you want with the + ELMS badge on each one.';
+      bulkStats.textContent = n ? n + (n === 1 ? ' product' : ' products') + ' selected · ' + LOGIC.costLabel(n * per) : 'Tick the products you want with the + ELMS badge on each one.';
       bulkGo.disabled = b.running || !!bulkBlock();
-      bulkGo.textContent = b.running ? 'Importing…' : n ? 'Import ' + n + (n === 1 ? ' product' : ' products') + ' · ' + n * per + (n * per === 1 ? ' credit' : ' credits') : 'Import selected products';
+      bulkGo.textContent = b.running ? 'Importing…' : n ? 'Import ' + n + (n === 1 ? ' product' : ' products') + ' · ' + LOGIC.costLabel(n * per) : 'Import selected products';
       bulkGo.title = b.running ? '' : (n ? bulkBlock() || '' : '');
       bulkAll.disabled = b.running;
       bulkClear.disabled = b.running || !n;
@@ -1360,7 +1372,7 @@
       const urls = asins.map((a) => location.origin + '/dp/' + a);
       const { store } = locate();
       const markup = S.markup === '' ? undefined : Number(S.markup);
-      const common = { markupPercent: Number.isFinite(markup) ? markup : undefined, ebayAccountId: store ? store.id : undefined };
+      const common = { markupPercent: Number.isFinite(markup) ? markup : undefined, ebayAccountId: store ? store.id : undefined, source: 'extension' }; // "extension": ELMS charges the extension's own bulk price
       const b = (S.bulk = { running: true, total: urls.length, done: 0, failed: 0, lines: [], note: 'Sending the products to ELMS…' });
       render();
       try {
@@ -1482,7 +1494,7 @@
       const { store, here } = locate();
       if (source === 'logo' && here && here.status === 'draft' && Date.now() > S.confirmUntil) {
         S.confirmUntil = Date.now() + 6000;
-        show('This product is already in your Drafts. Press the button again within 6 seconds to refresh it (' + ((S.server.credits && S.server.credits.importCost) || 1) + ' credit).', 'busy');
+        show('This product is already in your Drafts. Press the button again within 6 seconds to refresh it (' + LOGIC.costLabel(S.server.credits ? S.server.credits.importCost : 1) + ').', 'busy');
         return;
       }
       S.busy = true;
@@ -1504,7 +1516,7 @@
         const saved = result.product || product;
         const variantCount = (saved.variants || product.variants || []).length;
         const left = result.creditsLeft;
-        show('✓ Saved to ELMS Drafts\n' + (saved.asin || product.asin) + ' · ' + (saved.images ? saved.images.length : 0) + ' images' + (variantCount ? ' · ' + variantCount + ' variants' : '') + (left != null ? '\n' + left + ' credit' + (left === 1 ? '' : 's') + ' left' : ''), 'ok');
+        show('✓ Saved to ELMS Drafts\n' + (saved.asin || product.asin) + ' · ' + (saved.images ? saved.images.length : 0) + ' images' + (variantCount ? ' · ' + variantCount + ' variants' : '') + (left != null ? '\n' + left + ' credit' + (left === 1 ? '' : 's') + ' left' : '') + importLossNote(), 'ok');
         cache.delete(product.asin);
         loadServer(true);
         if (S.autoOpen && result.draft && result.draft.id) openInElms(result.appUrl, '/draft?open=' + encodeURIComponent(result.draft.id));

@@ -124,6 +124,14 @@
     return { store, here, others: rows.filter((row) => row !== here) };
   }
 
+  /** What an import costs, the way people read it: "Free" when the admin made it free, else "1 credit" / "5 credits". */
+  function costLabel(n) {
+    if (n == null || n === '') return ''; // not told (yet): no price, never "Free"
+    const v = Number(n);
+    if (!Number.isFinite(v) || v < 0) return '';
+    return v === 0 ? 'Free' : v + (v === 1 ? ' credit' : ' credits');
+  }
+
   /**
    * Everything worth knowing before an import, as a list of { id, level: 'bad'|'warn'|'info'|'ok', text }.
    * @param {{ page: object, server?: object|null, storeId?: string|null, settings: object, markup?: number|string|null, now?: Date }} input
@@ -191,7 +199,12 @@
     // ---- what ELMS knows ----
     if (server) {
       if (store && store.amazonOk === false) add('fit', 'bad', store.amazonMessage || 'This Amazon site does not match your store.');
-      if (!stores.length) add('store', 'bad', 'No eBay store is connected in ELMS yet. Connect one in ELMS first.');
+      if (!stores.length) {
+        // No store yet. When ELMS allows it the import still works (the draft is saved without a store; one is chosen when it is published):
+        // a warning, not a stop. Otherwise the person is asked to connect one first.
+        if (server.policy && server.policy.importWithoutStore) add('store', 'warn', 'No eBay store is connected yet. You can still import: the draft is saved without a store. Connect a store in ELMS before you publish it.');
+        else add('store', 'bad', 'No eBay store is connected in ELMS yet. Connect one in ELMS first.');
+      }
 
       const v = server.vero;
       if (v && v.terms && v.terms.length) {
@@ -204,7 +217,7 @@
 
       if (here) {
         const label = store && store.label ? ' (' + store.label + ')' : '';
-        if (here.status === 'draft') add('existing', 'warn', 'Already ' + WHERE.draft + label + '. Importing again refreshes it and costs ' + (server.credits ? server.credits.importCost : 1) + ' credit.');
+        if (here.status === 'draft') add('existing', 'warn', 'Already ' + WHERE.draft + label + '. Importing again refreshes it' + (server.credits && server.credits.importCost === 0 ? ' (free).' : ' and costs ' + costLabel(server.credits ? server.credits.importCost : 1) + '.'));
         else if (LIVE.has(here.status)) add('existing', 'bad', 'Already ' + WHERE[here.status] + label + (here.sellPrice ? ' at ' + money(here.sellPrice, here.currency) : '') + '. It cannot be imported again.');
         else add('existing', 'warn', 'Already ' + (WHERE[here.status] || here.status) + label + '. It cannot be imported again.');
 
@@ -233,7 +246,7 @@
     return 'ok';
   }
 
-  const api = { DEFAULTS, WHERE, LIVE, locate, normalizeSettings, evaluate, recommendedPrice, breakEvenPrice, priceAtMarkup, markupToReach, formatMoney, parseDeliveryDays, buildChecks, worstLevel, round2 };
+  const api = { DEFAULTS, WHERE, LIVE, locate, normalizeSettings, evaluate, recommendedPrice, breakEvenPrice, priceAtMarkup, markupToReach, formatMoney, parseDeliveryDays, costLabel, buildChecks, worstLevel, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ELMS_LOGIC = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
