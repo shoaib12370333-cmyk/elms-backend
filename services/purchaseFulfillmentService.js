@@ -45,6 +45,9 @@ async function fulfillPurchase({ userId, plan, provider, transactionId, priceUsd
       try { await require('./emailService').sendAdminAlert({ subject: 'A voucher was used twice', lines: ['User: ' + userId, 'Voucher: ' + voucherId, 'Payment: ' + transactionId, 'The voucher was already used (or revoked) when this payment arrived. The payment was accepted at the discounted price; nothing to do unless you want to look into it.'] }); } catch (_) { /* best effort */ }
     }
   }
+  // The affiliate who brought this buyer earns their percentage of the payment (never throws).
+  if (!silent) await require('./affiliateService').recordCommission(purchase);
+
   // A plan given free by a voucher is not a purchase: no referral reward, no receipt.
   if (!silent) await require('./referralService').afterPurchase({ userId, priceUsd, referralId });
 

@@ -40,7 +40,7 @@ stub('models/purchasesModel', {
   listPurchasesForUser: async () => [],
 });
 stub('models/schemas/User', { updateOne: async () => {} });
-stub('models/settingsModel', { getCustomPlanSettings: async () => ({ enabled: false }), getReferralSettings: async () => ({ enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
+stub('models/settingsModel', { getCustomPlanSettings: async () => ({ enabled: false }), getAffiliateSettings: async () => ({ enabled: false }), getReferralSettings: async () => ({ enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
 stub('models/referralsModel', {
   findReferralByReferred: async (id) => (db.referral && db.referral.referredUserId === String(id) ? db.referral : null),
   getUser: async (id) => (db.users.has(String(id)) ? { id: String(id), ...db.users.get(String(id)) } : null),

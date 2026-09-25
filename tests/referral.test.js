@@ -15,6 +15,7 @@ const cfg = { enabled: true, discountPercent: 10, discountUses: 1, discountDays:
 
 stub('models/settingsModel', {
   getCustomPlanSettings: async () => ({ enabled: false }),
+  getAffiliateSettings: async () => ({ enabled: false }),
   getReferralSettings: async () => ({ ...cfg }),
   updateReferralSettings: async (i) => { Object.assign(cfg, i); return { ...cfg }; },
   getSettings: async () => ({}),
