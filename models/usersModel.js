@@ -116,8 +116,9 @@ async function getWelcomeBonusAmount() {
  * locked out by this: "Forgot password" mails a code to the mailbox and lets its owner choose a password.
  *
  * Throws (409) if the username or the email is already used.
+ * `passwordHash` may be given instead of `password` (the sign-up kept it while waiting for the confirmation code).
  */
-async function registerWithPassword({ username, email, password }, { welcomeBonus = true } = {}) {
+async function registerWithPassword({ username, email, password, passwordHash: storedHash }, { welcomeBonus = true, confirmed = false } = {}) {
   const existingUsername = await User.findOne({ username });
   if (existingUsername) {
     const err = new Error('That username is already taken.');
@@ -131,13 +132,17 @@ async function registerWithPassword({ username, email, password }, { welcomeBonu
     throw err;
   }
 
-  const passwordHash = await hashPassword(password);
+  const passwordHash = storedHash || await hashPassword(password);
   // A genuinely brand-new account - apply the welcome bonus if enabled.
   const creditBalance = welcomeBonus ? await getWelcomeBonusAmount() : 0;
   let user;
   try {
-    // unverifiedPassword: nothing has shown yet that this person owns the mailbox (see the User schema).
-    user = await User.create({ username, email, emailKey: emailKey(email), passwordHash, unverifiedPassword: true, name: username, creditBalance, ...welcomeFields(creditBalance) });
+    // unverifiedPassword: nothing has shown yet that this person owns the mailbox (see the User schema). `confirmed` means the code
+    // mailed to the address was entered (services/signupConfirmService.js), which does show it.
+    user = await User.create({
+      username, email, emailKey: emailKey(email), passwordHash, unverifiedPassword: !confirmed, ...(confirmed ? { emailVerifiedAt: new Date() } : {}),
+      name: username, creditBalance, ...welcomeFields(creditBalance),
+    });
   } catch (err) {
     if (err && err.code === 11000) { // the same address or username was registered a moment ago
       const dup = new Error('An account with this email or username already exists. Please sign in.');

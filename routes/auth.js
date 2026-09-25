@@ -4,7 +4,6 @@ const rateLimit = require('express-rate-limit');
 const { verifyGoogleToken } = require('../services/googleAuthService');
 const {
   findOrCreateUser,
-  registerWithPassword,
   loginWithPassword,
   getUserById,
   markWelcomePopupSeen,
@@ -29,9 +28,24 @@ function sendAuthError(res, err) {
   res.status(err.statusCode || 500).json({ success: false, error: err.message, ...(err.blocked ? { blocked: err.blocked } : {}) });
 }
 
+// The sign-up steps answer with what the page needs to guide the person (`restart`: start again, `expired`: ask for a new code).
+function sendSignupError(res, err) {
+  const status = err.statusCode || 500;
+  res.status(status).json({
+    success: false,
+    error: err.statusCode ? err.message : 'Could not complete the sign-up right now. Please try again.',
+    ...(err.blocked ? { blocked: err.blocked } : {}),
+    ...(err.restart ? { restart: true } : {}),
+    ...(err.expired ? { expired: true } : {}),
+    ...(err.attemptsLeft !== undefined ? { attemptsLeft: err.attemptsLeft } : {}),
+    ...(err.retryAfterSeconds ? { retryAfterSeconds: err.retryAfterSeconds } : {}),
+  });
+}
+
 // New accounts cannot be created from a blocked address or browser (nobody new can be one of the accounts the admin let through).
 const { welcomeBonusDecision } = require('../services/signupBonusGuard');
 const { checkEmailQuality } = require('../services/emailQualityService');
+const signupConfirm = require('../services/signupConfirmService');
 const referralService = require('../services/referralService');
 
 /**
@@ -78,6 +92,21 @@ const registerLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many accounts created from this network. Please try again later.' },
+});
+
+const confirmSignupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many attempts. Please try again in a few minutes.' },
+});
+const resendSignupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many codes were requested. Please try again in a few minutes.' },
 });
 
 const forgotPasswordLimiter = rateLimit({
@@ -171,17 +200,56 @@ router.post('/register', registerLimiter, async (req, res) => {
 
   try {
     await assertNewAccountAllowed(req);
-    const bonus = await welcomeBonusDecision(email.trim().toLowerCase(), requestContext(req));
-    if (!bonus.allowed) console.warn('[signup-bonus] not given to ' + email.trim().toLowerCase() + ': ' + bonus.reason);
-    const existedBefore = await UserModel.exists({ email: email.trim().toLowerCase() }); // a Google account adding a password is not a new account
-    const user = await registerWithPassword({ username: username.trim(), email: email.trim().toLowerCase(), password }, { welcomeBonus: bonus.allowed });
-    const referral = existedBefore ? null : await tryAttachReferral(req, user, referralCode);
-    if (!existedBefore && affiliateCode) await require('../services/affiliateService').attachAtSignup(user, affiliateCode);
+    // No account yet: a 6-digit code is mailed to the address and the account is made when it is entered (POST /register/confirm).
+    const started = await signupConfirm.startSignup({
+      username: username.trim(), email: email.trim().toLowerCase(), password, referralCode, affiliateCode, ip: requestContext(req).ip,
+    });
+    res.json({ success: true, needsConfirmation: true, ...started });
+  } catch (err) {
+    console.error('register error:', err.message);
+    sendSignupError(res, err);
+  }
+});
+
+/**
+ * POST /api/auth/register/confirm
+ * Body: { pendingToken, code }
+ *
+ * The code from the email finishes the sign-up: the account is made (with the welcome credits) and the person is signed in,
+ * exactly like the old one-step register.
+ */
+router.post('/register/confirm', confirmSignupLimiter, async (req, res) => {
+  const pendingToken = String(req.body?.pendingToken || '');
+  const code = String(req.body?.code || '').trim();
+  if (!pendingToken || !/^\d{6}$/.test(code)) {
+    return res.status(400).json({ success: false, error: 'Enter the 6-digit code from the email.' });
+  }
+  try {
+    const { user, referralCode, affiliateCode } = await signupConfirm.confirmSignup({ pendingToken, code, ctx: requestContext(req) });
+    const referral = await tryAttachReferral(req, user, referralCode);
+    if (affiliateCode) await require('../services/affiliateService').attachAtSignup(user, affiliateCode);
     const sessionToken = issueSessionToken(user.id, await startSession(req, user.id, 'register'));
     res.json({ success: true, sessionToken, user, ...(referral ? { referral } : {}) });
   } catch (err) {
-    console.error('register error:', err.message);
-    sendAuthError(res, err);
+    console.error('sign-up confirm error:', err.message);
+    sendSignupError(res, err);
+  }
+});
+
+/**
+ * POST /api/auth/register/resend
+ * Body: { pendingToken }
+ * A fresh code for the same sign-up (at most once a minute; the old code stops working).
+ */
+router.post('/register/resend', resendSignupLimiter, async (req, res) => {
+  const pendingToken = String(req.body?.pendingToken || '');
+  if (!pendingToken) return res.status(400).json({ success: false, error: 'This sign-up has expired. Please start again.', restart: true });
+  try {
+    const sent = await signupConfirm.resendCode({ pendingToken });
+    res.json({ success: true, ...sent });
+  } catch (err) {
+    console.error('sign-up resend error:', err.message);
+    sendSignupError(res, err);
   }
 });
 
