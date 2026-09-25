@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ELMS Amazon Importer",
-  "version": "3.7.1",
-  "description": "Import Amazon products into ELMS Drafts with a profit panel (what you keep after eBay fees, what you already have, VeRO words, warnings, what it sells for on eBay) and bulk import from search pages.",
+  "version": "3.7.2",
+  "description": "Import Amazon products into ELMS Drafts with a profit panel, VeRO checks and warnings, plus bulk import.",
   "permissions": [
     "activeTab",
     "storage",
