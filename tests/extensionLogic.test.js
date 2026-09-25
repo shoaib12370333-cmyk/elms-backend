@@ -68,9 +68,10 @@ assert.ok(ids(checks).includes('seller') && ids(checks).includes('delivery') && 
 
 // a loss
 checks = L.buildChecks({ page: PAGE, server: SERVER, storeId: 'S1', settings: S, markup: 10, now: new Date('2026-03-10T12:00:00') });
-assert.strictEqual(level(checks, 'profit'), 'bad');
+assert.strictEqual(level(checks, 'profit'), 'warn', 'a loss is a warning, not an error');
 assert.match(checks.find((c) => c.id === 'profit').text, /lose £0\.64 on every sale/);
-assert.strictEqual(checks[0].level, 'bad', 'the worst thing comes first');
+assert.strictEqual(checks[0].level, 'warn', 'the worst thing comes first');
+assert.strictEqual(L.worstLevel(checks), 'warn', 'a loss alone makes the chip amber, not red');
 
 // thin margin
 checks = L.buildChecks({ page: PAGE, server: SERVER, storeId: 'S1', settings: S, markup: 30, now: new Date('2026-03-10T12:00:00') });
@@ -152,12 +153,12 @@ assert.ok(checks.find((c) => c.id === 'otherStores').text.includes("US shop (liv
 checks = L.buildChecks({ page: PAGE, server: { ...SERVER, existing: [{ ...draftRow, status: 'published' }] }, storeId: 'S1', settings: S, markup: 0, now: new Date('2026-03-10T12:00:00') });
 assert.ok(!ids(checks).includes('profit'), 'no markup warning for a product that cannot be imported');
 checks = L.buildChecks({ page: PAGE, server: { ...SERVER, existing: [{ ...draftRow, status: 'draft' }] }, storeId: 'S1', settings: S, markup: 0, now: new Date('2026-03-10T12:00:00') });
-assert.strictEqual(level(checks, 'profit'), 'bad', 'a draft can be refreshed at a new markup: the warning stays');
+assert.strictEqual(level(checks, 'profit'), 'warn', 'a draft can be refreshed at a new markup: the warning stays');
 
 // a live listing when Amazon's price moves
 const live = { ...draftRow, status: 'published', sellPrice: 12.99, amazonPrice: 8 };
 checks = withServer({ existing: [live] }, { ...PAGE, price: 11.5 });
-assert.strictEqual(level(checks, 'livePrice'), 'bad', '11.50 cost against a 12.99 price: a loss after fees');
+assert.strictEqual(level(checks, 'livePrice'), 'warn', '11.50 cost against a 12.99 price: a loss after fees, a warning');
 assert.ok(checks.find((c) => c.id === 'livePrice').text.includes("Amazon is now £11.50 (£8.00 when you listed). At your eBay price of £12.99 you now LOSE"), 'the livePrice message says: ' + "Amazon is now £11.50 (£8.00 when you listed). At your eBay price of £12.99 you now LOSE");
 checks = withServer({ existing: [live] }, { ...PAGE, price: 9 });
 assert.strictEqual(level(checks, 'livePrice'), 'warn', 'dearer but still a profit');
@@ -188,7 +189,7 @@ checks = withMarket(MARKET, 60, { ...PAGE, price: 14 });
 assert.strictEqual(level(checks, 'market'), 'warn');
 assert.ok(said('market').startsWith('Probably: the typical eBay price (£13.49) is below your break-even price ('), said('market'));
 checks = withMarket({ ...MARKET, exact: true }, 60, { ...PAGE, price: 14 });
-assert.strictEqual(level(checks, 'market'), 'bad');
+assert.strictEqual(level(checks, 'market'), 'warn', 'even a sure match is a warning: it never stops an import');
 assert.ok(said('market').startsWith('The typical eBay price'), 'a barcode match says it flatly');
 // crowded, empty, not available, another currency, already on eBay: what is said and what is not
 checks = withMarket({ ...MARKET, total: 240 }, 60);

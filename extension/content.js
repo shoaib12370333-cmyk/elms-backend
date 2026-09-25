@@ -944,7 +944,7 @@
     .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0}
     .row span:first-child{color:#475569}
     .row.keep{border-top:1px solid #e2e8f0;margin-top:4px;padding-top:7px;font-weight:800;font-size:14px}
-    .good{color:#3f7d0b}.loss{color:#b91c1c}
+    .good{color:#3f7d0b}.loss{color:#b45309}
     .mk{display:flex;gap:8px;align-items:center}
     .mk input{width:78px;flex:none}
     .mk .use{flex:1}
@@ -1210,8 +1210,12 @@
       if (!p || S.mode !== 'product') return;
       const c = compute();
       const bad = c.checks.filter((k) => k.level === 'bad' || k.level === 'warn').length;
+      const lossy = !!(c.r && c.r.profit < 0);
       chip.className = 'chip ' + (S.connected ? c.level : '');
-      chip.textContent = (c.r ? (c.r.profit < 0 ? 'Loss ' + money(-c.r.profit) : 'Profit ' + money(c.r.profit)) : 'ELMS') + (bad ? ' · ' + bad + (bad === 1 ? ' warning' : ' warnings') : '');
+      // A loss is only a warning: the chip says "N warnings" (amber) instead of a red "Loss"; the amount is in the panel and the import is never blocked.
+      chip.textContent = lossy
+        ? '⚠ ' + bad + (bad === 1 ? ' warning' : ' warnings')
+        : (c.r ? 'Profit ' + money(c.r.profit) : 'ELMS') + (bad ? ' · ' + bad + (bad === 1 ? ' warning' : ' warnings') : '');
       panel.className = 'panel' + (S.open ? ' open' : '');
       renderStores();
       renderMoney(c);
