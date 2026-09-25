@@ -37,6 +37,8 @@ const userSchema = new mongoose.Schema(
     // and when the user closed that popup (it is shown once, on any device).
     welcomeCredits: { type: Number, default: undefined },
     welcomePopupSeenAt: { type: Date, default: null },
+    // Set when the account was made by entering the confirmation code mailed to the address (accounts from before have none).
+    emailVerifiedAt: { type: Date, default: undefined },
     emailKey: { type: String, default: null, index: true }, // the mailbox with dots / +tags removed (services/signupBonusGuard.js)
 
     // Messages page: how ELMS answers new buyer messages. off = never, draft = AI writes a draft for you

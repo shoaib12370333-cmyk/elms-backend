@@ -52,3 +52,7 @@ On Render a request travels visitor -> Cloudflare -> Render's proxy -> ELMS. `co
 ## Sign-up email checks
 
 `POST /api/auth/register` refuses example/test addresses, temporary-mail services (built-in list; add more with `BLOCKED_EMAIL_DOMAINS=a.com,b.net`), typos of the big providers and domains without mail (DNS lookup; a slow or failing lookup lets the sign-up through).
+
+## Sign-up confirmation code
+
+Sign-up with a password is two steps: `POST /api/auth/register` mails a 6-digit code (valid 15 minutes, 5 tries, a new code at most once a minute, at most 5 sign-ups per address per hour) and remembers the sign-up in `PendingSignup` (it disappears by itself after 24 h); no account exists yet. `POST /api/auth/register/confirm` with the code and the browser's `pendingToken` makes the account, gives the welcome credits, mails the welcome mail and signs the person in. So password sign-up needs a working SMTP (`SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`), the same as "Forgot password"; Google sign-up does not. Accounts from before this change are untouched.

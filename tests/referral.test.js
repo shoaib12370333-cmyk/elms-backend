@@ -94,6 +94,14 @@ stub('services/googleAuthService', { verifyGoogleToken: async () => ({ email: 'g
 stub('services/accessGuard', { checkNewAccount: async () => null, blockedError: (d) => Object.assign(new Error('blocked'), { statusCode: 403, blocked: d }) });
 stub('services/signupBonusGuard', { ...realGuard, welcomeBonusDecision: async () => ({ allowed: true }) });
 stub('services/emailQualityService', { checkEmailQuality: async () => ({ ok: true }) }); // no DNS in tests
+// The confirmation-code sign-up has its own test (signupConfirm.test.js). Here a start remembers the codes typed at sign-up and
+// confirming makes the account, so the referral hooks of the routes can be checked.
+const pendingSignups = new Map();
+stub('services/signupConfirmService', {
+  startSignup: async ({ email, referralCode }) => { const t = 'tok' + (pendingSignups.size + 1); pendingSignups.set(t, { email, referralCode }); return { pendingToken: t, email, codeMinutes: 15, resendAfterSeconds: 60 }; },
+  confirmSignup: async ({ pendingToken }) => { const p = pendingSignups.get(pendingToken); const id = 'r' + (++db.seq); addUser(id, p.email); return { user: { id, email: p.email }, referralCode: p.referralCode, affiliateCode: null }; },
+  resendCode: async () => ({}),
+});
 stub('services/passwordService', { hashPassword: async (p) => 'hash:' + p, verifyPassword: async () => true });
 
 const referrals = require('../services/referralService');
@@ -315,20 +323,26 @@ const paid = (session, over = {}) => ({ id: session.id, status: 'completed', amo
 
   // ---------- sign-up hooks ----------
   reset();
+  // a password sign-up takes its code when the account is made, i.e. when the confirmation code is entered
+  const signUp = async (body) => {
+    const started = await call(authRoutes, 'post', '/register', { body });
+    assert.strictEqual(started.body.needsConfirmation, true);
+    return call(authRoutes, 'post', '/register/confirm', { body: { pendingToken: started.body.pendingToken, code: '123456' } });
+  };
   res = await call(authRoutes, 'post', '/register', { body: { username: 'newuser', email: 'New@X.com', password: 'longenough', referralCode: 'boss2024' } });
+  assert.strictEqual(res.body.needsConfirmation, true);
+  assert.strictEqual(db.referrals.length, 0, 'nobody is referred before the address is confirmed');
+  res = await call(authRoutes, 'post', '/register/confirm', { body: { pendingToken: res.body.pendingToken, code: '123456' } });
   assert.strictEqual(res.body.success, true);
   assert.deepStrictEqual(res.body.referral, { applied: true, discountPercent: 10, discountUses: 1, discountDays: 0 });
   assert.strictEqual(db.referrals.length, 1);
-  res = await call(authRoutes, 'post', '/register', { body: { username: 'nocode', email: 'nocode@x.com', password: 'longenough' } });
+  res = await signUp({ username: 'nocode', email: 'nocode@x.com', password: 'longenough' });
   assert.strictEqual(res.body.referral, undefined, 'no code, no referral field');
-  res = await call(authRoutes, 'post', '/register', { body: { username: 'badcode', email: 'badcode@x.com', password: 'longenough', referralCode: 'WRONG123' } });
+  res = await signUp({ username: 'badcode', email: 'badcode@x.com', password: 'longenough', referralCode: 'WRONG123' });
   assert.strictEqual(res.body.success, true, 'a bad code never stops the sign-up');
   assert.strictEqual(res.body.referral.applied, false);
   assert.strictEqual(res.body.referral.reason, 'invalid_code');
-  // an existing (Google) account adding a password is not a new account: no referral
-  addUser('old', 'old@x.com');
-  res = await call(authRoutes, 'post', '/register', { body: { username: 'olduser', email: 'old@x.com', password: 'longenough', referralCode: 'BOSS2024' } });
-  assert.strictEqual(res.body.referral, undefined);
+  // (an address that already has an account is refused when the sign-up starts: see signupConfirm.test.js)
   // Google sign-up (a new address) takes the code too
   res = await call(authRoutes, 'post', '/google', { body: { credential: 'x', referralCode: 'BOSS2024' } });
   assert.strictEqual(res.body.referral.applied, true);

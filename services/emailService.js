@@ -213,6 +213,23 @@ function wrapHtml(title, bodyHtml, footerHtml, opts = {}) {
 
 const paragraphsHtml = mailTemplate.paragraphsHtml;
 
+/** The 6-digit code that confirms the address at sign-up. No account exists yet: it is made when the code is entered. */
+async function sendSignupCodeEmail({ to, code, minutes = 15 }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  return sendFrom('noreply', {
+    to,
+    subject: appName + ' confirmation code',
+    text: 'Your ' + appName + ' confirmation code is ' + code + '. It expires in ' + minutes + ' minutes.\n\nEnter it on the sign-up page to finish creating your account. If you did not try to sign up, ignore this email: no account is created until the code is entered.',
+    html: mailTemplate.layout({
+      title: 'Confirm your email address',
+      preheader: 'Your code is ' + code + '. It expires in ' + minutes + ' minutes.',
+      bodyHtml: mailTemplate.paragraphsHtml('Enter this code on the sign-up page to finish creating your account:')
+        + '<div style="margin:4px 0 18px;padding:16px;text-align:center;background:#f3f5f9;border-radius:10px;font-size:32px;font-weight:bold;letter-spacing:8px;color:#111827">' + mailTemplate.esc(code) + '</div>'
+        + mailTemplate.paragraphsHtml('The code expires in ' + minutes + ' minutes. If you did not try to sign up, ignore this email: no account is created until the code is entered.'),
+    }),
+  }, 'Sign-up code');
+}
+
 /** The welcome mail for a brand-new account. `credits` is what the account was given at sign-up (0 = none). */
 async function sendWelcomeEmail({ to, name, credits = 0 }) {
   const appName = process.env.APP_NAME || 'ELMS';
@@ -532,4 +549,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendWelcomeEmail, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordRemovedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendWelcomeEmail, sendSignupCodeEmail, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordRemovedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
