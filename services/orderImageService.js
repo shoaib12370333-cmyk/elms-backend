@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
 const { EBAY_API_BASE_URL } = require('../config/ebayEnvironment');
 const { SITE_IDS } = require('./ebayStatsService');
+const { record } = require('./ebayCallBudget');
 const Order = require('../models/schemas/Order');
 const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 
@@ -22,6 +23,7 @@ function parseItemImage(xml) {
 async function fetchItemImage(refreshToken, legacyItemId, marketplaceId) {
   try {
     const accessToken = await getAccessToken(refreshToken);
+    record('core'); // counted against eBay's daily Trading allowance (services/ebayCallBudget.js)
     const body = `<?xml version="1.0" encoding="utf-8"?>
 <GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ItemID>${String(legacyItemId).replace(/[^0-9]/g, '')}</ItemID>

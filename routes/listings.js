@@ -21,6 +21,7 @@ const {
 } = require('../models/listingsModel');
 
 const { fetchItemTraffic } = require('../services/ebayStatsService');
+const { syncStatsForAccount } = require('../services/listingStatsService');
 
 const {
   publishListing,
@@ -1139,34 +1140,46 @@ router.post('/:id/stats/sync', requireAuth, async (req, res) => {
   }
 });
 
+const STATS_SYNC_MIN_AGE_MS = 2 * 60 * 1000; // a store refreshed less than 2 minutes ago is not asked from eBay again
+const STATS_SYNC_MAX_ROWS = 1000;
+
 /**
  * POST /api/listings/stats/sync
- * Body (optional): { accountId } - refresh every published listing (max 200 per
- * call) so the Live listings page can show current views and watchers.
+ * Body (optional): { accountId } - refresh watchers and views of every published listing (of one store, or of all the seller's
+ * stores) so the Live listings page can show current numbers. eBay is asked for 200 listings per call, and every call counts
+ * against the day's eBay allowance (services/ebayCallBudget.js), so opening the page or pressing the button is cheap.
  */
 router.post('/stats/sync', requireAuth, async (req, res) => {
   const accountId = req.body?.accountId ? String(req.body.accountId) : null;
-  const all = await listListings(req.userId, 'published');
-  const targets = all
-    .filter((l) => l.ebay_listing_id && l.ebay_account_id && (!accountId || l.ebay_account_id === accountId))
-    .slice(0, 200);
+  const accountIds = accountId
+    ? [accountId]
+    : (await listEbayAccounts(req.userId)).map((a) => String(a.id || a._id));
 
-  const tokenCache = new Map();
-  const listings = [];
+  let synced = 0;
   let failed = 0;
   let firstError = null;
-  for (const listing of targets) {
+  const freshAccounts = new Set();
+  for (const id of accountIds) {
     try {
-      const result = await syncOneListingStats(req.userId, listing, tokenCache);
-      if (result.ok) listings.push({ id: result.listing.id, views: result.listing.views, watchers: result.listing.watchers, stats_synced_at: result.listing.stats_synced_at });
-      else failed += 1;
+      const r = await syncStatsForAccount(req.userId, id, { minAgeMs: STATS_SYNC_MIN_AGE_MS, viewsFallback: 10 });
+      if (r.fresh) freshAccounts.add(id);
+      synced += r.synced;
+      failed += r.failed;
+      if (r.limited) firstError = firstError || 'eBay\'s daily call allowance for statistics is used up. The numbers refresh again tomorrow.';
+      else if (r.error && r.error !== 'account_disconnected') firstError = firstError || r.error;
     } catch (err) {
       failed += 1;
       firstError = firstError || err.message;
     }
-    await new Promise((r) => setTimeout(r, 150));
   }
-  res.json({ success: true, synced: listings.length, failed, skipped: all.length - targets.length, error: firstError, listings, syncedAt: new Date().toISOString() });
+
+  const all = (await listListings(req.userId, 'published', accountId))
+    .filter((l) => l.ebay_listing_id && l.ebay_account_id && (!accountId || l.ebay_account_id === accountId));
+  synced += all.filter((l) => freshAccounts.has(l.ebay_account_id)).length; // just refreshed: nothing to ask eBay
+  const listings = all
+    .slice(0, STATS_SYNC_MAX_ROWS)
+    .map((l) => ({ id: l.id, views: l.views, watchers: l.watchers, stats_synced_at: l.stats_synced_at }));
+  res.json({ success: true, synced, failed, skipped: Math.max(0, all.length - listings.length), error: firstError, listings, syncedAt: new Date().toISOString() });
 });
 
 module.exports = router;

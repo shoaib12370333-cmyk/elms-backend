@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
 const { EBAY_API_BASE_URL, EBAY_IDENTITY_BASE_URL } = require('../config/ebayEnvironment');
 const { SITE_IDS } = require('./ebayStatsService');
+const { record } = require('./ebayCallBudget');
 
 /**
  * Who is behind a connected eBay account, so ELMS can show a real name instead of an id:
@@ -40,6 +41,7 @@ function failureOf(xml) {
 
 async function tradingCall(refreshToken, callName, marketplaceId, innerXml) {
   const accessToken = await getAccessToken(refreshToken);
+  record('core'); // counted against eBay's daily Trading allowance, never refused (the connect step needs it)
   const body = `<?xml version="1.0" encoding="utf-8"?>\n<${callName}Request xmlns="urn:ebay:apis:eBLBaseComponents">${innerXml}</${callName}Request>`;
   const response = await axios.post(`${EBAY_API_BASE_URL}/ws/api.dll`, body, {
     headers: {

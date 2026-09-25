@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
 const { EBAY_API_BASE_URL } = require('../config/ebayEnvironment');
 const { SITE_IDS } = require('./ebayStatsService');
+const { record } = require('./ebayCallBudget');
 
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRY_AFTER_FAILURE_MS = 24 * 60 * 60 * 1000;
@@ -34,6 +35,7 @@ function parseBuyerProfile(xml) {
 
 async function fetchBuyerProfile(refreshToken, username, marketplaceId) {
   const accessToken = await getAccessToken(refreshToken);
+  record('core'); // counted against eBay's daily Trading allowance (services/ebayCallBudget.js)
   const safeUser = String(username).replace(/[<>&"']/g, '');
   const body = `<?xml version="1.0" encoding="utf-8"?>
 <GetUserRequest xmlns="urn:ebay:apis:eBLBaseComponents">
