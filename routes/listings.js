@@ -55,7 +55,9 @@ const {
   hasCredits,
   spendCredit,
   refundCredit,
+  getPricingRule,
 } = require('../models/usersModel');
+const { bulkEdit, validateChanges } = require('../services/bulkEditService');
 
 const { ACTION_COSTS } = require('../config/actionCosts');
 
@@ -703,6 +705,29 @@ router.patch('/bulk-settings', requireAuth, async (req, res) => {
     }
   }
   res.json({ success: true, updated, skipped });
+});
+
+/**
+ * POST /api/listings/bulk-edit   { ids: [...], dryRun?: boolean, changes: { price?, quantity?, title?, brand?, tags?, stockMonitoring?,
+ *                                  priceMonitoring?, location?, policies? } }
+ *
+ * The Drafts page's "Bulk edit": one set of changes for every selected draft (services/bulkEditService.js). The whole request is checked
+ * first (400 with the reason, nothing saved); a draft that cannot take a change is skipped with the reason; with dryRun nothing is saved
+ * and the answer says exactly what each draft would become. Only drafts are edited here.
+ */
+router.post('/bulk-edit', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please change at most ${MAX_BULK_IDS} drafts at a time.` });
+  const dryRun = req.body?.dryRun === true;
+  try {
+    const changes = await validateChanges(req.body?.changes, { userId: req.userId, getSavedRule: (userId) => getPricingRule(userId) });
+    const out = await bulkEdit({ userId: req.userId, ids, changes, dryRun }, { getListingById, updateListing, getImportById });
+    res.json({ success: true, dryRun, ...out });
+  } catch (err) {
+    if (!err.statusCode || err.statusCode >= 500) console.error('bulk edit error:', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not edit the drafts. Please try again.' });
+  }
 });
 
 const MAX_AI_BATCH = 25;
