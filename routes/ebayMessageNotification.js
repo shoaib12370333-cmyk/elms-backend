@@ -1,9 +1,29 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const { verifyEbaySignature } = require('../services/ebayNotificationVerifyService');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { upsertConversation } = require('../models/conversationsModel');
 const { upsertMessages } = require('../models/messagesModel');
+
+/**
+ * eBay checks an endpoint before it creates a destination for it: it sends a challenge_code once, and the answer is
+ * SHA-256(challengeCode + verificationToken + this exact endpoint URL), as lower-case hex (same scheme as the account deletion and
+ * order notification endpoints). Without this answer the NEW_MESSAGE destination cannot be created at all.
+ *   EBAY_MESSAGE_NOTIFICATION_VERIFICATION_TOKEN  the token typed into eBay's Developer Portal for this destination
+ *   EBAY_MESSAGE_NOTIFICATION_ENDPOINT_URL        the public address of this endpoint, exactly as entered there
+ */
+router.get('/', (req, res) => {
+  const challengeCode = String(req.query.challenge_code || '');
+  const verificationToken = process.env.EBAY_MESSAGE_NOTIFICATION_VERIFICATION_TOKEN;
+  const endpointUrl = process.env.EBAY_MESSAGE_NOTIFICATION_ENDPOINT_URL || '';
+  if (!challengeCode || !verificationToken || !endpointUrl) {
+    return res.status(500).json({ error: 'Missing challenge_code, EBAY_MESSAGE_NOTIFICATION_VERIFICATION_TOKEN, or EBAY_MESSAGE_NOTIFICATION_ENDPOINT_URL.' });
+  }
+  const hash = crypto.createHash('sha256').update(challengeCode).update(verificationToken).update(endpointUrl).digest('hex');
+  res.setHeader('Content-Type', 'application/json');
+  res.status(200).json({ challengeResponse: hash });
+});
 
 /** eBay Commerce Notification API NEW_MESSAGE webhook. */
 router.post('/', async (req, res) => {
