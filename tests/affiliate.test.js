@@ -22,11 +22,12 @@ assert.strictEqual(rules.percentFor({ commissionPercent: 30 }, { defaultPercent:
 assert.strictEqual(rules.percentFor({ commissionPercent: null }, { defaultPercent: 20 }), 20);
 assert.strictEqual(rules.percentFor({ commissionPercent: 0 }, { defaultPercent: 20 }), 0, '0 percent is a real rate');
 assert.strictEqual(rules.maskEmail('ali.khan@gmail.com'), 'a***@gmail.com');
-assert.ok(/^[A-Z2-9]{8}$/.test(rules.newCode()));
+assert.ok(/^[A-Z2-9]{10}$/.test(rules.newCode()));
 assert.strictEqual(rules.cleanCode(' ab-12 x '), 'AB12X');
 
 // ---- in-memory model
 const now = () => new Date();
+const takenReferralCodes = new Set();
 const store = { affs: [], comms: [], payouts: [], users: new Map(), attached: new Map() };
 let n = 0;
 const oid = () => String(++n).padStart(24, '0');
@@ -34,6 +35,7 @@ const model = {
   // copies, like the database returns (the code compares the state before and after an update)
   getByUserId: async (uid) => { const a = store.affs.find((x) => x.userId === uid); return a ? { ...a } : null; },
   getById: async (id) => { const a = store.affs.find((x) => x.id === id); return a ? { ...a } : null; },
+  referralCodeTaken: async (c) => takenReferralCodes.has(c),
   getByCode: async (c) => { const a = store.affs.find((x) => x.code === c); return a ? { ...a } : null; },
   create: async (row) => { if (store.affs.some((a) => a.code === row.code)) throw Object.assign(new Error('dup'), { code: 11000 }); const a = { id: oid(), status: 'pending', commissionPercent: null, adminNote: '', approvedAt: null, ...row }; store.affs.push(a); return a; },
   update: async (id, set) => { const a = store.affs.find((x) => x.id === id); Object.assign(a, set); return { ...a }; },
@@ -82,7 +84,7 @@ const purchase = (o) => ({ id: oid(), userId: 'u_friend', provider: 'cashtap', p
   await assert.rejects(() => svc.apply(boss, { network: 'USDT_TRC20', address: '0xabc' }), /valid USDT on TRON/);
   let row = await svc.apply(boss, { network: 'USDT_TRC20', address: OK_ADDR, promo: 'YouTube channel' });
   assert.strictEqual(row.status, 'pending');
-  assert.ok(/^[A-Z2-9]{8}$/.test(row.code));
+  assert.ok(/^[A-Z2-9]{10}$/.test(row.code));
   await flush();
   assert.ok(mails.some((m) => m.k === 'admin' && /application/.test(m.subject)));
   await assert.rejects(() => svc.apply(boss, { network: 'USDT_TRC20', address: OK_ADDR }), /already applied/);
@@ -124,7 +126,8 @@ const purchase = (o) => ({ id: oid(), userId: 'u_friend', provider: 'cashtap', p
   assert.strictEqual(dash.totals.signups, 1);
   assert.strictEqual(dash.canRequest, false);
   assert.strictEqual(dash.commissions[0].customer, 'f***@x.com', 'the customer is masked');
-  assert.ok(dash.link.endsWith('/?aff=' + row.code));
+  assert.ok(dash.link.endsWith('/?via=' + row.code), 'the link carries only the code');
+  assert.strictEqual(dash.link.split('?')[1], 'via=' + row.code, 'nothing in the link says affiliate');
 
   // the hold ends -> ready; the minimum is 20
   store.comms.forEach((c) => { c.availableAt = new Date(Date.now() - 1000); });
@@ -174,7 +177,14 @@ const purchase = (o) => ({ id: oid(), userId: 'u_friend', provider: 'cashtap', p
 
   // a rejected applicant can apply again; the default rate is used when the affiliate has none
   const other = user('u_two', 'two@x.com');
+  // a code that some user already has as a referral code is never handed out
+  const firstCodes = []; const realNew = rules.newCode; let calls = 0;
+  rules.newCode = () => { calls += 1; return calls === 1 ? 'TAKENCODE1' : realNew(); };
+  takenReferralCodes.add('TAKENCODE1');
   const app = await svc.apply(other, { network: 'USDC_SOL', address: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV' });
+  rules.newCode = realNew;
+  assert.notStrictEqual(app.code, 'TAKENCODE1', 'the code equal to a referral code was skipped');
+  assert.ok(calls >= 2);
   await svc.decide(app.id, 'reject', { note: 'not a fit' });
   const again = await svc.apply(other, { network: 'USDC_SOL', address: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV' });
   assert.strictEqual(again.status, 'pending');

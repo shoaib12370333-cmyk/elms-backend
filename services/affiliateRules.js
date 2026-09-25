@@ -60,10 +60,11 @@ function availableAt(from, holdDays) {
   return new Date(new Date(from).getTime() + Math.max(0, Number(holdDays) || 0) * 86400000);
 }
 
+// 10 characters (referral codes are 8, or a custom word): an affiliate code never looks like or equals a referral code.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function newCode(random = Math.random) {
   let out = '';
-  for (let i = 0; i < 8; i += 1) out += CODE_ALPHABET[Math.floor(random() * CODE_ALPHABET.length)];
+  for (let i = 0; i < 10; i += 1) out += CODE_ALPHABET[Math.floor(random() * CODE_ALPHABET.length)];
   return out;
 }
 const cleanCode = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24);
