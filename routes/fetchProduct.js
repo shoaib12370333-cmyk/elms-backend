@@ -62,19 +62,20 @@ async function alignPriceCurrency(product, sourceUrl) {
  * Easyparser (the background bulk-job processor, see jobs/bulkImportProcessor.js), or from
  * the browser extension. Spends a credit on success, refunds it if saving fails, so a
  * database hiccup never permanently costs a credit for nothing - same as before.
+ * `options.alreadyCharged`: the caller took the credit already (fetchAndSaveDraft charges BEFORE the Amazon lookup), so it is not taken again here.
  *
  * `req` is only used to build absolute image URLs when no BACKEND_PUBLIC_URL/RENDER_EXTERNAL_URL
  * env var is set (see imageStorageService.publicBaseUrl) - the background job passes a minimal
  * stand-in object since it has no real HTTP request.
  */
-async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount) {
+async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount, { alreadyCharged = false } = {}) {
   const activeEbayAccount = knownActiveEbayAccount !== undefined ? knownActiveEbayAccount : await getActiveEbayAccount(userId);
   await alignPriceCurrency(product, sourceUrl); // before the credit is taken: a price that cannot be put right saves nothing
   // A listing that is already live (or paused, scheduled, ended ...) is never changed by an import: refuse before any credit is spent.
   const already = product.asin ? alreadyListedMessage(await findListingInStore(userId, product.asin, activeEbayAccount?.id || null), activeEbayAccount) : null;
   if (already) throw Object.assign(new Error(already), { statusCode: 409, alreadyListed: true });
   // Pays first (nothing is saved without the credit) and gives it back if saving fails.
-  return withCredits(userId, ACTION_COSTS.AMAZON_IMPORT, async () => {
+  const save = async () => {
     let suggestedPrice = null;
     if (product.price != null && markupPercent != null) {
       const markup = Number(markupPercent);
@@ -110,7 +111,8 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
     });
 
     return { product, suggestedPrice, importId: importRecord.id, draft };
-  });
+  };
+  return alreadyCharged ? save() : withCredits(userId, ACTION_COSTS.AMAZON_IMPORT, save);
 }
 
 /** The store a list of imports goes to: the one the extension chose (must be the user's own), else the active store as always. */
@@ -135,12 +137,24 @@ async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req, chosenSt
 
   const asin = extractAsinFromUrl(amazonUrl);
   const country = detectCountryFromUrl(amazonUrl);
-  let product = asin ? await getCachedProduct(asin, country) : null;
-  if (!product) {
-    product = await fetchProductByUrl(amazonUrl);
-    if (product.asin) await setCachedProduct(product.asin, country, product, 'canopy');
+
+  // A product that is already live (or paused, scheduled, ended ...) is refused from the link alone, before anything is paid or fetched.
+  if (asin) {
+    const already = alreadyListedMessage(await findListingInStore(userId, asin, activeEbayAccount?.id || null), activeEbayAccount);
+    if (already) throw Object.assign(new Error(already), { statusCode: 409, alreadyListed: true });
   }
-  return saveProductAsDraft(userId, product, markupPercent, amazonUrl, req, activeEbayAccount);
+
+  // Pays FIRST. The Amazon lookup costs real money, so it must not run for a request whose credit is not there: with the lookup before
+  // the charge, a person with one credit could start many requests at once and every one of them would ask Amazon (only one could then
+  // pay). The credit is given back if anything fails, as before.
+  return withCredits(userId, ACTION_COSTS.AMAZON_IMPORT, async () => {
+    let product = asin ? await getCachedProduct(asin, country) : null;
+    if (!product) {
+      product = await fetchProductByUrl(amazonUrl);
+      if (product.asin) await setCachedProduct(product.asin, country, product, 'canopy');
+    }
+    return saveProductAsDraft(userId, product, markupPercent, amazonUrl, req, activeEbayAccount, { alreadyCharged: true });
+  });
 }
 
 /**
@@ -177,7 +191,7 @@ router.post('/', requireAuth, async (req, res) => {
     const result = await fetchAndSaveDraft(req.userId, amazonUrl, markupPercent, req);
     res.json({ success: true, ...result });
   } catch (err) {
-    console.error('fetch-product error:', err.message);
+    if (!err.outOfCredits) console.error('fetch-product error:', err.message); // running out of credits is normal, not an error to log
     res.status(err.statusCode || 500).json({
       success: false,
       error: err.message || 'Something went wrong.',

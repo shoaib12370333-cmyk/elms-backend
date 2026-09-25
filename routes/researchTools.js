@@ -15,6 +15,19 @@ const {
 } = require('../services/canopyAmazonService');
 const { getActiveEbayAccount } = require('../models/ebayAccountsModel');
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
+const { getCachedProduct, setCachedProduct } = require('../services/productCacheService');
+const rateLimit = require('express-rate-limit');
+
+// The Image Extractor is free (its images come with every product fetch), so it must not be an open door to the paid Amazon API:
+// a product that was fetched lately (an import, an earlier extraction) is served from the product cache, and every person has a pace.
+const freeToolLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 40,
+  keyGenerator: (req) => String(req.userId),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many image lookups. Please try again in a few minutes.' },
+});
 
 /**
  * Small helper: routes below accept either an asin or a full Amazon url -
@@ -135,13 +148,18 @@ router.get('/bestseller-explorer', requireAuth, async (req, res) => {
  * Extractor tool. This is a thin wrapper around the standard product
  * fetch, since Canopy's product endpoint already returns the full image set.
  */
-router.get('/image-extractor', requireAuth, async (req, res) => {
+router.get('/image-extractor', requireAuth, freeToolLimiter, async (req, res) => {
   const asin = resolveAsin(req);
   if (!asin) {
     return res.status(400).json({ success: false, error: 'An asin or url is required.' });
   }
   await billed(req, res, 'IMAGE_EXTRACTOR', 'Could not fetch images for this product.', async () => {
-    const product = await fetchProductByAsin(asin, await countryOf(req));
+    const country = await countryOf(req);
+    let product = await getCachedProduct(asin, country);
+    if (!product) {
+      product = await fetchProductByAsin(asin, country);
+      if (product && product.asin) await setCachedProduct(product.asin, country, product, 'canopy').catch(() => {});
+    }
     return { asin, title: product.title, images: product.images };
   });
 });

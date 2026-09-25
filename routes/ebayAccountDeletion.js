@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const EbayAccount = require('../models/schemas/EbayAccount');
+const { deleteEbayUserData } = require('../services/ebayAccountDeletionService');
 const { verifyEbaySignature } = require('../services/ebayNotificationVerifyService');
 
 /**
@@ -55,9 +55,10 @@ router.get('/', (req, res) => {
 /**
  * Handles the actual account-deletion notification. eBay's payload shape
  * (per their documentation) includes the deleted user's eBay username
- * and/or userId under notification.data. We look up any of our users
- * connected to that eBay account and remove their stored eBay connection
- * and any personal data tied to it, in line with our Privacy Policy.
+ * and/or userId under notification.data. We remove everything ELMS keeps
+ * about that eBay user - the store connection and all the data stored for it,
+ * and the buyer details in other sellers' orders and messages - in line with
+ * our Privacy Policy (see services/ebayAccountDeletionService.js).
  */
 router.post('/', async (req, res) => {
   // Sandbox/test deployments may share the same public callback URL with an
@@ -95,8 +96,8 @@ router.post('/', async (req, res) => {
     const identifiers = [data.userId, data.username].filter(Boolean);
 
     if (identifiers.length) {
-      const result = await EbayAccount.deleteMany({ ebayUserId: { $in: identifiers } });
-      console.log(`[ebay-account-deletion] Removed ${result.deletedCount} eBay account connection(s).`);
+      const result = await deleteEbayUserData(identifiers);
+      console.log(`[ebay-account-deletion] Removed ${result.stores} store connection(s) with their data, erased the buyer details on ${result.orders} order(s) and deleted ${result.conversations} conversation(s).`);
     } else {
       console.warn('[ebay-account-deletion] Verified notification had no recognizable eBay user identifier.');
     }
