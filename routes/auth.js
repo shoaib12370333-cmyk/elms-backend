@@ -250,10 +250,17 @@ router.post('/forgot-password/reset', verifyResetLimiter, async (req, res) => {
     const user = await require('../models/schemas/User').findOne({ email });
     if (!user) return res.status(400).json({ success: false, error: 'Password reset is not available for this account.' });
     user.passwordHash = await hashPassword(newPassword);
+    user.unverifiedPassword = false; // the code that was mailed proves the mailbox is theirs
     await user.save();
     record.usedAt = new Date();
     await record.save();
     await PasswordResetOtp.deleteMany({ email });
+
+    // Whoever was signed in with the old password (or holds a token made before this moment) is signed out. The password is
+    // already changed, so a problem here is logged and does not turn the reset into an error.
+    await require('../services/sessionTracker').endAllSessions(user._id, 'password_reset').catch((sessionErr) => {
+      console.error('could not end the sessions after a password reset:', sessionErr.message);
+    });
 
     // The reset email itself is the verification step; notify the user after
     // the password is actually changed. This also enables Google-only users

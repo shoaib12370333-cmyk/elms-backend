@@ -444,6 +444,20 @@ async function sendPasswordChangedEmail({ to }) {
   });
 }
 
+async function sendPasswordRemovedEmail({ to }) {
+  const appName = process.env.APP_NAME || 'ELMS';
+  return sendSecurityEmail({
+    to,
+    subject: appName + ' password removed',
+    title: 'You signed in with Google, so the password on your ' + appName + ' account was removed',
+    paragraphs: [
+      'The password on this account was chosen at sign-up, before the email address was confirmed. Signing in with Google confirmed it, so that password was removed and every other device was signed out.',
+      'You can keep signing in with Google. To use an email and password as well, choose "Forgot password?" on the sign-in page and set a new one.',
+      'If you did not sign in with Google just now, contact ELMS Support right away.',
+    ],
+  });
+}
+
 async function sendPasswordResetRequestedEmail({ to }) {
   const appName = process.env.APP_NAME || 'ELMS';
   return sendSecurityEmail({
@@ -493,4 +507,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordRemovedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };

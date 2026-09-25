@@ -147,10 +147,21 @@ function fail() {
   err.statusCode = 401;
   throw err;
 }
+/**
+ * Ends every session of a user and every token issued before now (used when a password is reset or removed: whoever was signed in
+ * with the old password is signed out). Returns how many sessions were open.
+ */
+async function endAllSessions(userId, reason = 'ended') {
+  await User.updateOne({ _id: userId }, { $set: { sessionsValidFrom: new Date() } });
+  const rows = await Session.find({ userId, revokedAt: null }, { sid: 1 }).lean();
+  if (rows.length) await Session.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { revokedAt: new Date(), revokedReason: reason } });
+  forgetCache(null, String(userId));
+  return rows.length;
+}
 function forgetCache(sidOrNull, userId) {
   if (sidOrNull) cache.delete(sidOrNull);
   if (userId) cache.delete('legacy:' + userId);
   if (!sidOrNull) cache.clear();
 }
 
-module.exports = { startSession, recordFailedLogin, assertSessionActive, requestContext, forgetCache, placeText, oneSessionPerDevice };
+module.exports = { startSession, recordFailedLogin, assertSessionActive, requestContext, forgetCache, endAllSessions, placeText, oneSessionPerDevice };

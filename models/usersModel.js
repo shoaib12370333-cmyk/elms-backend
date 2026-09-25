@@ -23,8 +23,36 @@ function notifyNewUser(email, method) {
 
 const { emailKey } = require('../services/signupBonusGuard');
 
+/**
+ * Google has just shown that this person owns the mailbox. If the account has a password that was set at sign-up without any such
+ * proof, someone else may have registered the address first and know that password: it is removed (the owner can choose a new one
+ * with "Forgot password") and every session made so far ends. Returns true when a password was removed. The caller saves the user.
+ */
+function dropUnprovenPassword(user) {
+  if (!user.unverifiedPassword) return false;
+  user.unverifiedPassword = false;
+  if (!user.passwordHash) return false;
+  user.passwordHash = null;
+  return true;
+}
+
+/** After an unproven password was removed and saved: end the sessions that were made with it and tell the owner. Never throws. */
+async function afterPasswordRemoved(user) {
+  try {
+    await require('../services/sessionTracker').endAllSessions(user._id, 'password_removed');
+  } catch (err) {
+    console.error('could not end the sessions after removing an unproven password:', err.message);
+  }
+  try {
+    if (user.email) require('../services/emailService').sendPasswordRemovedEmail({ to: user.email }).catch((err) => console.error('password removed email failed:', err.message));
+  } catch (err) {
+    console.error('password removed email failed:', err.message);
+  }
+}
+
 async function findOrCreateUser({ googleId, email, name, picture }, { welcomeBonus = true } = {}) {
   let user = await User.findOne({ googleId });
+  let passwordRemoved = false;
 
   if (!user) {
     // No account with this googleId yet - check if this email already has
@@ -37,6 +65,7 @@ async function findOrCreateUser({ googleId, email, name, picture }, { welcomeBon
       user.googleId = googleId;
       user.name = user.name || name;
       user.picture = user.picture || picture;
+      passwordRemoved = dropUnprovenPassword(user);
       await user.save();
     } else {
       // A genuinely brand-new account - apply the welcome bonus if enabled.
@@ -49,9 +78,11 @@ async function findOrCreateUser({ googleId, email, name, picture }, { welcomeBon
     user.email = email;
     user.name = name;
     user.picture = picture;
+    passwordRemoved = dropUnprovenPassword(user);
     await user.save();
   }
 
+  if (passwordRemoved) await afterPasswordRemoved(user);
   return serialize(user);
 }
 
@@ -65,13 +96,13 @@ async function getWelcomeBonusAmount() {
 }
 
 /**
- * Registers a new user with username/email/password. If an account with
- * this email already exists (e.g. from a previous Google login), the
- * password is added to THAT account instead of creating a duplicate - so
- * the person ends up with one account they can log into either way.
+ * Registers a new user with username/email/password.
  *
- * Throws if the username is already taken by someone else, or if an
- * existing account with this email already has a password set.
+ * An address that already has an account is never changed from here. Registering only shows that the caller knows the address,
+ * not that they own the mailbox, so it must not give anyone a password (and a session) on somebody else's account. Nobody is
+ * locked out by this: "Forgot password" mails a code to the mailbox and lets its owner choose a password.
+ *
+ * Throws (409) if the username or the email is already used.
  */
 async function registerWithPassword({ username, email, password }, { welcomeBonus = true } = {}) {
   const existingUsername = await User.findOne({ username });
@@ -81,26 +112,28 @@ async function registerWithPassword({ username, email, password }, { welcomeBonu
     throw err;
   }
 
-  const passwordHash = await hashPassword(password);
-  let user = await User.findOne({ email });
-
-  if (user) {
-    if (user.passwordHash) {
-      const err = new Error('An account with this email already has a password set. Please log in instead.');
-      err.statusCode = 409;
-      throw err;
-    }
-    // This email exists from a Google login - adding a password to it is
-    // NOT a new account, so no welcome bonus here.
-    user.username = username;
-    user.passwordHash = passwordHash;
-    await user.save();
-  } else {
-    // A genuinely brand-new account - apply the welcome bonus if enabled.
-    const creditBalance = welcomeBonus ? await getWelcomeBonusAmount() : 0;
-    user = await User.create({ username, email, emailKey: emailKey(email), passwordHash, name: username, creditBalance });
-    notifyNewUser(email, 'email and password');
+  if (await User.findOne({ email })) {
+    const err = new Error('An account with this email already exists. Please sign in. If you signed up with Google or forgot your password, use "Forgot password?" to choose one.');
+    err.statusCode = 409;
+    throw err;
   }
+
+  const passwordHash = await hashPassword(password);
+  // A genuinely brand-new account - apply the welcome bonus if enabled.
+  const creditBalance = welcomeBonus ? await getWelcomeBonusAmount() : 0;
+  let user;
+  try {
+    // unverifiedPassword: nothing has shown yet that this person owns the mailbox (see the User schema).
+    user = await User.create({ username, email, emailKey: emailKey(email), passwordHash, unverifiedPassword: true, name: username, creditBalance });
+  } catch (err) {
+    if (err && err.code === 11000) { // the same address or username was registered a moment ago
+      const dup = new Error('An account with this email or username already exists. Please sign in.');
+      dup.statusCode = 409;
+      throw dup;
+    }
+    throw err;
+  }
+  notifyNewUser(email, 'email and password');
 
   return serialize(user);
 }
