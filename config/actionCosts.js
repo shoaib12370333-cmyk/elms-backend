@@ -13,6 +13,7 @@
 const ACTION_COSTS = {
   AMAZON_IMPORT: 1, // fetching a product from Amazon by link - website Import page, bulk import, AND the extension's popup "Fetch by Link" all share this one (all three call the same Canopy-backed route)
   BROWSER_IMPORT_SCRAPE: 1, // extension's floating-button import - reads the currently open Amazon page's DOM directly, no Canopy call
+  EXTENSION_BULK_IMPORT: 1, // one product of a bulk import started from the extension (search / store pages): ELMS fetches it itself, so it is priced apart from the page button. 0 = free
   EBAY_PUBLISH: 1, // publishing a draft to eBay
   SCHEDULED_PUBLISH: 1, // a scheduled listing going live automatically
   REPUBLISH: 1, // retrying a failed/ended listing
@@ -55,8 +56,9 @@ const ACTION_COSTS = {
  * updateActionCosts) until it's cleared.
  */
 const ACTION_COST_METADATA = [
-  { key: 'AMAZON_IMPORT', label: 'Amazon import (website / bulk / Fetch by Link)', usesCanopy: true, description: 'Fetching one product from an Amazon link - the website Import page, bulk import, and the extension popup\'s "Fetch by Link" button all use this.' },
-  { key: 'BROWSER_IMPORT_SCRAPE', label: 'Amazon import (extension floating button)', usesCanopy: false, description: 'Reading the currently open Amazon product page directly in the browser - no Canopy call, since the page is already loaded.' },
+  { key: 'AMAZON_IMPORT', label: 'Amazon import (website, website bulk, Fetch by Link)', usesCanopy: true, description: 'Fetching one product from an Amazon link - the website Import page, bulk import, and the extension popup\'s "Fetch by Link" button all use this.' },
+  { key: 'BROWSER_IMPORT_SCRAPE', label: 'Extension: import one product (page button)', usesCanopy: false, description: 'What one import from the Chrome extension costs (the ELMS button on an Amazon product page, or the popup). Set 0 to make it free: the extension then shows Free instead of a price.' },
+  { key: 'EXTENSION_BULK_IMPORT', label: 'Extension: bulk import (per product)', usesCanopy: true, description: 'What each product costs when several are imported at once from the extension (search results, store pages). Set 0 to make it free: the extension then shows Free.' },
   { key: 'EBAY_PUBLISH', label: 'Publish to eBay', usesCanopy: false, description: 'Publishing a draft listing to eBay.' },
   { key: 'SCHEDULED_PUBLISH', label: 'Scheduled publish', usesCanopy: false, description: 'A scheduled listing going live automatically at its scheduled time.' },
   { key: 'REPUBLISH', label: 'Republish', usesCanopy: false, description: 'Retrying a failed or ended listing.' },

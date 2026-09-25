@@ -14,7 +14,7 @@ const { requireAsinSku } = require('../services/skuService');
 const { getCachedProduct, setCachedProduct } = require('../services/productCacheService');
 const { currencyForAmazonUrl } = require('../config/amazonDomains');
 const { convertAmount } = require('../services/currencyService');
-const { storeForImport, alreadyListedMessage } = require('../services/extensionService');
+const { storeForImport, assertStoreForImport, bulkCostFor, alreadyListedMessage } = require('../services/extensionService');
 
 const MAX_ACTIVE_BULK_JOBS = 3; // background imports one person can have running at once
 const MARKUP_MIN = -99;
@@ -68,7 +68,7 @@ async function alignPriceCurrency(product, sourceUrl) {
  * env var is set (see imageStorageService.publicBaseUrl) - the background job passes a minimal
  * stand-in object since it has no real HTTP request.
  */
-async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount, { alreadyCharged = false } = {}) {
+async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount, { alreadyCharged = false, cost = ACTION_COSTS.AMAZON_IMPORT } = {}) {
   const activeEbayAccount = knownActiveEbayAccount !== undefined ? knownActiveEbayAccount : await getActiveEbayAccount(userId);
   await alignPriceCurrency(product, sourceUrl); // before the credit is taken: a price that cannot be put right saves nothing
   // A listing that is already live (or paused, scheduled, ended ...) is never changed by an import: refuse before any credit is spent.
@@ -112,7 +112,7 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
 
     return { product, suggestedPrice, importId: importRecord.id, draft };
   };
-  return alreadyCharged ? save() : withCredits(userId, ACTION_COSTS.AMAZON_IMPORT, save);
+  return alreadyCharged ? save() : withCredits(userId, cost, save);
 }
 
 /** The store a list of imports goes to: the one the extension chose (must be the user's own), else the active store as always. */
@@ -131,8 +131,9 @@ function productKey(url) {
  * for twice - see services/productCacheService), then saves it as a draft. Shared by both
  * the single-URL and small-bulk (synchronous) routes below.
  */
-async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req, chosenStore) {
+async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req, chosenStore, cost = ACTION_COSTS.AMAZON_IMPORT) {
   const activeEbayAccount = chosenStore !== undefined ? chosenStore : await getActiveEbayAccount(userId);
+  await assertStoreForImport(activeEbayAccount); // no store at all: only when the admin allows it
   assertAmazonMatchesStore(amazonUrl, activeEbayAccount?.marketplaceId || null);
 
   const asin = extractAsinFromUrl(amazonUrl);
@@ -147,7 +148,7 @@ async function fetchAndSaveDraft(userId, amazonUrl, markupPercent, req, chosenSt
   // Pays FIRST. The Amazon lookup costs real money, so it must not run for a request whose credit is not there: with the lookup before
   // the charge, a person with one credit could start many requests at once and every one of them would ask Amazon (only one could then
   // pay). The credit is given back if anything fails, as before.
-  return withCredits(userId, ACTION_COSTS.AMAZON_IMPORT, async () => {
+  return withCredits(userId, cost, async () => {
     let product = asin ? await getCachedProduct(asin, country) : null;
     if (!product) {
       product = await fetchProductByUrl(amazonUrl);
@@ -220,7 +221,8 @@ router.get('/limits', requireAuth, async (req, res) => {
  * runs in the background and can handle far more links without timing out.
  */
 router.post('/bulk', requireAuth, async (req, res) => {
-  const { amazonUrls, markupPercent, ebayAccountId } = req.body;
+  const { amazonUrls, markupPercent, ebayAccountId, source } = req.body;
+  const cost = bulkCostFor(source); // an import started from the extension has its own price (Admin -> Credit Costs)
 
   if (!Array.isArray(amazonUrls) || amazonUrls.length === 0) {
     return res.status(400).json({ success: false, error: 'amazonUrls must be a non-empty array.' });
@@ -233,7 +235,7 @@ router.post('/bulk', requireAuth, async (req, res) => {
   // One credit per product: the same product pasted twice is imported (and charged) once, and the whole list has to be
   // affordable before anything is fetched, so a list never stops half way for lack of credits.
   const uniqueProducts = new Set(amazonUrls.filter((u) => isValidAmazonUrl(u)).map((u) => productKey(String(u).trim())));
-  const needed = uniqueProducts.size * ACTION_COSTS.AMAZON_IMPORT;
+  const needed = uniqueProducts.size * cost;
   if (uniqueProducts.size && !(await hasCredits(req.userId, needed))) {
     return res.status(402).json({ success: false, error: `This list has ${uniqueProducts.size} product${uniqueProducts.size === 1 ? '' : 's'} and needs ${needed} credit${needed === 1 ? '' : 's'}. You do not have enough.`, needed });
   }
@@ -241,6 +243,7 @@ router.post('/bulk', requireAuth, async (req, res) => {
   let chosenStore;
   try {
     chosenStore = await resolveStore(req.userId, ebayAccountId);
+    await assertStoreForImport(chosenStore);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ success: false, error: err.message });
   }
@@ -261,7 +264,7 @@ router.post('/bulk', requireAuth, async (req, res) => {
     done.add(key);
 
     try {
-      const result = await fetchAndSaveDraft(req.userId, amazonUrl, markupPercent, req, chosenStore);
+      const result = await fetchAndSaveDraft(req.userId, amazonUrl, markupPercent, req, chosenStore, cost);
       results.push({ amazonUrl, success: true, ...result });
     } catch (err) {
       console.error(`fetch-product/bulk error for ${amazonUrl}:`, err.message);
@@ -283,7 +286,8 @@ router.post('/bulk', requireAuth, async (req, res) => {
  * and the browser tab can be closed. Poll GET /bulk-job/:id for progress.
  */
 router.post('/bulk-job', requireAuth, async (req, res) => {
-  const { amazonUrls, markupPercent, ebayAccountId } = req.body;
+  const { amazonUrls, markupPercent, ebayAccountId, source } = req.body;
+  const cost = bulkCostFor(source); // an import started from the extension has its own price (Admin -> Credit Costs)
   if (!Array.isArray(amazonUrls) || amazonUrls.length === 0) {
     return res.status(400).json({ success: false, error: 'amazonUrls must be a non-empty array.' });
   }
@@ -298,13 +302,14 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   if (amazonUrls.length > bulkJobMax) {
     return res.status(400).json({ success: false, error: 'Please import at most ' + bulkJobMax + ' links at a time.', max: bulkJobMax });
   }
-  if (!(await hasCredits(req.userId, ACTION_COSTS.AMAZON_IMPORT))) {
+  if (!(await hasCredits(req.userId, cost))) {
     return res.status(402).json({ success: false, error: 'You have run out of credits. Please open a support ticket to request more.' });
   }
 
   let activeEbayAccount;
   try {
     activeEbayAccount = await resolveStore(req.userId, ebayAccountId);
+    await assertStoreForImport(activeEbayAccount);
   } catch (err) {
     return res.status(err.statusCode || 500).json({ success: false, error: err.message });
   }
@@ -340,7 +345,7 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   if (active.jobs >= MAX_ACTIVE_BULK_JOBS) {
     return res.status(429).json({ success: false, error: `You already have ${active.jobs} imports running. Wait for one to finish (or cancel one), then start the next.`, skipped });
   }
-  const needed = (active.pendingItems + items.length) * ACTION_COSTS.AMAZON_IMPORT;
+  const needed = (active.pendingItems + items.length) * cost;
   if (!(await hasCredits(req.userId, needed))) {
     const others = active.pendingItems ? ` (${active.pendingItems} more from your other imports are still waiting to be saved)` : '';
     return res.status(402).json({ success: false, error: `This list has ${items.length} product${items.length === 1 ? '' : 's'} and needs ${needed} credit${needed === 1 ? '' : 's'} in all${others}. You do not have enough.`, needed, products: items.length, skipped });
@@ -349,6 +354,7 @@ router.post('/bulk-job', requireAuth, async (req, res) => {
   const job = await createBulkImportJob(req.userId, {
     ebayAccountId: activeEbayAccount?.id || null,
     markupPercent: markup,
+    source: source === 'extension' ? 'extension' : 'website',
     items,
   });
   res.json({ success: true, jobId: job.id, total: job.total, skipped });

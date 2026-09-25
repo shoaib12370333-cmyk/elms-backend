@@ -15,6 +15,7 @@ const { createPlan, updatePlan, deletePlan, listAllPlans } = require('../models/
 const {
   getSettings,
   updateWelcomeBonusSettings,
+  updateImportPolicy,
   updateChromeExtensionId,
   updateExtensionRegistrationUrl,
   updateExtensionBackendUrl,
@@ -287,6 +288,22 @@ router.put('/settings/welcome-bonus', async (req, res) => {
   res.json({ success: true, settings });
 });
 
+
+/**
+ * PUT /api/admin/settings/import-policy
+ * Body: { importWithoutEbayAccount: boolean }
+ *
+ * May a person import products (extension, website, bulk) before any eBay store is connected? On: the draft is saved without a store
+ * and a store is chosen when it is published. Off: they are asked to connect a store first.
+ */
+router.put('/settings/import-policy', async (req, res) => {
+  const { importWithoutEbayAccount } = req.body || {};
+  if (typeof importWithoutEbayAccount !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'importWithoutEbayAccount must be true or false.' });
+  }
+  const settings = await updateImportPolicy({ importWithoutEbayAccount });
+  res.json({ success: true, settings });
+});
 
 /**
  * PUT /api/admin/settings/chrome-extension

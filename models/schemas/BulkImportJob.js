@@ -36,6 +36,7 @@ const bulkImportJobSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     ebayAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'EbayAccount', default: null },
     markupPercent: { type: Number, default: 0 },
+    source: { type: String, enum: ['website', 'extension'], default: 'website' }, // decides the price of each product (Admin -> Credit Costs)
     status: { type: String, enum: ['queued', 'submitting', 'polling', 'done', 'cancelled'], default: 'queued', index: true },
     items: { type: [itemSchema], default: [] },
     total: { type: Number, default: 0 },

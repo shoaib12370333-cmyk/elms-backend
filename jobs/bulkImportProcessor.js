@@ -117,7 +117,8 @@ async function pollItems(job, saveProductAsDraft, hooks = {}) {
 
 /** Attempts to save an item's already-fetched product as a draft, charging a credit. */
 async function trySave(job, item, saveProductAsDraft, hooks = {}) {
-  if (!(await hasCredits(job.userId, ACTION_COSTS.AMAZON_IMPORT))) {
+  const cost = job.source === 'extension' ? ACTION_COSTS.EXTENSION_BULK_IMPORT : ACTION_COSTS.AMAZON_IMPORT;
+  if (!(await hasCredits(job.userId, cost))) {
     item.status = 'fetched';
     item.outOfCredits = true;
     return;
@@ -129,7 +130,7 @@ async function trySave(job, item, saveProductAsDraft, hooks = {}) {
       store = await require('../models/ebayAccountsModel').getEbayAccountById(job.userId, String(job.ebayAccountId));
       if (!store) throw new Error('The eBay store of this import is no longer connected.');
     }
-    const saved = await saveProductAsDraft(job.userId, item.product, job.markupPercent, item.amazonUrl, FAKE_REQ, store);
+    const saved = await saveProductAsDraft(job.userId, item.product, job.markupPercent, item.amazonUrl, FAKE_REQ, store, { cost });
     item.status = 'done';
     item.draftId = saved.draft?.id || null;
     item.outOfCredits = false;

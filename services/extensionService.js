@@ -22,7 +22,7 @@ const money = (n) => (Number.isFinite(Number(n)) && Number(n) > 0 ? Number(n) : 
 /** The user's balance the way the panel shows it: admins have no limit. */
 function creditsOf(user) {
   const unlimited = !!user && user.role === 'admin';
-  return { balance: unlimited ? null : Number(user && user.creditBalance) || 0, unlimited, importCost: ACTION_COSTS.BROWSER_IMPORT_SCRAPE, bulkImportCost: ACTION_COSTS.AMAZON_IMPORT };
+  return { balance: unlimited ? null : Number(user && user.creditBalance) || 0, unlimited, importCost: ACTION_COSTS.BROWSER_IMPORT_SCRAPE, bulkImportCost: ACTION_COSTS.EXTENSION_BULK_IMPORT };
 }
 
 /** Does this Amazon page belong to the store's marketplace? (a UK store takes amazon.co.uk only ...) */
@@ -83,7 +83,7 @@ async function panelInfo(input) {
   const [user, accounts] = await Promise.all([getUserById(input.userId), listEbayAccounts(input.userId)]);
   if (!user) return null;
 
-  const out = { credits: creditsOf(user), appUrl: frontendUrl(), stores: storesOf(accounts, input.amazonUrl), existing: [], vero: { enabled: false, terms: [], fields: {} } };
+  const out = { credits: creditsOf(user), policy: { importWithoutStore: await importWithoutStoreAllowed() }, appUrl: frontendUrl(), stores: storesOf(accounts, input.amazonUrl), existing: [], vero: { enabled: false, terms: [], fields: {} } };
   if (ASIN_RE.test(asin)) {
     out.existing = existingOf(await listListingsBySku(input.userId, asin), accounts);
     out.vero = await veroOf(input.userId, input);
@@ -111,6 +111,27 @@ async function storeForImport(userId, ebayAccountId) {
   return store;
 }
 
+/** May imports be made before an eBay store is connected? (Admin -> Settings.) Yes unless switched off; a settings problem never blocks an import. */
+async function importWithoutStoreAllowed() {
+  try {
+    const settings = await require('../models/settingsModel').getSettings();
+    return !settings || settings.importWithoutEbayAccount !== false;
+  } catch (_) {
+    return true;
+  }
+}
+
+/** Throws (403) for an import that has no eBay store when the admin has switched that off. Runs before anything is paid. */
+async function assertStoreForImport(store) {
+  if (store || await importWithoutStoreAllowed()) return;
+  throw Object.assign(new Error('Connect an eBay store in ELMS first, then import. Nothing was imported and no credit was used.'), { statusCode: 403, code: 'store_required' });
+}
+
+/** What one product of a list import costs: an import started from the extension has its own price (Admin -> Credit Costs). */
+function bulkCostFor(source) {
+  return source === 'extension' ? ACTION_COSTS.EXTENSION_BULK_IMPORT : ACTION_COSTS.AMAZON_IMPORT;
+}
+
 // A listing that is no longer a draft is never changed by an import, so importing over it would only spend a credit.
 const ALREADY = {
   published: 'is already live on eBay',
@@ -128,4 +149,4 @@ function alreadyListedMessage(listing, store) {
   return 'This product ' + (ALREADY[listing.status] || 'already exists as a ' + listing.status + ' listing') + where + '. Nothing was imported and no credit was used.';
 }
 
-module.exports = { panelInfo, knownFor, storeForImport, alreadyListedMessage, creditsOf, storesOf, existingOf, amazonFit, frontendUrl, MAX_KNOWN_ASINS };
+module.exports = { panelInfo, knownFor, storeForImport, assertStoreForImport, importWithoutStoreAllowed, bulkCostFor, alreadyListedMessage, creditsOf, storesOf, existingOf, amazonFit, frontendUrl, MAX_KNOWN_ASINS };
