@@ -35,11 +35,14 @@ stub('models/usersModel', {
   getUserById: async (id) => (db.users.has(id) ? { id, ...db.users.get(id) } : null),
   setMaxEbayAccounts: async (id, n) => { db.slots[id] = n; },
 });
+const { fakeUsers } = require('./helpers/fakeUsers');
 stub('models/purchasesModel', {
   recordPurchase: async (p) => { if (db.purchases.some((x) => x.providerTransactionId === p.providerTransactionId)) return null; db.purchases.push(p); return p; },
+  purchaseExists: async (tx) => db.purchases.some((x) => x.providerTransactionId === tx),
+  getByTransactionId: async (tx) => db.purchases.find((x) => x.providerTransactionId === tx) || null,
   listPurchasesForUser: async () => [],
 });
-stub('models/schemas/User', { updateOne: async () => {} });
+stub('models/schemas/User', fakeUsers(db.users));
 stub('models/settingsModel', { getCustomPlanSettings: async () => ({ enabled: false }), getAffiliateSettings: async () => ({ enabled: false }), getReferralSettings: async () => ({ enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
 stub('models/referralsModel', {
   findReferralByReferred: async (id) => (db.referral && db.referral.referredUserId === String(id) ? db.referral : null),
@@ -165,7 +168,8 @@ const paid = (session, over = {}) => ({ id: session.id, status: 'completed', amo
   res = await call(userRoutes, 'post', '/:id/redeem', { params: { id: vp.id } });
   assert.strictEqual(res.body.success, true);
   assert.strictEqual(res.body.planName, 'Growth');
-  assert.strictEqual(db.credits[U1], 260 + 1500);
+  assert.strictEqual(db.credits[U1], 260, 'the credits of the earlier vouchers');
+  assert.strictEqual(db.users.get(U1).creditBalance, 1500, 'the plan\'s credits, given by the payment code');
   assert.strictEqual(db.purchases.length, 1);
   assert.strictEqual(db.purchases[0].provider, 'voucher');
   assert.strictEqual(db.purchases[0].priceUsd, 0);

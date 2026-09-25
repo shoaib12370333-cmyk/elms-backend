@@ -30,6 +30,17 @@ async function recordPurchase({ userId, planId, provider, providerTransactionId,
   return serialize(doc);
 }
 
+/** True when a payment already has its purchase row. The row is written last, after the credits were given (purchaseFulfillmentService). */
+async function purchaseExists(providerTransactionId) {
+  return !!(await Purchase.exists({ providerTransactionId: String(providerTransactionId) }));
+}
+
+/** The purchase recorded for a payment, or null. */
+async function getByTransactionId(providerTransactionId) {
+  const doc = await Purchase.findOne({ providerTransactionId: String(providerTransactionId) });
+  return doc ? serialize(doc) : null;
+}
+
 /** True once the user has completed at least one purchase (a referral code can only be added before the first one). */
 async function hasPurchases(userId) {
   return !!(await Purchase.exists({ userId, status: 'completed' }));
@@ -88,4 +99,4 @@ function serialize(doc) {
   };
 }
 
-module.exports = { recordPurchase, listPurchasesForUser, hasPurchases, getPurchaseById, ensureInvoiceNumber };
+module.exports = { recordPurchase, purchaseExists, getByTransactionId, listPurchasesForUser, hasPurchases, getPurchaseById, ensureInvoiceNumber };
