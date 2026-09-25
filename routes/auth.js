@@ -31,6 +31,7 @@ function sendAuthError(res, err) {
 
 // New accounts cannot be created from a blocked address or browser (nobody new can be one of the accounts the admin let through).
 const { welcomeBonusDecision } = require('../services/signupBonusGuard');
+const { checkEmailQuality } = require('../services/emailQualityService');
 const referralService = require('../services/referralService');
 
 /**
@@ -161,6 +162,11 @@ router.post('/register', registerLimiter, async (req, res) => {
   }
   if (password.length < 8) {
     return res.status(400).json({ success: false, error: 'Password must be at least 8 characters.' });
+  }
+  // example / test / temporary addresses, typos of the big providers and domains that take no mail (never throws)
+  const quality = await checkEmailQuality(email);
+  if (!quality.ok) {
+    return res.status(400).json({ success: false, error: quality.message, reason: quality.reason });
   }
 
   try {

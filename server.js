@@ -45,7 +45,7 @@ const { startPlanExpiry } = require('./jobs/planExpiry');
 const { startPublishQueue, runPublishQueue } = require('./jobs/publishQueue');
 
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', require('./config/trustProxy').trustProxySetting()); // req.ip = the visitor, not Cloudflare / Render's proxy
 
 // Basic production hardening without adding another runtime dependency.
 app.disable('x-powered-by');

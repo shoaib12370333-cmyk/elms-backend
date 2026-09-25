@@ -44,3 +44,11 @@ The Auto Order credit/feature label is retained, but this build does **not** pre
 - Rotate any credential that was ever pasted into chat/screenshots.
 - Use HTTPS only for `FRONTEND_URL`, RuName callback URLs, and notification endpoints.
 - Do not commit `.env`.
+
+## Visitor IP address
+
+On Render a request travels visitor -> Cloudflare -> Render's proxy -> ELMS. `config/trustProxy.js` skips Cloudflare's published address ranges (and internal addresses) so `req.ip` is the visitor; the IP limits, IP blocks, the new-accounts-per-network guard and the sign-in location depend on it. After a deploy, sign in once from your own phone and check that Settings -> Security shows YOUR public IP (not a `172.6x`, `104.x` or `162.158.x` Cloudflare address). If it still shows a Cloudflare address, set `TRUST_PROXY_HOPS=2` on Render (a fixed hop count) and tell us. An IP you blocked earlier that was really a Cloudflare address no longer matches anyone: remove it in the admin panel.
+
+## Sign-up email checks
+
+`POST /api/auth/register` refuses example/test addresses, temporary-mail services (built-in list; add more with `BLOCKED_EMAIL_DOMAINS=a.com,b.net`), typos of the big providers and domains without mail (DNS lookup; a slow or failing lookup lets the sign-up through).
