@@ -8,22 +8,19 @@ const stub = (rel, exports) => { const p = require.resolve(path.join('..', rel))
 // ---- in-memory stand-ins
 const db = { users: new Map(), purchases: new Map(), alerts: [], receipts: [] };
 const plan = { id: 'plan1', name: 'Starter', priceUsd: 10, credits: 500, maxEbayAccounts: 1, active: true };
-let raceOnce = false;
+const { fakeUsers } = require('./helpers/fakeUsers');
 stub('models/plansModel', { getPlanById: async (id) => (id === 'plan1' ? plan : null) });
 stub('models/purchasesModel', {
   recordPurchase: async (p) => {
-    if (raceOnce) { raceOnce = false; throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 }); }
     if (db.purchases.has(p.providerTransactionId)) return null;
     db.purchases.set(p.providerTransactionId, p);
     return p;
   },
+  purchaseExists: async (tx) => db.purchases.has(tx),
+  getByTransactionId: async (tx) => db.purchases.get(tx) || null,
 });
-stub('models/usersModel', {
-  addCredits: async (id, n) => { db.users.get(id).creditBalance += n; },
-  getUserById: async (id) => ({ id, ...db.users.get(id) }),
-  setMaxEbayAccounts: async (id, n) => { db.users.get(id).maxEbayAccounts = n; },
-});
-stub('models/schemas/User', { updateOne: async ({ _id }, u) => { Object.assign(db.users.get(String(_id)), u.$set); } });
+stub('models/usersModel', { getUserById: async (id) => ({ id, ...db.users.get(id) }) });
+stub('models/schemas/User', fakeUsers(db.users));
 stub('services/emailService', {
   sendAdminAlert: async (m) => { db.alerts.push(m); },
   sendPurchaseReceiptEmail: async (m) => { db.receipts.push(m); },
@@ -68,11 +65,14 @@ const paid = (over = {}) => ({ id: 'cs_live_AAAAAAAAAAAAAAAAAAAAAA', status: 'co
   assert.strictEqual(out.granted, false);
   assert.strictEqual(out.duplicate, true);
   assert.strictEqual(db.users.get('u1').creditBalance, 505);
-  // two requests at the same moment: the loser hits the unique index and is told it is a duplicate
-  raceOnce = true;
-  out = await pay.grantForSession(paid({ id: 'cs_live_BBBBBBBBBBBBBBBBBBBBBB' }));
-  assert.strictEqual(out.duplicate, true);
+  // two reports of the same payment at the same moment (webhook + return page): credited once, and only one of them "granted"
+  reset();
+  const both = await Promise.all([pay.grantForSession(paid()), pay.grantForSession(paid())]);
+  assert.strictEqual(both.filter((r) => r.granted).length, 1);
+  assert.strictEqual(both.filter((r) => r.duplicate).length, 1);
   assert.strictEqual(db.users.get('u1').creditBalance, 505);
+  assert.strictEqual(db.purchases.size, 1);
+  assert.strictEqual(db.receipts.length, 1);
 
   // the eBay-account limit is raised, never lowered
   reset(); db.users.get('u1').maxEbayAccounts = 0;

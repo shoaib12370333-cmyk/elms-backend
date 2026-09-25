@@ -62,6 +62,7 @@ const referralsModel = {
   recentReferrals: async () => db.referrals,
 };
 stub('models/referralsModel', referralsModel);
+const { fakeUsers } = require('./helpers/fakeUsers');
 stub('models/usersModel', {
   addCredits: async (id, n) => { db.credits[id] = (db.credits[id] || 0) + n; },
   getUserById: async (id) => (db.users.has(id) ? { id, ...db.users.get(id) } : null),
@@ -76,10 +77,12 @@ const plan = { id: 'plan1', name: 'Starter', priceUsd: 10, credits: 500, maxEbay
 stub('models/plansModel', { getPlanById: async (id) => (id === 'plan1' ? plan : null), listActivePlans: async () => [plan, { id: 'plan2', name: 'Tiny', priceUsd: 0.5, credits: 10, active: true }] });
 stub('models/purchasesModel', {
   recordPurchase: async (p) => { if (db.purchases.some((x) => x.providerTransactionId === p.providerTransactionId)) return null; db.purchases.push(p); bought = true; return p; },
+  purchaseExists: async (tx) => db.purchases.some((x) => x.providerTransactionId === tx),
+  getByTransactionId: async (tx) => db.purchases.find((x) => x.providerTransactionId === tx) || null,
   hasPurchases: async () => bought,
   listPurchasesForUser: async () => [],
 });
-stub('models/schemas/User', { updateOne: async () => {}, exists: async ({ email }) => ([...db.users.values()].some((u) => u.email === email) ? { _id: 1 } : null) });
+stub('models/schemas/User', fakeUsers(db.users));
 stub('services/emailService', { sendAdminAlert: async (m) => { db.alerts.push(m); }, sendPurchaseReceiptEmail: async () => {} });
 const sessions = [];
 stub('services/cashtapService', { createSession: async (s) => { sessions.push(s); return { id: 'cs_live_' + String(sessions.length).padStart(22, 'A'), url: 'https://pay.cashtap.cash/x', amount: s.amount }; }, isConfigured: () => true });

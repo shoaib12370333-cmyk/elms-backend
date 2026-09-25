@@ -15,13 +15,15 @@ const users = new Map([['u1', { email: 'b@x.com', creditBalance: 0, maxEbayAccou
 const purchases = [];
 let sessionArgs = null;
 stub('models/plansModel', { getPlanById: async (id) => [plan, noYearly].find((p) => p.id === id) || null, listActivePlans: async () => [plan, noYearly] });
-stub('models/purchasesModel', { recordPurchase: async (p) => { if (purchases.some((x) => x.providerTransactionId === p.providerTransactionId)) return null; purchases.push(p); return { ...p, id: 'p' + purchases.length }; }, listPurchasesForUser: async () => [], getPurchaseById: async () => null });
-stub('models/usersModel', {
-  addCredits: async (id, n) => { users.get(id).creditBalance += n; },
-  getUserById: async (id) => (users.has(id) ? { id, name: 'Ali', ...users.get(id) } : null),
-  setMaxEbayAccounts: async (id, n) => { users.get(id).maxEbayAccounts = n; },
+const { fakeUsers } = require('./helpers/fakeUsers');
+stub('models/purchasesModel', {
+  recordPurchase: async (p) => { if (purchases.some((x) => x.providerTransactionId === p.providerTransactionId)) return null; purchases.push(p); return { ...p, id: 'p' + purchases.length }; },
+  purchaseExists: async (tx) => purchases.some((x) => x.providerTransactionId === tx),
+  getByTransactionId: async (tx) => purchases.find((x) => x.providerTransactionId === tx) || null,
+  listPurchasesForUser: async () => [], getPurchaseById: async () => null,
 });
-stub('models/schemas/User', { updateOne: async ({ _id }, u) => { Object.assign(users.get(String(_id)), u.$set); return { modifiedCount: 1 }; }, findOne: () => ({ lean: async () => null }) });
+stub('models/usersModel', { getUserById: async (id) => (users.has(id) ? { id, name: 'Ali', ...users.get(id) } : null) });
+stub('models/schemas/User', fakeUsers(users));
 stub('services/emailService', { sendAdminAlert: async () => {}, sendPurchaseReceiptEmail: async () => {}, sendPlanEndedEmail: async () => {} });
 stub('models/referralsModel', { findReferralByReferred: async () => null });
 stub('models/settingsModel', { getCustomPlanSettings: async () => custom, getAffiliateSettings: async () => ({ enabled: false }), getReferralSettings: async () => ({ enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });

@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getPlanByPaddlePriceId } = require('../models/plansModel');
-const { recordPurchase } = require('../models/purchasesModel');
-const { addCredits } = require('../models/usersModel');
+const { fulfillPurchase } = require('../services/purchaseFulfillmentService');
 const { verifyAndParseWebhook, EventName } = require('../services/paddleService');
 
 /**
@@ -14,9 +13,11 @@ const { verifyAndParseWebhook, EventName } = require('../services/paddleService'
  * raw request body - if Express parses it to JSON first, verification fails.
  *
  * On a successfully completed transaction, credits the ELMS user identified
- * in the transaction's custom data. Uses the transaction ID to prevent
- * crediting the same purchase twice, since Paddle may deliver the same
- * webhook more than once ("at least once" delivery, by design).
+ * in the transaction's custom data - through the same fulfilment as every other
+ * payment (services/purchaseFulfillmentService.js), which uses the transaction ID
+ * to credit a purchase once, since Paddle may deliver the same webhook more than
+ * once ("at least once" delivery, by design), and never leaves a purchase recorded
+ * without its credits.
  */
 /** What the buyer used at Paddle, in words (Visa card, PayPal, Apple Pay ...); null when Paddle did not say. */
 function paddleMethodLabel(transaction) {
@@ -45,10 +46,10 @@ router.post('/', async (req, res) => {
       const elmsUserId = transaction.customData?.elmsUserId;
       const paddlePriceId = transaction.items?.[0]?.price?.id;
 
-      if (!elmsUserId) {
-        // Not a retryable situation - this transaction simply has no ELMS
+      if (!elmsUserId || !/^[a-f0-9]{24}$/i.test(String(elmsUserId))) {
+        // Not a retryable situation - this transaction has no (valid) ELMS
         // user attached (shouldn't normally happen), retrying won't fix it.
-        console.warn('paddle webhook: TransactionCompleted with no elmsUserId in custom data, skipping.');
+        console.warn('paddle webhook: TransactionCompleted with no valid elmsUserId in custom data, skipping.');
         return res.status(200).json({ received: true });
       }
 
@@ -70,34 +71,19 @@ router.post('/', async (req, res) => {
         ? Number(transaction.details.totals.total) / 100
         : plan.priceUsd;
 
-      const purchase = await recordPurchase({
+      // A repeated transaction is answered as done (duplicate) and nothing is given twice.
+      const done = await fulfillPurchase({
         userId: elmsUserId,
-        planId: plan.id,
+        plan,
         provider: 'paddle',
-        providerTransactionId: transaction.id,
+        transactionId: transaction.id,
         priceUsd,
-        creditsGranted,
-        planName: plan.name,
         paymentMethod: paddleMethodLabel(transaction),
       });
-
-      if (purchase) {
-        // purchase is null if this transaction ID was already recorded -
-        // meaning we've already credited this user for it, so skip re-crediting.
-        await addCredits(elmsUserId, creditsGranted);
-        await require('../services/affiliateService').recordCommission(purchase);
-        try {
-          const { getUserById } = require('../models/usersModel');
-          const { sendPurchaseReceiptEmail, sendAdminAlert } = require('../services/emailService');
-          const buyer = await getUserById(elmsUserId);
-          if (buyer && buyer.email) {
-            sendPurchaseReceiptEmail({ to: buyer.email, credits: creditsGranted, priceUsd, transactionId: transaction.id, purchase }).catch((e) => console.warn('receipt email failed:', e.message));
-            sendAdminAlert({ subject: 'New payment: $' + Number(priceUsd).toFixed(2), lines: ['User: ' + buyer.email, 'Credits: ' + creditsGranted, 'Amount: $' + Number(priceUsd).toFixed(2), 'Transaction: ' + transaction.id] }).catch(() => {});
-          }
-        } catch (mailErr) {
-          console.warn('paddle webhook: email step failed:', mailErr.message);
-        }
+      if (done.granted) {
         console.log(`paddle webhook: credited ${creditsGranted} credits to user ${elmsUserId} for transaction ${transaction.id}.`);
+      } else if (!done.duplicate) {
+        console.warn(`paddle webhook: transaction ${transaction.id} was not given (${done.reason || 'unknown reason'}).`);
       }
     }
 
@@ -108,8 +94,8 @@ router.post('/', async (req, res) => {
     // handled above with their own 200 responses. Returning 500 here tells
     // Paddle to retry the webhook later, so a temporary outage doesn't
     // silently cost the user their paid-for credits. Paddle's retry
-    // schedule and our own idempotency check (recordPurchase matching on
-    // providerTransactionId) together make retries safe.
+    // schedule and our own idempotency (the payment id noted on the user by
+    // fulfillPurchase, and the purchase row) together make retries safe.
     console.error('paddle webhook processing error:', err.message);
     res.status(500).json({ success: false, error: 'Could not process this webhook right now.' });
   }

@@ -61,23 +61,14 @@ const users = new Map();
 const purchases = [];
 const emails = [];
 stub('models/plansModel', { getPlanById: async (id) => (id === plan.id ? plan : null) });
-stub('models/purchasesModel', { recordPurchase: async (p) => { if (purchases.some((x) => x.providerTransactionId === p.providerTransactionId)) return null; purchases.push(p); return { ...p, id: 'p' + purchases.length }; } });
-stub('models/usersModel', {
-  addCredits: async (id, n) => { users.get(id).creditBalance += n; },
-  getUserById: async (id) => ({ id, ...users.get(id) }),
-  setMaxEbayAccounts: async (id, n) => { users.get(id).maxEbayAccounts = n; },
+const { fakeUsers } = require('./helpers/fakeUsers');
+stub('models/purchasesModel', {
+  recordPurchase: async (p) => { if (purchases.some((x) => x.providerTransactionId === p.providerTransactionId)) return null; purchases.push(p); return { ...p, id: 'p' + purchases.length }; },
+  purchaseExists: async (tx) => purchases.some((x) => x.providerTransactionId === tx),
+  getByTransactionId: async (tx) => purchases.find((x) => x.providerTransactionId === tx) || null,
 });
-const matches = (u, f) => Object.entries(f).every(([k, v]) => {
-  if (k === '_id') return true;
-  if (v && typeof v === 'object' && '$ne' in v) return v.$ne === null ? u[k] != null : u[k] !== v.$ne;
-  if (v && typeof v === 'object' && '$lte' in v) return u[k] != null && u[k] <= v.$lte;
-  return u[k] === v || (v instanceof Date && u[k] instanceof Date && +u[k] === +v);
-});
-stub('models/schemas/User', {
-  updateOne: async ({ _id, ...rest }, u) => { const x = users.get(String(_id)); if (!x || !matches(x, rest)) return { modifiedCount: 0 }; Object.assign(x, u.$set); return { modifiedCount: 1 }; },
-  findOne: (f, proj) => ({ lean: async () => { const [id, x] = [...users.entries()].find(([, u]) => u.role !== 'admin' && u.planExpiresAt && u.planExpiresAt <= f.planExpiresAt.$lte) || []; return id ? { _id: id, ...x } : null; } }),
-  find: () => ({ limit: () => ({ lean: async () => [...users.entries()].filter(([, u]) => u.role !== 'admin' && u.planExpiresAt).map(([id]) => ({ _id: id })) }) }),
-});
+stub('models/usersModel', { getUserById: async (id) => ({ id, ...users.get(id) }) });
+stub('models/schemas/User', fakeUsers(users));
 stub('services/emailService', { sendAdminAlert: async () => {}, sendPurchaseReceiptEmail: async () => {}, sendPlanEndedEmail: async (m) => { emails.push(m); } });
 stub('models/referralsModel', { findReferralByReferred: async () => null });
 stub('models/settingsModel', { getAffiliateSettings: async () => ({ enabled: false }), getReferralSettings: async () => ({ enabled: false, discountPercent: 0, discountUses: 1, discountDays: 0, rewardCredits: 0 }) });
