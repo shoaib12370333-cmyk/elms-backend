@@ -445,15 +445,24 @@ router.get('/announcements', async (req, res) => {
     sentToday: used,
     limits: { mailBatchSize: limits.mailBatchSize, mailDailyCap: limits.mailDailyCap },
     from: svc.senderAddress('support'),
+    senders: require('../services/emailService').availableSenders(),
     announcements: list.map((a) => ({ id: String(a._id), subject: a.subject, status: a.status, total: a.total, sent: a.sent, failed: a.failed, retryable: (a.failedUsers || []).length, lastError: a.lastError || null, createdAt: a.createdAt, finishedAt: a.finishedAt })),
   });
 });
+/** The sender the admin chose (support when none); it must be one that is set up. */
+function readSender(body) {
+  const id = String((body && body.sender) || 'support');
+  const senders = require('../services/emailService').availableSenders();
+  if (senders.some((s) => s.id === id)) return id;
+  if (!body || !body.sender) return senders.some((s) => s.id === 'support') ? 'support' : (senders[0] ? senders[0].id : 'support');
+  throw new Error('Choose one of the configured senders.');
+}
 function readAnnouncement(body) {
   const subject = String((body && body.subject) || '').trim();
   const text = String((body && body.body) || '').trim();
   if (subject.length < 3 || subject.length > 150) throw new Error('Subject must be 3 to 150 characters.');
   if (text.length < 10 || text.length > 8000) throw new Error('Message must be 10 to 8000 characters.');
-  return { subject, body: text };
+  return { subject, body: text, sender: readSender(body) };
 }
 router.post('/announcements/test', async (req, res) => {
   try {
@@ -466,6 +475,28 @@ router.post('/announcements/test', async (req, res) => {
     res.status(400).json({ success: false, error: err.message || 'Could not send the test mail.' });
   }
 });
+/**
+ * POST /api/admin/mail/send  { from, to, subject, body }
+ * One mail to any address, from one of the configured senders (GET /api/admin/announcements lists them as "senders").
+ */
+const mailLimiter = require('express-rate-limit')({ windowMs: 60 * 60 * 1000, max: 40, standardHeaders: true, legacyHeaders: false, message: { success: false, error: 'Too many mails from the admin panel. Try again in an hour.' } });
+router.post('/mail/send', mailLimiter, async (req, res) => {
+  try {
+    const to = String((req.body && req.body.to) || '').trim();
+    const subject = String((req.body && req.body.subject) || '').trim();
+    const body = String((req.body && req.body.body) || '').trim();
+    if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(to) || to.length > 254) throw new Error('Enter one valid email address to send to.');
+    if (subject.length < 2 || subject.length > 150 || /[\r\n]/.test(subject)) throw new Error('The subject must be 2 to 150 characters on one line.');
+    if (body.length < 2 || body.length > 8000) throw new Error('The message must be 2 to 8000 characters.');
+    const from = readSender({ sender: req.body && req.body.from });
+    await require('../services/emailService').sendCustomMail({ from, to, subject, body });
+    console.log('[admin-mail] ' + req.userId + ' sent a mail to ' + to + ' from ' + from);
+    res.json({ success: true, to, from });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message || 'Could not send the mail.' });
+  }
+});
+
 router.post('/announcements', async (req, res) => {
   try {
     const msg = readAnnouncement(req.body);

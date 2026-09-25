@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const announcementSchema = new mongoose.Schema(
   {
     subject: { type: String, required: true, trim: true, maxlength: 150 },
+    sender: { type: String, default: 'support' }, // which configured sender (support, billing, ...) it goes from
     body: { type: String, required: true, maxlength: 8000 },
     status: { type: String, enum: ['sending', 'paused', 'done', 'cancelled'], default: 'sending', index: true },
     total: { type: Number, default: 0 },

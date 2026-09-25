@@ -40,12 +40,12 @@ async function countRecipients() {
   return User.countDocuments(recipientFilter);
 }
 
-async function startAnnouncement({ subject, body, createdBy }) {
+async function startAnnouncement({ subject, body, createdBy, sender = 'support' }) {
   const running = await Announcement.findOne({ status: { $in: ['sending', 'paused'] } });
   if (running) throw new Error('Another announcement is still being sent. Cancel or wait for it first.');
   const total = await countRecipients();
   if (!total) throw new Error('There are no users to send to.');
-  return Announcement.create({ subject, body, total, createdBy });
+  return Announcement.create({ subject, body, total, createdBy, sender });
 }
 
 const MAX_FAILED_KEPT = 2000;
@@ -94,7 +94,7 @@ async function sendNextBatch() {
   let lastError = null;
   for (const user of batch) {
     try {
-      await sendAnnouncementEmail({ to: user.email, subject: ann.subject, body: ann.body, unsubscribeUrl: unsubscribeUrl(user._id) });
+      await sendAnnouncementEmail({ to: user.email, subject: ann.subject, body: ann.body, unsubscribeUrl: unsubscribeUrl(user._id), sender: ann.sender || 'support' });
       sent++;
     } catch (err) {
       lastError = shortError(err);
@@ -149,8 +149,8 @@ async function retryFailed(id) {
   return list.length;
 }
 
-async function sendTest({ to, subject, body }) {
-  return sendAnnouncementEmail({ to, subject: '[TEST] ' + subject, body, unsubscribeUrl: 'https://elmstool.com/unsubscribe-test', listUnsubscribe: false });
+async function sendTest({ to, subject, body, sender = 'support' }) {
+  return sendAnnouncementEmail({ to, subject: '[TEST] ' + subject, body, unsubscribeUrl: 'https://elmstool.com/unsubscribe-test', listUnsubscribe: false, sender });
 }
 
 module.exports = { retryFailed, unsubscribeToken, verifyUnsubscribe, unsubscribeUrl, sentToday, countRecipients, startAnnouncement, sendNextBatch, sendTest, senderAddress };
