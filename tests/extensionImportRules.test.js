@@ -52,8 +52,16 @@ assert.strictEqual(level(withServer({ stores: [{ ...STORE_UK, amazonOk: false, a
 
 // ---- a loss is only a warning about the price ----
 checks = withServer({}, 0);
-assert.strictEqual(level(checks, 'profit'), 'bad', 'shown, in red');
+assert.strictEqual(level(checks, 'profit'), 'warn', 'shown as an amber warning, not a red error');
 assert.match(text(checks, 'profit'), /you lose/);
+assert.strictEqual(L.worstLevel(checks), 'warn', 'the chip is amber for a loss (nothing else is wrong with this product)');
+// a live listing that now loses, and "cannot make money at eBay prices", are warnings too
+const liveRow = { id: 'L2', status: 'published', storeId: 'S1', storeLabel: 'Trendy UK', sellPrice: 12.99, amazonPrice: 8, currency: 'GBP' };
+assert.strictEqual(level(L.buildChecks({ page: { ...PAGE, price: 11.5 }, server: { ...SERVER, existing: [liveRow] }, storeId: 'S1', settings: S, markup: 0, now: new Date('2026-03-10T12:00:00') }), 'livePrice'), 'warn');
+assert.strictEqual(level(L.buildChecks({ page: { ...PAGE, price: 14 }, server: SERVER, storeId: 'S1', settings: S, markup: 60, market: { available: true, exact: true, total: 137, count: 30, currency: 'GBP', min: 9.99, median: 13.49, max: 24 }, now: new Date('2026-03-10T12:00:00') }), 'market'), 'warn');
+// no check about money is an error (only real problems are: no price, unavailable, VeRO, not enough credits, already live, wrong Amazon site, no store when not allowed)
+const moneyIds = ['profit', 'market', 'livePrice'];
+for (const c of [...checks, ...withServer({}, 10), ...withServer({}, 30)]) assert.ok(!(moneyIds.includes(c.id) && c.level === 'bad'), c.id + ' must not be an error');
 
 // ---- what STOPS an import (the real source of the panel and the bulk panel) ----
 const src = fs.readFileSync(path.join(__dirname, '..', 'extension', 'content.js'), 'utf8');
@@ -73,11 +81,13 @@ assert.match(src, /bulkImportCost != null/, 'a bulk price of 0 stays 0 (it used 
 assert.ok(!/bulkImportCost\) \|\| 1/.test(src), 'no more "|| 1" on the bulk price');
 assert.match(src, /LOGIC\.costLabel\(credits\.importCost\)/, 'the button shows the price as set');
 assert.match(src, /importLossNote\(\)/, 'a loss is repeated after the import');
+assert.ok(!/'Loss '/.test(src), 'the chip no longer says a red "Loss"');
+assert.match(src, /lossy\s*\?\s*'⚠ '/, 'a loss makes the chip say "⚠ N warnings"');
 const popup = fs.readFileSync(path.join(__dirname, '..', 'extension', 'popup.js'), 'utf8');
 assert.match(popup, /credits\.importCost === 0/, 'the popup says "free" for a price of 0');
 
 // ---- the version moved, so Chrome offers the update ----
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-assert.strictEqual(manifest.version, '3.7.0');
+assert.strictEqual(manifest.version, '3.7.1');
 
 console.log('extension import rules tests passed');

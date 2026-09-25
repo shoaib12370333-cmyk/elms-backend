@@ -178,7 +178,8 @@
       const sell = priceAtMarkup(cost, markup);
       const r = evaluate(cost, sell, settings);
       const m = markup === '' || markup == null ? 0 : Number(markup) || 0;
-      if (r.profit < 0) add('profit', 'bad', 'At ' + m + '% markup you lose ' + money(-r.profit) + ' on every sale after eBay fees.');
+      // A loss is a WARNING (amber), never a stop: nothing in the panel or the server refuses an import because it would lose money.
+      if (r.profit < 0) add('profit', 'warn', 'At ' + m + '% markup you lose ' + money(-r.profit) + ' on every sale after eBay fees.');
       else if (r.margin < 10) add('profit', 'warn', 'Thin margin: you keep ' + money(r.profit) + ' (' + r.margin.toFixed(1) + '%) after eBay fees.');
     }
 
@@ -189,7 +190,7 @@
         const sell = priceAtMarkup(cost, markup);
         const even = breakEvenPrice(cost, settings);
         const lead = market.exact ? 'The' : 'Probably: the';
-        if (even != null && even > market.median) add('market', market.exact ? 'bad' : 'warn', lead + ' typical eBay price (' + money(market.median) + ') is below your break-even price (' + money(even) + '), so this product cannot make money at market prices.');
+        if (even != null && even > market.median) add('market', 'warn', lead + ' typical eBay price (' + money(market.median) + ') is below your break-even price (' + money(even) + '), so this product cannot make money at market prices.');
         else if (sell > market.median * 1.15) add('market', 'warn', 'Your price ' + money(sell) + ' is ' + Math.round((sell / market.median - 1) * 100) + '% above the typical eBay price (' + money(market.median) + '): it may not sell.');
         else if (sell <= market.median) add('market', 'ok', 'Your price ' + money(sell) + ' is at or below the typical eBay price (' + money(market.median) + ').');
         if (market.total >= 100) add('crowded', 'info', 'Crowded: eBay has about ' + market.total + ' similar listings.');
@@ -227,7 +228,7 @@
           const now2 = evaluate(cost, here.sellPrice, settings);
           if (Math.abs(change) >= 0.03) {
             const head = 'Amazon is now ' + money(cost) + ' (' + money(here.amazonPrice) + ' when you listed). ';
-            if (now2.profit < 0) add('livePrice', 'bad', head + 'At your eBay price of ' + money(here.sellPrice) + ' you now LOSE ' + money(-now2.profit) + ' per sale.');
+            if (now2.profit < 0) add('livePrice', 'warn', head + 'At your eBay price of ' + money(here.sellPrice) + ' you now LOSE ' + money(-now2.profit) + ' per sale.');
             else if (change > 0) add('livePrice', 'warn', head + 'At your eBay price you keep ' + money(now2.profit) + ' (' + now2.margin.toFixed(1) + '%).');
             else add('livePrice', 'info', head + 'You keep more now: ' + money(now2.profit) + ' (' + now2.margin.toFixed(1) + '%).');
           } else add('livePrice', 'ok', 'Amazon price unchanged since you listed (' + money(here.amazonPrice) + ').');
