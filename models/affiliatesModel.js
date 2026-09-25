@@ -28,6 +28,9 @@ async function listWithUsers(status) {
   return rows.map((r) => ({ ...affiliate(r), email: (byId.get(String(r.userId)) || {}).email || null, name: (byId.get(String(r.userId)) || {}).name || (byId.get(String(r.userId)) || {}).username || null }));
 }
 
+/** True when some user already has this as their referral code (an affiliate code must be different from every referral code). */
+async function referralCodeTaken(code) { return !!(await User.exists({ referralCode: code })); }
+
 async function attachUser(userId, affiliateId) {
   const res = await User.updateOne({ _id: userId, affiliateId: { $exists: false } }, { $set: { affiliateId } });
   return !!(res.modifiedCount || res.nModified);
@@ -95,7 +98,7 @@ async function voidForPurchase(purchaseId) {
 }
 
 module.exports = {
-  getByUserId, getById, getByCode, create, update, listWithUsers, attachUser, affiliateIdOfUser, signups,
+  getByUserId, getById, getByCode, create, update, listWithUsers, referralCodeTaken, attachUser, affiliateIdOfUser, signups,
   createCommission, commissionsFor, totals, createPayout, getPayout, openPayout, payoutsFor, updatePayout, deletePayout, listPayouts,
   claimAvailable, releasePayout, markPayoutPaid, voidForPurchase,
 };

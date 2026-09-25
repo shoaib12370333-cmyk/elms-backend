@@ -12,7 +12,8 @@ const rules = require('./affiliateRules');
 const model = require('../models/affiliatesModel');
 
 const frontendUrl = () => String(process.env.FRONTEND_URL || 'https://elmstool.com').replace(/\/+$/, '');
-const linkFor = (code) => frontendUrl() + '/?aff=' + encodeURIComponent(code);
+// The link carries only the code (?via=CODE), nothing that says "affiliate". Old ?aff= links still work in the site.
+const linkFor = (code) => frontendUrl() + '/?via=' + encodeURIComponent(code);
 const fail = rules.fail;
 
 async function settings() {
@@ -36,7 +37,9 @@ async function apply(user, { network, address, promo }) {
     row = await model.update(existing.id, { status: 'pending', payoutNetwork: payout.network, payoutAddress: payout.address, promo: text, adminNote: '' });
   } else {
     for (let i = 0; i < 6 && !row; i += 1) {
-      try { row = await model.create({ userId: user.id, code: rules.newCode(), payoutNetwork: payout.network, payoutAddress: payout.address, promo: text }); } catch (err) { if (!(err && err.code === 11000)) throw err; }
+      const code = rules.newCode();
+      if (await model.referralCodeTaken(code)) continue;
+      try { row = await model.create({ userId: user.id, code, payoutNetwork: payout.network, payoutAddress: payout.address, promo: text }); } catch (err) { if (!(err && err.code === 11000)) throw err; }
     }
     if (!row) throw fail('Could not create your affiliate code. Please try again.', 500);
   }
