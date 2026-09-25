@@ -195,7 +195,7 @@ router.get('/plans', async (req, res) => {
  * dashboard: Catalog > Products > your product > the price you created).
  */
 router.post('/plans', async (req, res) => {
-  const { name, priceUsd, credits, paddlePriceId, maxEbayAccounts } = req.body;
+  const { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, yearlyPriceUsd } = req.body;
 
   if (!name || !(Number(priceUsd) > 0) || !(Number(credits) > 0)) {
     return res.status(400).json({ success: false, error: 'A name, a price and the number of credits are required.' });
@@ -209,6 +209,7 @@ router.post('/plans', async (req, res) => {
     credits: Number(credits),
     paddlePriceId: paddlePriceId || null,
     maxEbayAccounts: Number(maxEbayAccounts) > 0 ? Number(maxEbayAccounts) : null,
+    yearlyPriceUsd,
   });
   res.json({ success: true, plan });
 });
@@ -237,6 +238,22 @@ router.delete('/plans/:id', async (req, res) => {
     return res.status(404).json({ success: false, error: 'Plan not found.' });
   }
   res.json({ success: true });
+});
+
+/**
+ * GET /api/admin/settings/custom-plan  ->  the custom plan a buyer builds (dollars a month, credits per dollar, yearly discount, eBay stores)
+ * PUT /api/admin/settings/custom-plan  ->  saves it (only the fields sent change)
+ */
+router.get('/settings/custom-plan', async (req, res) => {
+  res.json({ success: true, custom: await require('../models/settingsModel').getCustomPlanSettings() });
+});
+
+router.put('/settings/custom-plan', async (req, res) => {
+  try {
+    res.json({ success: true, custom: await require('../models/settingsModel').updateCustomPlanSettings(req.body || {}) });
+  } catch (err) {
+    res.status(err.userFacing ? err.statusCode : 500).json({ success: false, error: err.userFacing ? err.message : 'Could not save the custom plan settings.' });
+  }
 });
 
 /**

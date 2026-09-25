@@ -3,8 +3,8 @@ const Plan = require('./schemas/Plan');
 /**
  * Admin-only: creates a new credit plan, linked to a Paddle price ID.
  */
-async function createPlan({ name, priceUsd, credits, paddlePriceId, maxEbayAccounts }) {
-  const doc = await Plan.create({ name, priceUsd, credits, paddlePriceId: paddlePriceId || null, maxEbayAccounts: maxEbayAccounts || null });
+async function createPlan({ name, priceUsd, credits, paddlePriceId, maxEbayAccounts, yearlyPriceUsd }) {
+  const doc = await Plan.create({ name, priceUsd, credits, paddlePriceId: paddlePriceId || null, maxEbayAccounts: maxEbayAccounts || null, yearlyPriceUsd: Number(yearlyPriceUsd) > 0 ? Number(yearlyPriceUsd) : null });
   return serialize(doc);
 }
 
@@ -12,7 +12,7 @@ async function createPlan({ name, priceUsd, credits, paddlePriceId, maxEbayAccou
  * Admin-only: updates an existing plan's fields. Only provided (non-undefined)
  * fields are changed.
  */
-async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, active }) {
+async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, active, yearlyPriceUsd }) {
   const update = {};
   if (name !== undefined) update.name = name;
   if (priceUsd !== undefined) update.priceUsd = priceUsd;
@@ -20,6 +20,7 @@ async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, maxEbayA
   if (paddlePriceId !== undefined) update.paddlePriceId = paddlePriceId || null;
   if (maxEbayAccounts !== undefined) update.maxEbayAccounts = Number(maxEbayAccounts) > 0 ? Number(maxEbayAccounts) : null;
   if (active !== undefined) update.active = active;
+  if (yearlyPriceUsd !== undefined) update.yearlyPriceUsd = Number(yearlyPriceUsd) > 0 ? Number(yearlyPriceUsd) : null; // empty switches the yearly option off
 
   const doc = await Plan.findByIdAndUpdate(id, update, { new: true });
   return doc ? serialize(doc) : null;
@@ -77,6 +78,7 @@ function serialize(doc) {
     credits: obj.credits,
     paddlePriceId: obj.paddlePriceId || null,
     maxEbayAccounts: obj.maxEbayAccounts || null,
+    yearlyPriceUsd: obj.yearlyPriceUsd > 0 ? obj.yearlyPriceUsd : null,
     active: obj.active,
   };
 }

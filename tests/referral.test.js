@@ -14,6 +14,7 @@ const addUser = (id, email, extra = {}) => db.users.set(id, { id, email, emailKe
 const cfg = { enabled: true, discountPercent: 10, discountUses: 1, discountDays: 0, rewardCredits: 0 };
 
 stub('models/settingsModel', {
+  getCustomPlanSettings: async () => ({ enabled: false }),
   getReferralSettings: async () => ({ ...cfg }),
   updateReferralSettings: async (i) => { Object.assign(cfg, i); return { ...cfg }; },
   getSettings: async () => ({}),

@@ -19,6 +19,8 @@ const purchaseSchema = new mongoose.Schema(
     status: { type: String, enum: ['completed', 'refunded'], default: 'completed' },
     // for the invoice: what was bought, how it was paid, and its number (given the first time an invoice is made)
     planName: { type: String, default: null },
+    billing: { type: String, default: null }, // 'monthly' | 'yearly' | null (a one-time pack)
+    termMonths: { type: Number, default: 0 },
     paymentMethod: { type: String, default: null }, // what the buyer used, e.g. "Visa card", "PayPal"; empty = the provider's usual one
     invoiceNo: { type: String, index: { unique: true, sparse: true } }, // no default: an unnumbered purchase has no field at all (sparse unique)
   },

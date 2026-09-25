@@ -38,6 +38,11 @@ const userSchema = new mongoose.Schema(
     veroWords: { type: [String], default: [] },
     // Name of the plan the user bought last (shown under their name). null = free plan.
     planName: { type: String, default: null },
+    // A monthly / yearly plan runs until planExpiresAt; then the credits end and the eBay-account limit goes back to what it was
+    // before the plan (planPrevMaxEbayAccounts). null = no term (free, or a pack bought before terms existed).
+    planExpiresAt: { type: Date, default: null },
+    planTerm: { type: String, enum: ['monthly', 'yearly', null], default: null },
+    planPrevMaxEbayAccounts: { type: Number, default: null },
     suspendedAt: { type: Date, default: null },
     suspendedReason: { type: String, default: null },
     suspendedNote: { type: String, default: null }, // private, for the admins

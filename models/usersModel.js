@@ -436,6 +436,8 @@ function serialize(doc) {
     autoOrderMode: obj.autoOrderMode || 'disabled',
     fullAutoConfirmedAt: obj.fullAutoConfirmedAt || null,
     planName: obj.planName || null,
+    planExpiresAt: obj.planExpiresAt || null,
+    planTerm: obj.planTerm || null,
     suspendedAt: obj.suspendedAt || null,
     suspendedReason: obj.suspendedReason || null,
     createdAt: obj.createdAt,

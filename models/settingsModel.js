@@ -152,6 +152,19 @@ async function updateReferralSettings(input = {}) {
   return getReferralSettings();
 }
 
+async function getCustomPlanSettings() {
+  const doc = await Settings.findOne({ key: 'global' }).lean();
+  const { normalizeCustomSettings } = require('../services/planPricing');
+  try { return normalizeCustomSettings((doc && doc.customPlan) || {}); } catch (_) { return normalizeCustomSettings({}); }
+}
+
+async function updateCustomPlanSettings(input = {}) {
+  const { normalizeCustomSettings } = require('../services/planPricing');
+  const next = normalizeCustomSettings({ ...(await getCustomPlanSettings()), ...input });
+  await Settings.findOneAndUpdate({ key: 'global' }, { customPlan: next }, { new: true, upsert: true });
+  return next;
+}
+
 const LIMIT_DEFAULTS = { bulkImportMax: 25, bulkJobMax: 1000, mailBatchSize: 20, mailDailyCap: 200, productCacheDays: 7 };
 const LIMIT_RANGES = { bulkImportMax: [1, 50], bulkJobMax: [1, 5000], mailBatchSize: [1, 100], mailDailyCap: [1, 100000], productCacheDays: [1, 90] };
 
@@ -300,4 +313,6 @@ module.exports = {
   updateLimits,
   getReferralSettings,
   updateReferralSettings,
+  getCustomPlanSettings,
+  updateCustomPlanSettings,
 };
