@@ -350,7 +350,37 @@ async function sendAdminAlert({ subject, lines }) {
   }, 'Admin alert');
 }
 
-async function sendAnnouncementEmail({ to, subject, body, unsubscribeUrl, listUnsubscribe = true }) {
+const SENDER_LABELS = { noreply: 'ELMS (no-reply)', support: 'Support', billing: 'Billing', security: 'Security', admin: 'Admin' };
+
+/** A sender counts as set up when its own address or its own mailbox login is in the environment (noreply: SMTP_FROM or SMTP_USER). */
+function senderConfigured(kind) {
+  const def = SENDERS[kind];
+  if (!def) return false;
+  if (process.env[def.env]) return true;
+  if (kind === 'noreply') return !!(process.env.SMTP_FROM || process.env.SMTP_USER);
+  return credentialsFor(kind).own;
+}
+
+/** The senders the admin can choose from, with the real address each one sends as. Senders that are not set up are left out. */
+function availableSenders() {
+  return Object.keys(SENDERS)
+    .filter((kind) => senderConfigured(kind) && senderAddress(kind))
+    .map((kind) => ({ id: kind, label: SENDER_LABELS[kind] || kind, address: senderAddress(kind) }));
+}
+
+/** One mail written by the admin, to any address, from one of the configured senders. */
+async function sendCustomMail({ from, to, subject, body }) {
+  const kind = String(from || '');
+  if (!availableSenders().some((s) => s.id === kind)) throw new Error('Choose one of the configured senders.');
+  return sendFrom(kind, {
+    to,
+    subject,
+    text: body,
+    html: wrapHtml(subject, paragraphsHtml(body)),
+  }, 'Admin mail');
+}
+
+async function sendAnnouncementEmail({ to, subject, body, unsubscribeUrl, listUnsubscribe = true, sender = 'support' }) {
   const appName = process.env.APP_NAME || 'ELMS';
   const footerText = '\n\n--\nYou get this because you have an ' + appName + ' account. Unsubscribe: ' + unsubscribeUrl;
   const footerHtml = '<p style="margin-top:28px;font-size:12px;color:#6b7280">You get this because you have an ' + esc(appName) + ' account. <a href="' + esc(unsubscribeUrl) + '">Unsubscribe</a></p>';
@@ -361,7 +391,7 @@ async function sendAnnouncementEmail({ to, subject, body, unsubscribeUrl, listUn
     html: wrapHtml(subject, paragraphsHtml(body), footerHtml),
   };
   if (listUnsubscribe) message.headers = { 'List-Unsubscribe': '<' + unsubscribeUrl + '>' };
-  return sendFrom('support', message, 'Announcement');
+  return sendFrom(SENDERS[sender] ? sender : 'support', message, 'Announcement');
 }
 
 function buildSecurityMessage({ to, subject, title, paragraphs, kind = 'security' }) {
@@ -463,4 +493,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
