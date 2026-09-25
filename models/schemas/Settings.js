@@ -14,6 +14,10 @@ const settingsSchema = new mongoose.Schema(
     welcomeBonusEnabled: { type: Boolean, default: false },
     welcomeBonusCredits: { type: Number, default: 10 },
 
+    // May a person import products before any eBay store is connected? (extension, website, bulk). The draft is saved without a store
+    // and one is chosen when it is published. Off = the person is asked to connect a store first.
+    importWithoutEbayAccount: { type: Boolean, default: true },
+
     // Published Chrome Web Store extension ID used for production CORS.
     // Admin-configurable so no redeploy is required when the extension is published.
     chromeExtensionId: { type: String, default: null, trim: true },

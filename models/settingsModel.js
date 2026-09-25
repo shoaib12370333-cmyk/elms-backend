@@ -32,6 +32,12 @@ async function updateWelcomeBonusSettings({ welcomeBonusEnabled, welcomeBonusCre
   return serialize(doc);
 }
 
+/** Admin-only: may a person import products before any eBay store is connected? */
+async function updateImportPolicy({ importWithoutEbayAccount }) {
+  const doc = await Settings.findOneAndUpdate({ key: 'global' }, { importWithoutEbayAccount: !!importWithoutEbayAccount }, { new: true, upsert: true });
+  return serialize(doc);
+}
+
 async function updateChromeExtensionId(extensionId) {
   const clean = String(extensionId || '').trim().toLowerCase();
   const update = { chromeExtensionId: clean || null };
@@ -207,6 +213,7 @@ function serialize(doc) {
     ...serializeAi(obj),
     welcomeBonusEnabled: obj.welcomeBonusEnabled,
     welcomeBonusCredits: obj.welcomeBonusCredits,
+    importWithoutEbayAccount: obj.importWithoutEbayAccount !== false,
     chromeExtensionId: obj.chromeExtensionId || null,
     extensionRegistrationUrl: obj.extensionRegistrationUrl || null,
     extensionBackendUrl: obj.extensionBackendUrl || 'https://elms-backend-1-tr5h.onrender.com',
@@ -313,6 +320,7 @@ async function applyActionCostOverridesOnStartup() {
 module.exports = {
   getSettings,
   updateWelcomeBonusSettings,
+  updateImportPolicy,
   updateChromeExtensionId,
   updateExtensionRegistrationUrl,
   updateExtensionBackendUrl,

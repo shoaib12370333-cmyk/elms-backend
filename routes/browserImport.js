@@ -6,7 +6,7 @@ const { hasCredits, getUserById } = require('../models/usersModel');
 const { withCredits } = require('../services/creditService');
 const { requireAuth } = require('../middleware/requireAuth');
 const { isValidAmazonUrl, assertAmazonMatchesStore } = require('../services/validationService');
-const { storeForImport, alreadyListedMessage } = require('../services/extensionService');
+const { storeForImport, assertStoreForImport, alreadyListedMessage } = require('../services/extensionService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { materializeImageUrls } = require('../services/imageStorageService');
 const { requireAsinSku } = require('../services/skuService');
@@ -140,6 +140,7 @@ router.post('/', requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, error: 'A valid Amazon product URL is required.' });
     }
     const activeEbayAccount = await storeForImport(req.userId, ebayAccountId);
+    await assertStoreForImport(activeEbayAccount); // no store at all: only when the admin allows it
     try {
       assertAmazonMatchesStore(amazonUrl, activeEbayAccount?.marketplaceId || null);
     } catch (err) {

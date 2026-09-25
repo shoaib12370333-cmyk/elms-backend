@@ -1,10 +1,11 @@
 const BulkImportJob = require('./schemas/BulkImportJob');
 
-async function createBulkImportJob(userId, { ebayAccountId, markupPercent, items }) {
+async function createBulkImportJob(userId, { ebayAccountId, markupPercent, items, source }) {
   const doc = await BulkImportJob.create({
     userId,
     ebayAccountId: ebayAccountId || null,
     markupPercent: markupPercent || 0,
+    source: source === 'extension' ? 'extension' : 'website',
     items,
     total: items.length,
   });
