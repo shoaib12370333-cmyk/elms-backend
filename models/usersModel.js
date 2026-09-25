@@ -21,6 +21,18 @@ function notifyNewUser(email, method) {
   } catch (e) { /* ignore */ }
 }
 
+// The welcome mail for a brand-new account (`credits` = what the account was given, 0 = none). Never blocks or breaks sign-up.
+function sendWelcome({ email, name }, credits) {
+  try {
+    require('../services/emailService').sendWelcomeEmail({ to: email, name, credits }).catch((err) => console.error('welcome email failed:', err.message));
+  } catch (err) {
+    console.error('welcome email failed:', err.message);
+  }
+}
+
+// What is stored on a new account so the welcome popup can show the credits it really got.
+const welcomeFields = (credits) => (credits > 0 ? { welcomeCredits: credits } : {});
+
 const { emailKey } = require('../services/signupBonusGuard');
 
 /**
@@ -70,8 +82,9 @@ async function findOrCreateUser({ googleId, email, name, picture }, { welcomeBon
     } else {
       // A genuinely brand-new account - apply the welcome bonus if enabled.
       const creditBalance = welcomeBonus ? await getWelcomeBonusAmount() : 0;
-      user = await User.create({ googleId, email, emailKey: emailKey(email), name, picture, creditBalance });
+      user = await User.create({ googleId, email, emailKey: emailKey(email), name, picture, creditBalance, ...welcomeFields(creditBalance) });
       notifyNewUser(email, 'Google');
+      sendWelcome({ email, name }, creditBalance);
     }
   } else {
     // Keep the profile info fresh (name/picture can change on Google's side).
@@ -124,7 +137,7 @@ async function registerWithPassword({ username, email, password }, { welcomeBonu
   let user;
   try {
     // unverifiedPassword: nothing has shown yet that this person owns the mailbox (see the User schema).
-    user = await User.create({ username, email, emailKey: emailKey(email), passwordHash, unverifiedPassword: true, name: username, creditBalance });
+    user = await User.create({ username, email, emailKey: emailKey(email), passwordHash, unverifiedPassword: true, name: username, creditBalance, ...welcomeFields(creditBalance) });
   } catch (err) {
     if (err && err.code === 11000) { // the same address or username was registered a moment ago
       const dup = new Error('An account with this email or username already exists. Please sign in.');
@@ -134,8 +147,14 @@ async function registerWithPassword({ username, email, password }, { welcomeBonu
     throw err;
   }
   notifyNewUser(email, 'email and password');
+  sendWelcome({ email, name: username }, creditBalance);
 
   return serialize(user);
+}
+
+/** The user closed the welcome popup: it is not shown again, on any device. The first close is kept. */
+async function markWelcomePopupSeen(userId) {
+  await User.updateOne({ _id: userId, welcomePopupSeenAt: null }, { $set: { welcomePopupSeenAt: new Date() } });
 }
 
 /**
@@ -473,6 +492,8 @@ function serialize(doc) {
     planTerm: obj.planTerm || null,
     suspendedAt: obj.suspendedAt || null,
     suspendedReason: obj.suspendedReason || null,
+    // the welcome popup: only for an account that was given welcome credits and whose owner has not closed it yet
+    welcomePopup: obj.welcomeCredits > 0 && !obj.welcomePopupSeenAt ? { credits: obj.welcomeCredits } : null,
     createdAt: obj.createdAt,
   };
 }
@@ -480,6 +501,7 @@ function serialize(doc) {
 module.exports = {
   findOrCreateUser,
   registerWithPassword,
+  markWelcomePopupSeen,
   loginWithPassword,
   getUserById,
   getEbayRefreshToken,

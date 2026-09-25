@@ -33,6 +33,10 @@ const userSchema = new mongoose.Schema(
     // Credit balance for Amazon API usage (import fetches + stock checks).
     // Assigned manually by an admin - see routes/admin.js.
     creditBalance: { type: Number, default: 0 },
+    // The welcome credits this account was given when it was created (what the welcome popup shows; not set when it got none),
+    // and when the user closed that popup (it is shown once, on any device).
+    welcomeCredits: { type: Number, default: undefined },
+    welcomePopupSeenAt: { type: Date, default: null },
     emailKey: { type: String, default: null, index: true }, // the mailbox with dots / +tags removed (services/signupBonusGuard.js)
 
     // Messages page: how ELMS answers new buyer messages. off = never, draft = AI writes a draft for you
