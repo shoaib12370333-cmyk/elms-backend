@@ -20,11 +20,8 @@ const ACTION_COSTS = {
   STOCK_MONITORING: 1, // one Amazon stock check for a published listing
   PRICE_MONITORING: 0, // Amazon price check for a published listing - FREE (piggybacked on the stock check's Canopy call in jobs/stockMonitor.js, so it costs no extra Canopy call or credit)
 
-  // Order sync is charged once per day (not per sync run) based on the
-  // user's chosen mode - see jobs/orderSync.js for where this daily charge
-  // is applied. Realtime costs more since it requires maintaining a live
-  // eBay webhook subscription in addition to the safety-net poll.
-  ORDER_SYNC_REALTIME_DAILY: 10,
+  // Order sync: real-time mode is FREE - it has no key here on purpose, so no saved admin override can bring a price back (see
+  // jobs/orderSync.js). Only the polling-only mode is charged, once per day (not per sync run).
   ORDER_SYNC_POLLING_DAILY: 5,
 
   // Not yet implemented - reserved here so the cost model doesn't need to
@@ -66,8 +63,7 @@ const ACTION_COST_METADATA = [
   { key: 'VARIANT_REFRESH', label: 'Variant refresh', usesCanopy: true, description: 'Re-fetching variant data for an existing imported product.' },
   { key: 'STOCK_MONITORING', label: 'Stock monitoring (daily)', usesCanopy: true, description: 'Automatic daily in-stock/out-of-stock check for every published listing.' },
   { key: 'PRICE_MONITORING', label: 'Price monitoring (daily)', usesCanopy: true, description: 'Automatic daily Amazon price check - reuses the same Canopy call as Stock monitoring, so it never adds an extra Canopy call even though it does read Canopy data.' },
-  { key: 'ORDER_SYNC_REALTIME_DAILY', label: 'Order sync - real-time (per day)', usesCanopy: false, description: 'Daily charge for a user on real-time order sync (eBay webhook + safety-net poll).' },
-  { key: 'ORDER_SYNC_POLLING_DAILY', label: 'Order sync - polling only (per day)', usesCanopy: false, description: 'Daily charge for a user on polling-only order sync (no live webhook).' },
+  { key: 'ORDER_SYNC_POLLING_DAILY', label: 'Order sync - polling only (per day)', usesCanopy: false, description: 'Daily charge for a user on polling-only order sync. Real-time order sync is free.' },
   { key: 'AUTO_ORDER', label: 'Auto order (planned)', usesCanopy: false, description: 'Placing/assisting an Amazon order for a buyer’s eBay order. Not yet implemented.' },
   { key: 'TRACKING_CONVERSION', label: 'Tracking conversion (planned)', usesCanopy: false, description: 'Converting/validating a tracking number for eBay. Not yet implemented.' },
   { key: 'KEYWORD_RANK_CHECKER', label: 'Keyword Rank Checker', usesCanopy: true, description: 'One keyword-vs-ASIN rank lookup - may page through several Canopy search-result pages internally for a single lookup.' },
