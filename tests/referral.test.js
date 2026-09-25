@@ -93,6 +93,7 @@ stub('services/sessionService', { issueSessionToken: () => 'token' });
 stub('services/googleAuthService', { verifyGoogleToken: async () => ({ email: 'gnew@x.com', googleId: 'gid', name: 'G' }) });
 stub('services/accessGuard', { checkNewAccount: async () => null, blockedError: (d) => Object.assign(new Error('blocked'), { statusCode: 403, blocked: d }) });
 stub('services/signupBonusGuard', { ...realGuard, welcomeBonusDecision: async () => ({ allowed: true }) });
+stub('services/emailQualityService', { checkEmailQuality: async () => ({ ok: true }) }); // no DNS in tests
 stub('services/passwordService', { hashPassword: async (p) => 'hash:' + p, verifyPassword: async () => true });
 
 const referrals = require('../services/referralService');
