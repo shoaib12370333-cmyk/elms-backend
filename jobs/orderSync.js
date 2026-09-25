@@ -17,18 +17,9 @@ async function syncOneAccount(userId, accountId, ebayUsername, lastSyncAttemptAt
 }
 
 /**
- * The real-time fee pays for eBay's live order notification. Until that notification is really set up on this server (the token and the
- * public address eBay verifies), the orders arrive by polling only, so the polling fee is what is charged - nobody pays extra for a
- * live feed that is not there.
- */
-function realtimeNotificationsConfigured() {
-  return !!(process.env.EBAY_ORDER_NOTIFICATION_VERIFICATION_TOKEN && process.env.EBAY_ORDER_NOTIFICATION_ENDPOINT_URL);
-}
-
-/**
- * Charges a user's daily order-sync credit fee, once per calendar day,
- * based on their chosen mode (realtime costs more - see
- * config/actionCosts.js). Free users (out of credits) still get synced;
+ * Charges a user's daily order-sync credit fee, once per calendar day.
+ * Real-time order sync is free; only the polling-only mode is charged
+ * (ORDER_SYNC_POLLING_DAILY in config/actionCosts.js). Free users (out of credits) still get synced;
  * we don't want a billing hiccup to cause a seller to silently miss
  * orders, since that has real business consequences for them. The charge
  * simply doesn't succeed and we move on, exactly like the old FREE model
@@ -47,12 +38,11 @@ async function chargeDailyOrderSyncFeeIfDue(user) {
   );
   if (!claimed) return; // already handled today
 
-  const cost = (claimed.orderSyncMode || user.orderSyncMode) === 'realtime' && realtimeNotificationsConfigured()
-    ? ACTION_COSTS.ORDER_SYNC_REALTIME_DAILY
-    : ACTION_COSTS.ORDER_SYNC_POLLING_DAILY;
+  // Real-time is the default mode (a missing value counts as real-time) and it costs nothing.
+  if ((claimed.orderSyncMode || user.orderSyncMode || 'realtime') === 'realtime') return;
 
   // A user without enough credits is still synced (missing orders would cost them real money); that day is simply free.
-  await spendCredit(user._id.toString(), cost);
+  await spendCredit(user._id.toString(), ACTION_COSTS.ORDER_SYNC_POLLING_DAILY);
 }
 
 /**
@@ -163,4 +153,4 @@ function startOrderSync() {
   console.log('[order-sync] Order sync scheduled (every 5 minutes, per-user interval respected).');
 }
 
-module.exports = { startOrderSync, runOrderSync, triggerImmediateSyncForNotification, chargeDailyOrderSyncFeeIfDue, realtimeNotificationsConfigured };
+module.exports = { startOrderSync, runOrderSync, triggerImmediateSyncForNotification, chargeDailyOrderSyncFeeIfDue };

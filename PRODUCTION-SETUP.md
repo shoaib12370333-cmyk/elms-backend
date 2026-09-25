@@ -24,9 +24,9 @@ Every live Inventory API offer needs a payment policy, fulfillment/shipping poli
 ## Order sync
 
 - Polling mode: periodic Fulfillment API sync, with a configurable per-user interval.
-- Real-time mode: the same polling safety net plus the signed eBay `ORDER_CONFIRMATION` webhook endpoint.
+- Real-time mode (free, no daily credit fee): the same polling safety net plus the signed eBay `ORDER_CONFIRMATION` webhook endpoint. Only the polling-only mode is charged (`ORDER_SYNC_POLLING_DAILY`).
 - The webhook endpoints (mounted in `server.js`) are `/api/ebay/order-notification` (ORDER_CONFIRMATION), `/api/ebay/message-notification` (NEW_MESSAGE) and `/api/ebay/account-deletion` (Marketplace Account Deletion, required by eBay). Each one answers eBay's `challenge_code` check with SHA-256(challenge code + verification token + the exact public endpoint URL), and each needs its own two environment variables: `EBAY_ORDER_NOTIFICATION_VERIFICATION_TOKEN` + `EBAY_ORDER_NOTIFICATION_ENDPOINT_URL`, `EBAY_MESSAGE_NOTIFICATION_VERIFICATION_TOKEN` + `EBAY_MESSAGE_NOTIFICATION_ENDPOINT_URL`, `EBAY_ACCOUNT_DELETION_VERIFICATION_TOKEN` + `EBAY_ACCOUNT_DELETION_ENDPOINT_URL`. Without them eBay cannot verify the endpoint (a GET with a `challenge_code` answers 500 and says which variable is missing).
-- Until the order-notification variables are set there is no live order feed: users on "real-time" order sync are charged the polling fee, not the higher real-time fee.
+- Until the order-notification variables are set AND eBay has a subscription for the seller, there is no live order feed: "real-time" users are then synced by the safety-net poll at their chosen interval (still free).
 - eBay user-based notification subscriptions require the notification subscription OAuth scope and a public HTTPS endpoint. The actual eBay subscription still needs to be created/enabled in eBay's Notification API/developer workflow unless an approved subscription-management workflow is added.
 
 ## Tracking conversion

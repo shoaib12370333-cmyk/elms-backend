@@ -77,8 +77,8 @@ const userSchema = new mongoose.Schema(
     // Order sync mode: 'realtime' uses eBay's push notifications (webhook)
     // plus a safety-net poll every orderSyncIntervalMinutes in case a
     // webhook is ever missed; 'polling' relies entirely on the interval.
-    // Costs differ (see config/actionCosts.js) since realtime needs a
-    // standing webhook subscription kept alive daily.
+    // Real-time is free; only 'polling' is charged a daily fee (see
+    // config/actionCosts.js).
     orderSyncMode: { type: String, enum: ['realtime', 'polling'], default: 'realtime' },
     orderSyncIntervalMinutes: { type: Number, default: 15 },
     lastOrderSyncCreditChargeAt: { type: Date, default: null },
