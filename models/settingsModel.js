@@ -184,13 +184,15 @@ async function updateCustomPlanSettings(input = {}) {
   return next;
 }
 
-const LIMIT_DEFAULTS = { bulkImportMax: 25, bulkJobMax: 1000, mailBatchSize: 20, mailDailyCap: 200, productCacheDays: 7 };
-const LIMIT_RANGES = { bulkImportMax: [1, 50], bulkJobMax: [1, 5000], mailBatchSize: [1, 100], mailDailyCap: [1, 100000], productCacheDays: [1, 90] };
+const LIMIT_DEFAULTS = { bulkImportMax: 25, bulkJobMax: 2500, mailBatchSize: 20, mailDailyCap: 200, productCacheDays: 7 };
+const LIMIT_RANGES = { bulkImportMax: [1, 50], bulkJobMax: [1, 2500], mailBatchSize: [1, 100], mailDailyCap: [1, 100000], productCacheDays: [1, 90] };
 
 async function getLimits() {
   const doc = await Settings.findOne({ key: 'global' }).lean();
   const out = {};
   for (const k of Object.keys(LIMIT_DEFAULTS)) out[k] = Number(doc && doc[k]) || LIMIT_DEFAULTS[k];
+  // A value saved while a higher cap was allowed (5000) is brought down to the cap.
+  for (const k of Object.keys(LIMIT_RANGES)) out[k] = Math.min(Math.max(out[k], LIMIT_RANGES[k][0]), LIMIT_RANGES[k][1]);
   return out;
 }
 

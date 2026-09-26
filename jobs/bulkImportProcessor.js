@@ -8,8 +8,13 @@ const { setCachedProduct } = require('../services/productCacheService');
 
 const MAX_SUBMIT_ATTEMPTS = 5;
 const ITEM_TIMEOUT_MS = 30 * 60 * 1000; // give up on a single item after 30 minutes of polling
-const POLL_BATCH_SIZE = 100; // items polled per tick (job runs once a minute - see startBulkImportProcessor)
-const POLL_CONCURRENCY = 10;
+// The Easyparser plan takes this many products a minute (EASYPARSER_PER_MINUTE, 500 on our plan). The processor runs once a minute, so it
+// sends at most this many new products and reads at most this many finished ones per run; sending everything at once made Easyparser
+// answer "rate limit" for the rest, and those products were then given up on.
+const PER_MINUTE = Math.max(10, Number(process.env.EASYPARSER_PER_MINUTE) || 500);
+const SUBMIT_BATCH_SIZE = Math.floor(PER_MINUTE * 0.9); // a little under the limit, so a run never trips it
+const POLL_BATCH_SIZE = PER_MINUTE; // items read (and saved as drafts) per run of one job
+const POLL_CONCURRENCY = 20;
 const GIVE_UP_ON_CREDITS_MS = 24 * 60 * 60 * 1000; // products that could not be saved for lack of credits are not waited for longer than this
 
 /** A minimal stand-in for Express's `req`, only used by materializeImageUrls to build an
@@ -22,13 +27,14 @@ function recount(job) {
   job.failed = job.items.filter((i) => i.status === 'error').length;
 }
 
-/** Submits every not-yet-submitted item of one job to Easyparser in a single bulk call. */
+/** Submits the next slice (at most SUBMIT_BATCH_SIZE) of the not-yet-submitted items of one job to Easyparser in one bulk call. */
 async function submitPendingItems(job) {
-  const toSubmit = job.items.filter((i) => i.status === 'pending' && !i.queryId);
-  if (!toSubmit.length) {
+  const unsent = job.items.filter((i) => i.status === 'pending' && !i.queryId);
+  if (!unsent.length) {
     job.status = 'polling';
     return;
   }
+  const toSubmit = unsent.slice(0, SUBMIT_BATCH_SIZE); // the rest goes in the next runs
 
   const byDomain = new Map();
   for (const item of toSubmit) {
@@ -56,6 +62,7 @@ async function submitPendingItems(job) {
     const item = toSubmit.find((i) => i.asin === accepted.asin && toEasyparserDomain(i.country) === accepted.domain && !i.queryId);
     if (item) { item.queryId = accepted.queryId; item.submittedAt = now; }
   }
+  if (result.accepted.length) job.submitAttempts = 0; // progress: earlier "not taken yet" answers (the per-minute limit) do not count against the job
   let waitingReason = null;
   for (const rejected of result.rejected) {
     const item = toSubmit.find((i) => i.asin === rejected.asin && toEasyparserDomain(i.country) === rejected.domain && !i.queryId);
@@ -68,7 +75,7 @@ async function submitPendingItems(job) {
   // After MAX_SUBMIT_ATTEMPTS they end as errors, so a job never hangs on them.
   const waiting = toSubmit.filter((i) => i.status === 'pending' && !i.queryId);
   if (waiting.length) {
-    job.submitAttempts += 1;
+    if (!result.accepted.length) job.submitAttempts += 1; // only a run that got nothing through counts as an attempt
     job.lastError = waitingReason || 'Easyparser did not take ' + waiting.length + ' product' + (waiting.length === 1 ? '' : 's') + ' yet; sending them again.';
     if (job.submitAttempts >= MAX_SUBMIT_ATTEMPTS) {
       for (const item of waiting) { item.status = 'error'; item.error = waitingReason || 'Easyparser did not take this product.'; }

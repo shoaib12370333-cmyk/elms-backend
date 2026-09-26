@@ -132,7 +132,7 @@ const fakeSave = async (userId, product) => { savedDrafts.push(product.asin); re
   assert.strictEqual(job5.items[1].status, 'pending', 'not an error yet: it is tried again');
   assert.strictEqual(job5.items[1].queryId, null);
   assert.strictEqual(job5.status, 'polling');
-  assert.strictEqual(job5.submitAttempts, 1);
+  assert.strictEqual(job5.submitAttempts, 0, 'one product was taken: that run made progress, so it does not count as a failed attempt');
   assert.ok(/limit exceeded/.test(job5.lastError), 'the job says why some products are waiting');
   await processOneJob(job5, fakeSave);
   assert.deepStrictEqual(sent, [['B6', 'B7'], ['B7']], 'the second run sends only the one that was dropped');
@@ -160,6 +160,43 @@ const fakeSave = async (userId, product) => { savedDrafts.push(product.asin); re
   assert.strictEqual(job7.items[0].status, 'error');
   assert.ok(/did not take/.test(job7.items[0].error));
   assert.strictEqual(job7.status, 'done');
+
+  // --- a big list: sent in slices under the per-minute limit, nothing is given up on, every product is saved ---
+  const BIG = 2500; // the highest a list can be (Admin -> Limits -> bulkJobMax)
+  const big = makeJob(Array.from({ length: BIG }, (_, i) => makeItem('BIG' + i, 'US', 'urlbig' + i)));
+  const perCall = [];
+  // a fake Easyparser with the plan's limit: it takes 500 products per call and drops the rest as "rate limit"
+  submitImpl = async (groups) => {
+    const asins = groups[0].asins;
+    perCall.push(asins.length);
+    return {
+      accepted: asins.slice(0, 500).map((a) => ({ asin: a, domain: '.com', queryId: 'q-' + a })),
+      rejected: asins.slice(500).map((a) => ({ asin: a, domain: '.com', reason: '[!] Minute request limit exceeded.', retryable: true })),
+      meta: null,
+    };
+  };
+  pollImpl = async (queryId) => ({ status: 'success', raw: { asin: queryId.slice(2) } });
+  hasCreditsImpl = async () => true;
+  savedDrafts.length = 0;
+  let runs = 0;
+  while (big.status !== 'done' && runs < 60) { await processOneJob(big, fakeSave); runs += 1; }
+  assert.strictEqual(big.status, 'done');
+  assert.strictEqual(big.done, BIG, 'all 2500 are saved');
+  assert.strictEqual(big.failed, 0, 'none is given up on');
+  assert.strictEqual(savedDrafts.length, BIG);
+  assert.ok(Math.max(...perCall) <= 450, 'no run sends more than a little under the per-minute limit: ' + Math.max(...perCall));
+  assert.ok(runs <= 8, 'about 2500 / 450 runs, not more: ' + runs);
+
+  // Easyparser takes only ONE product per call (an extreme limit): the job keeps going, because every run made progress
+  const slow = makeJob(Array.from({ length: 9 }, (_, i) => makeItem('SL' + i, 'US', 'urlsl' + i)));
+  submitImpl = async (groups) => {
+    const asins = groups[0].asins;
+    return { accepted: [{ asin: asins[0], domain: '.com', queryId: 'q-' + asins[0] }], rejected: asins.slice(1).map((a) => ({ asin: a, domain: '.com', reason: 'limit', retryable: true })), meta: null };
+  };
+  pollImpl = async () => ({ status: 'pending' });
+  for (let i = 0; i < 9; i++) await processOneJob(slow, fakeSave);
+  assert.ok(slow.items.every((i) => i.status === 'pending' && i.queryId), 'all nine were taken, one per run, none was given up on');
+  assert.ok(slow.submitAttempts < 5);
 
   console.log('bulk import job tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });

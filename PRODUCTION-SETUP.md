@@ -81,3 +81,7 @@ Admin -> Users -> Security: **Suspend** (the person can appeal from the blocked 
 Appeals are support tickets with source `appeal`. **Admin -> Appeals** lists them (open first, with the state of the account); a person who already has an open appeal adds to it instead of opening another. Reinstating an account closes its open appeals.
 
 Every ELMS mail carries the same layout and the Privacy Policy / Terms links (`/privacy`, `/terms`): `mailTemplate.ensureLayout` runs on every message inside `emailService.sendWithTimeout`, so a mail written without the layout still gets it, and `tests/banAppeals.test.js` fails if a new `send...` function has no sample there.
+
+## Large imports (bulk jobs) and the Easyparser per-minute limit
+
+A background list can hold up to **2500 links** (Admin -> Limits -> `bulkJobMax`; 2500 is the highest it can be set to and the default; a lower value saved earlier stays until you change it). The processor runs once a minute and, per job, sends at most 90% of the plan's per-minute limit to Easyparser and reads and saves at most the limit's worth of finished products (`EASYPARSER_PER_MINUTE`, default 500 = our plan). Sending everything at once made Easyparser answer "rate limit" for all but the first 500, and the rest were given up on after 5 tries; now a run that got anything through does not count as a failed attempt. 2500 links take about 6 runs (about 6 minutes plus Easyparser's own time); set `EASYPARSER_PER_MINUTE` if the plan changes.

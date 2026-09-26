@@ -290,7 +290,7 @@ router.post('/bulk', requireAuth, async (req, res) => {
  * Requires a valid session token and EASYPARSER_API_KEY to be configured on the server.
  * Body: { amazonUrls: string[], markupPercent?: number }
  *
- * For large lists (up to bulkJobMax, default 1000). Unlike POST /bulk, this returns
+ * For large lists (up to bulkJobMax, default 2500). Unlike POST /bulk, this returns
  * immediately with a job id - the links are fetched and saved in the background by
  * jobs/bulkImportProcessor.js (via Easyparser's Bulk API), so the request never times out
  * and the browser tab can be closed. Poll GET /bulk-job/:id for progress.
