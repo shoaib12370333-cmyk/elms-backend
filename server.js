@@ -15,6 +15,7 @@ const listOnEbayRoute = require('./routes/listOnEbay');
 const listingsRoute = require('./routes/listings');
 const importsRoute = require('./routes/imports');
 const ordersRoute = require('./routes/orders');
+const netProfitRoute = require('./routes/netProfit');
 const stockCheckRoute = require('./routes/stockCheck');
 const authRoute = require('./routes/auth');
 const ebayConnectRoute = require('./routes/ebayConnect');
@@ -171,6 +172,7 @@ app.use('/api/imports', importsRoute);
 
 // Orders
 app.use('/api/orders', ordersRoute);
+app.use('/api/net-profit', netProfitRoute);
 
 // Manual stock check trigger (for testing the stock monitor)
 app.use('/api/stock-check', stockCheckRoute);

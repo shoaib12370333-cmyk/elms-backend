@@ -68,6 +68,7 @@ const orderSchema = new mongoose.Schema(
     estDeliveryMin: { type: Date, default: null },
     estDeliveryMax: { type: Date, default: null },
     sellerNote: { type: String, default: '' },       // private note, only stored in ELMS
+    netProfit: { type: Number, default: null },      // what the seller says was really made (the Net Profit sheet); null = not typed
   },
   { timestamps: true }
 );

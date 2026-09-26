@@ -114,6 +114,7 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
  * Listing) so the frontend can show Buy Price and calculate Profit without
  * an extra API call.
  */
+const { buildLine: buildNetProfitLine } = require('../services/netProfitService');
 const positive = (v) => { const n = Number(v); return v !== null && v !== undefined && v !== '' && Number.isFinite(n) && n > 0 ? n : null; };
 
 /**
@@ -357,10 +358,69 @@ function serialize(doc) {
     est_delivery_min: obj.estDeliveryMin || null,
     est_delivery_max: obj.estDeliveryMax || null,
     seller_note: obj.sellerNote || '',
+    net_profit: obj.netProfit ?? null,
     order_status: deriveOrderStatus(obj),
     created_at: obj.createdAt,
     updated_at: obj.updatedAt,
   };
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus };
+// ---------------------------------------------------------------- the Net Profit sheet (services/netProfitService.js)
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The database filter of the sheet: store, dates, a search in the title / order ID / SKU / item number, and cancelled orders (left out unless asked). */
+async function netProfitQuery(userId, { accountId, from, to, q, includeCancelled } = {}) {
+  const query = { userId };
+  const and = [];
+  if (accountId) query.ebayAccountId = accountId;
+  if (!includeCancelled) query.ebayCancelStatus = { $nin: ['CANCELED', 'CANCELLED'] };
+  if (from || to) {
+    const range = {};
+    if (from) range.$gte = from;
+    if (to) range.$lte = to;
+    and.push({ $or: [{ ebayCreatedAt: range }, { ebayCreatedAt: null, createdAt: range }] });
+  }
+  const text = String(q || '').trim();
+  if (text) {
+    const re = new RegExp(escapeRegExp(text), 'i');
+    const listings = await Listing.find({ userId, title: re }).select('_id').limit(2000).lean();
+    and.push({ $or: [{ itemTitle: re }, { ebayOrderId: re }, { sku: re }, { legacyItemId: re }, ...(listings.length ? [{ listingId: { $in: listings.map((l) => l._id) } }] : [])] });
+  }
+  if (and.length) query.$and = and;
+  return query;
+}
+
+async function countNetProfitLines(userId, filters) {
+  return Order.countDocuments(await netProfitQuery(userId, filters));
+}
+
+/** Lines of the sheet, newest first: `limit` of them from `offset`. */
+async function listNetProfitLines(userId, filters, { offset = 0, limit = 1000 } = {}) {
+  const docs = await Order.find(await netProfitQuery(userId, filters))
+    .populate({ path: 'listingId', populate: { path: 'importId' } })
+    .populate('ebayAccountId')
+    .sort({ ebayCreatedAt: -1, createdAt: -1, _id: -1 })
+    .skip(offset)
+    .limit(limit)
+    .lean();
+  await attachMissingListings(userId, docs);
+  if (needsRates(docs)) await warmRates();
+  return docs.map((doc) => buildNetProfitLine(enrichOrder(serialize(doc), doc)));
+}
+
+async function getNetProfitLine(userId, id) {
+  const doc = await Order.findOne({ _id: id, userId }).populate({ path: 'listingId', populate: { path: 'importId' } }).populate('ebayAccountId').lean();
+  if (!doc) return null;
+  await attachMissingListings(userId, [doc]);
+  if (needsRates([doc])) await warmRates();
+  return buildNetProfitLine(enrichOrder(serialize(doc), doc));
+}
+
+/** Saves the net profit the seller typed (null clears it). Returns false when the order is not theirs. */
+async function setNetProfit(userId, id, value) {
+  const v = value === null || value === undefined ? null : Number(Number(value).toFixed(2));
+  const doc = await Order.findOneAndUpdate({ _id: id, userId }, { netProfit: v }, { new: true });
+  return !!doc;
+}
+
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setNetProfit };
