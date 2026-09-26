@@ -48,7 +48,7 @@ const settingsSchema = new mongoose.Schema(
     bulkImportMax: { type: Number, default: 25, min: 1, max: 50 },
     // Background bulk-job import cap (POST /api/fetch-product/bulk-job, Easyparser-backed) - much
     // higher than bulkImportMax since it doesn't run inside one HTTP request.
-    bulkJobMax: { type: Number, default: 1000, min: 1, max: 5000 },
+    bulkJobMax: { type: Number, default: 2500, min: 1, max: 2500 },
     mailBatchSize: { type: Number, default: 20, min: 1, max: 100 },
     mailDailyCap: { type: Number, default: 200, min: 1, max: 100000 },
     // How many days a fetched Amazon product (services/productCacheService.js) is reused
