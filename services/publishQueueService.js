@@ -8,6 +8,7 @@ const {
   updateListing,
 } = require('../models/listingsModel');
 const { ensureDraftCategory } = require('./draftCategoryService');
+const bulkPublisher = require('./ebayBulkPublisher');
 
 const { getImportById } = require('../models/importsModel');
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
@@ -49,6 +50,17 @@ const {
 function isTransientEbayError(err) {
   const id = Number(err?.ebayErrors?.[0]?.errorId);
   return id === 25001 || [502, 503, 504].includes(Number(err?.statusCode));
+}
+
+const FIRST_ATTEMPT_MS = 4 * 60 * 1000; // the deadline of a first attempt; the retry after a transient error gets a shorter one
+
+/**
+ * Publishes one listing on eBay. With EBAY_BULK_PUBLISH on, the first attempt joins eBay's bulk calls (25 listings per call, see
+ * ebayBulkPublisher.js, which falls back to this same ordinary path whenever anything is unusual); a retry after a transient error, and
+ * everything when bulk publishing is off, goes the ordinary way.
+ */
+function publishOnEbay(args) {
+  return bulkPublisher.isEnabled() && args.timeoutMs >= FIRST_ATTEMPT_MS ? bulkPublisher.publish(args) : publishListing(args);
 }
 
 async function publishWithTransientRetry(publishFn, args, { delayMs = 3000, log = () => {} } = {}) {
@@ -547,7 +559,7 @@ async function processOneQueuedListing(listing) {
     }
 
     const result =
-      await publishWithTransientRetry(publishListing, {
+      await publishWithTransientRetry(publishOnEbay, {
         refreshToken,
 
         product,
@@ -569,7 +581,7 @@ async function processOneQueuedListing(listing) {
         packageWeightAndSize,
 
         timeoutMs:
-          4 * 60 * 1000,
+          FIRST_ATTEMPT_MS,
       }, { log: debug });
 
 
@@ -825,5 +837,6 @@ module.exports = {
   processPublishQueue,
   processOneQueuedListing,
   publishWithTransientRetry,
+  publishOnEbay,
   isTransientEbayError,
 };
