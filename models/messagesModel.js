@@ -1,10 +1,11 @@
 const Message = require('./schemas/Message');
+const { messageToText } = require('../services/messageTextService');
 
 function normalizeMessage(m) {
   if (!m?.messageId) return null;
   return {
     ebayMessageId: String(m.messageId),
-    content: String(m.content || ''),
+    content: messageToText(m.content),
     fromUsername: m.fromUsername || null,
     isSelf: !!m.isSelf,
     readStatus: !!m.readStatus,
@@ -31,7 +32,7 @@ async function listMessages(userId, conversationId) {
   const docs = await Message.find({ userId, conversationId }).sort({ sentDate: 1, createdAt: 1 }).lean();
   return docs.map(m => ({
     messageId: m.ebayMessageId,
-    content: m.content,
+    content: messageToText(m.content), // rows saved before the fix may still hold eBay's HTML
     fromUsername: m.fromUsername,
     isSelf: m.isSelf,
     readStatus: m.readStatus,
