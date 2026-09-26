@@ -86,6 +86,27 @@ router.get('/users', async (req, res) => {
   res.json({ success: true, users, summary });
 });
 
+/** One CSV cell: quoted when it holds a comma, a quote or a line break. */
+const csvCell = (value) => (/[",\r\n]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value);
+
+/**
+ * GET /api/admin/users/:id/draft-links
+ * A CSV file with the Amazon link of every draft of that user, one link per row (column "Amazon link") and nothing else. It is a plain
+ * read: the user is not told and nothing is recorded. 404 with a message when the user has no draft with a saved link.
+ */
+router.get('/users/:id/draft-links', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[a-f0-9]{24}$/i.test(id)) return res.status(404).json({ success: false, error: 'User not found.' });
+  const user = await User.findById(id, { _id: 1 }).lean();
+  if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
+  const links = await require('../models/listingsModel').listDraftAmazonLinks(id);
+  if (!links.length) return res.status(404).json({ success: false, error: 'This user has no drafts with an Amazon link.' });
+  const day = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="draft-amazon-links-' + day + '.csv"');
+  res.send(['Amazon link', ...links.map(csvCell)].join('\r\n') + '\r\n');
+});
+
 /**
  * PUT /api/admin/users/:id/credits
  * Body: { creditBalance: number }
