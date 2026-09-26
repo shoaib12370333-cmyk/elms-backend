@@ -5,7 +5,9 @@ const {
   markPublished,
   markError,
   markPublishCreditCharged,
+  updateListing,
 } = require('../models/listingsModel');
+const { ensureDraftCategory } = require('./draftCategoryService');
 
 const { getImportById } = require('../models/importsModel');
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
@@ -143,9 +145,11 @@ async function processOneQueuedListing(listing) {
 
 
     if (!listing.category_id) {
-      throw new Error(
-        'No eBay category ID is set.'
-      );
+      // No category saved (the Drafts page only suggests one for the cards it shows): take eBay's suggestion for the title, save it on
+      // the draft and go on, instead of failing every draft that never got one.
+      const found = await ensureDraftCategory(userId, listing, { save: updateListing });
+      listing.category_id = found.categoryId;
+      debug('CATEGORY SUGGESTED', { listingId: id, categoryId: found.categoryId, name: found.categoryName });
     }
 
 

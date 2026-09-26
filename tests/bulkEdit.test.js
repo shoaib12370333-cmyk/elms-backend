@@ -246,5 +246,38 @@ const RULE = { enabled: true, currency: 'GBP', feePercent: 13, feeFixed: 0.3, pr
   res = await call({ ids: ['D1'], changes: { price: { mode: 'saved' } } });
   assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /no saved pricing rule/);
 
+  // ---------- speed: many drafts are read in ONE query and saved several at a time, in the same order as asked ----------
+  {
+    reset();
+    const N_DRAFTS = 200;
+    rows = {};
+    for (let i = 1; i <= N_DRAFTS; i++) rows['X' + i] = draft('X' + i, { title: 'Product ' + i });
+    const DELAY = 15; // a stand-in for the database's answering time
+    const wait = () => new Promise((r) => setTimeout(r, DELAY));
+    let readsOne = 0; let readsMany = 0; let running = 0; let peak = 0;
+    const slowDeps = {
+      getListingById: async (u, id) => { readsOne += 1; await wait(); return rows[id] ? JSON.parse(JSON.stringify(rows[id])) : null; },
+      getListingsByIds: async (u, ids) => { readsMany += 1; await wait(); return new Map(ids.filter((id) => rows[id]).map((id) => [id, JSON.parse(JSON.stringify(rows[id]))])); },
+      updateListing: async (u, id, fields) => { running += 1; peak = Math.max(peak, running); await wait(); for (const [k, v] of Object.entries(fields)) rows[id][COLUMN[k]] = v; running -= 1; },
+      getImportById: async () => null,
+    };
+    const ids = Object.keys(rows).concat(['MISSING']);
+    const t0 = Date.now();
+    const out = await S.bulkEdit({ userId: 'u1', ids, changes: await valid({ title: { op: 'prefix', text: 'NEW ' } }), dryRun: false }, slowDeps);
+    const took = Date.now() - t0;
+    assert.strictEqual(readsMany, 1, 'all the drafts come from one query');
+    assert.strictEqual(readsOne, 0, 'no draft is read one by one');
+    assert.ok(peak >= 5 && peak <= 20, 'several are saved at the same time, never more than 20: ' + peak);
+    assert.ok(took < 1500, 'one after the other this would take about ' + (N_DRAFTS * 2 * DELAY) + ' ms; it took ' + took);
+    assert.deepStrictEqual(out.results.map((r) => r.id), ids, 'the answers keep the order of the request');
+    assert.deepStrictEqual(out.summary, { changed: N_DRAFTS, unchanged: 0, skipped: 1 });
+    assert.strictEqual(out.results.at(-1).reason, 'Not found.');
+    assert.strictEqual(rows.X7.title, 'NEW Product 7');
+    // a dry run saves nothing but reads the same way
+    reset(); rows = { Y1: draft('Y1') };
+    const dry = await S.bulkEdit({ userId: 'u1', ids: ['Y1'], changes: await valid({ quantity: 9 }), dryRun: true }, slowDeps);
+    assert.strictEqual(dry.summary.changed, 1); assert.strictEqual(rows.Y1.quantity, 1);
+  }
+
   console.log('bulk edit: all good');
 })().catch((err) => { console.error(err); process.exit(1); });
