@@ -165,6 +165,40 @@ const sameList = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
 const firstValue = (v) => (Array.isArray(v) ? v[0] : v);
 
 /**
+ * What the price rule does to one listing (a draft or a live one): { fields, diff } (both empty when it already has that price), or
+ * { error }. The price is worked out from the listing's own Amazon price; nothing is guessed. Nothing is written here.
+ */
+async function planPrice(listing, changes, ctx) {
+  const fields = {};
+  const diff = [];
+  const note = (field, from, to) => diff.push({ field, from, to });
+  let cost = Number(listing.amazon_price);
+  let fromImport = false;
+  if (!(cost > 0) && listing.import_id) {
+    const imp = await ctx.getImportById(ctx.userId, listing.import_id);
+    cost = Number(imp && imp.amazon_price);
+    if (!(cost > 0)) cost = Number(imp && imp.product && imp.product.price);
+    fromImport = cost > 0;
+  }
+  if (!Number.isFinite(cost) || cost <= 0) return { error: 'No Amazon price is saved for this product.' };
+  let priced;
+  try {
+    priced = await priceByRule({ userId: ctx.userId, price: cost, currency: listing.currency, pricingRule: changes.price.rule });
+  } catch (err) {
+    return { error: err.message };
+  }
+  if (!priced) return { error: 'The rule cannot price this product.' };
+  const before = listing.sell_price == null ? null : Number(listing.sell_price);
+  const ruleChanged = JSON.stringify(listing.pricing_rule || null) !== JSON.stringify(priced.pricingRule);
+  if (before === null || cents(before) !== cents(priced.sellPrice) || ruleChanged) {
+    Object.assign(fields, { sellPrice: priced.sellPrice, markupPercent: priced.markupPercent, marginAmount: priced.marginAmount, pricingRule: priced.pricingRule });
+    if (fromImport) fields.amazonPrice = cost;
+    note('Price', before, priced.sellPrice);
+  }
+  return { fields, diff };
+}
+
+/**
  * What the changes do to one draft: { fields } for updateListing and { diff } for the seller, or { error } when the draft cannot take
  * them. Nothing is written here.
  */
@@ -182,29 +216,10 @@ async function planDraft(listing, changes, ctx) {
   }
 
   if (changes.price) {
-    let cost = Number(listing.amazon_price);
-    let fromImport = false;
-    if (!(cost > 0) && listing.import_id) {
-      const imp = await ctx.getImportById(ctx.userId, listing.import_id);
-      cost = Number(imp && imp.amazon_price);
-      if (!(cost > 0)) cost = Number(imp && imp.product && imp.product.price);
-      fromImport = cost > 0;
-    }
-    if (!Number.isFinite(cost) || cost <= 0) return { error: 'No Amazon price is saved for this product.' };
-    let priced;
-    try {
-      priced = await priceByRule({ userId: ctx.userId, price: cost, currency: listing.currency, pricingRule: changes.price.rule });
-    } catch (err) {
-      return { error: err.message };
-    }
-    if (!priced) return { error: 'The rule cannot price this product.' };
-    const before = listing.sell_price == null ? null : Number(listing.sell_price);
-    const ruleChanged = JSON.stringify(listing.pricing_rule || null) !== JSON.stringify(priced.pricingRule);
-    if (before === null || cents(before) !== cents(priced.sellPrice) || ruleChanged) {
-      Object.assign(fields, { sellPrice: priced.sellPrice, markupPercent: priced.markupPercent, marginAmount: priced.marginAmount, pricingRule: priced.pricingRule });
-      if (fromImport) fields.amazonPrice = cost;
-      note('Price', before, priced.sellPrice);
-    }
+    const p = await planPrice(listing, changes, ctx);
+    if (p.error) return p;
+    Object.assign(fields, p.fields);
+    diff.push(...p.diff);
   }
 
   if (changes.quantity !== undefined && Number(listing.quantity) !== changes.quantity) { fields.quantity = changes.quantity; note('Quantity', listing.quantity, changes.quantity); }
@@ -302,4 +317,4 @@ async function bulkEdit({ userId, ids, changes, dryRun = false }, deps) {
   return { results, summary: { changed: count('changed'), unchanged: count('unchanged'), skipped: count('skipped') } };
 }
 
-module.exports = { bulkEdit, validateChanges, applyTitleOp, applyTags, titleCase, LIMITS };
+module.exports = { bulkEdit, validateChanges, planPrice, mapPool, applyTitleOp, applyTags, titleCase, LIMITS };

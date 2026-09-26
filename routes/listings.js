@@ -59,6 +59,7 @@ const {
   getPricingRule,
 } = require('../models/usersModel');
 const { bulkEdit, validateChanges } = require('../services/bulkEditService');
+const { bulkLivePrice } = require('../services/liveBulkPriceService');
 
 const { ACTION_COSTS } = require('../config/actionCosts');
 
@@ -735,6 +736,27 @@ router.post('/bulk-edit', requireAuth, async (req, res) => {
   } catch (err) {
     if (!err.statusCode || err.statusCode >= 500) console.error('bulk edit error:', err.message);
     res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not edit the drafts. Please try again.' });
+  }
+});
+
+/**
+ * POST /api/listings/bulk-live-price   { ids: [...], changes: { price: { mode: 'saved' | 'custom', rule? } } }
+ *
+ * The Live listings page's "Change price": the price of every selected LIVE listing is worked out from its own Amazon price by the
+ * pricing rule and put on eBay (25 per eBay call, several calls at once - services/liveBulkPriceService.js), then ELMS' copy is saved.
+ * Only the price is changed here. A listing that cannot take it is skipped with the reason.
+ */
+router.post('/bulk-live-price', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please change at most ${MAX_BULK_IDS} listings at a time.` });
+  try {
+    const changes = await validateChanges({ price: req.body?.changes?.price }, { userId: req.userId, getSavedRule: (userId) => getPricingRule(userId) });
+    const out = await bulkLivePrice({ userId: req.userId, ids, changes }, { getListingsByIds, updateListing, getImportById, getRefreshToken: getEbayAccountRefreshToken });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    if (!err.statusCode || err.statusCode >= 500) console.error('bulk live price error:', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not change the prices. Please try again.' });
   }
 });
 
