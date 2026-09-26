@@ -99,7 +99,7 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.sta
   assert.ok(m.html.includes('Permanent ban') && m.html.includes('#FEF3F2'), 'red banner');
   assert.ok(m.html.includes('final') && m.html.includes('not available for a permanent ban'));
   assert.ok(!m.html.includes('Go to sign in and appeal') && !/try to sign in/i.test(m.html), 'no appeal steps in a ban mail');
-  assert.ok(m.html.includes('terms.html#ending'), 'points to the Terms section on suspension and ending');
+  assert.ok(m.html.includes('/terms#ending'), 'points to the Terms section on suspension and ending');
   await rejects(() => svc.suspendUser({ userId: BOB, reason: 'softer now', adminId: ADMIN }), 400, /permanently banned/, 'a ban is not quietly turned into a suspension');
   await rejects(() => svc.suspendUser({ userId: ADMIN, reason: 'no way', adminId: ADMIN, permanent: true }), 400, /admin account/, 'an admin cannot be banned');
 
@@ -248,10 +248,10 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.sta
     for (const msg of mails) {
       assert.ok(msg.html.includes(mailTemplate.LAYOUT_MARK), name + ': the ELMS layout');
       assert.ok(msg.html.includes('logo-wordmark.png'), name + ': logo');
-      assert.ok(msg.html.includes('href="https://elmstool.com/policy.html"') && msg.html.includes('Privacy Policy'), name + ': Privacy Policy link');
-      assert.ok(msg.html.includes('href="https://elmstool.com/terms.html"') && msg.html.includes('Terms of Service'), name + ': Terms link');
-      assert.match(msg.text, /Privacy Policy: https:\/\/elmstool\.com\/policy/, name + ': text version has the Privacy link');
-      assert.match(msg.text, /Terms of Service: https:\/\/elmstool\.com\/terms\.html/, name + ': text version has the Terms link');
+      assert.ok(msg.html.includes('href="https://elmstool.com/privacy"') && msg.html.includes('Privacy Policy'), name + ': Privacy Policy link');
+      assert.ok(msg.html.includes('href="https://elmstool.com/terms"') && msg.html.includes('Terms of Service'), name + ': Terms link');
+      assert.match(msg.text, /Privacy Policy: https:\/\/elmstool\.com\/privacy\s/, name + ': text version has the Privacy link');
+      assert.match(msg.text, /Terms of Service: https:\/\/elmstool\.com\/terms(\s|$)/, name + ': text version has the Terms link');
       assert.strictEqual(msg.text.split('Privacy Policy: https').length, 2, name + ': the legal lines appear once, not twice');
     }
   }
