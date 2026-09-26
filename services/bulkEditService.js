@@ -6,9 +6,10 @@ const { priceByRule } = require('./importPricingService');
  * draft. Only fields ELMS really has are here. Everything is checked BEFORE anything is saved, a draft that cannot take the change is
  * skipped with the reason (never half-edited, never silently cut short), and `dryRun` returns exactly what would change without saving.
  */
-const LIMITS = Object.freeze({ titleMax: 80, brandMax: 65, quantityMin: 1, quantityMax: 999, tagMax: 40, tagsMax: 30, findMax: 80, textMax: 80 });
+const LIMITS = Object.freeze({ titleMax: 80, brandMax: 65, quantityMin: 1, quantityMax: 999, tagMax: 40, tagsMax: 30, findMax: 80, textMax: 80, noteMax: 2000 });
 const TITLE_OPS = ['replace', 'prefix', 'suffix', 'case'];
 const TAG_MODES = ['add', 'remove', 'replace', 'clear'];
+const NOTE_MODES = ['set', 'append', 'clear'];
 const CASES = ['upper', 'lower', 'title'];
 const COUNTRY_CODE = /^[A-Za-z]{2}$/;
 const POSTAL_CODE = /^[A-Za-z0-9][A-Za-z0-9 -]{1,11}$/;
@@ -118,6 +119,15 @@ async function validateChanges(raw, { userId, getSavedRule }) {
     changes.tags = { mode: t.mode, tags };
   }
 
+  if (src.note !== undefined) {
+    const n = src.note || {};
+    if (!NOTE_MODES.includes(n.mode)) throw bad('Choose what to do with the notes: replace, add to, or clear.');
+    const text = String(n.text == null ? '' : n.text).replace(/\r\n/g, '\n').trim();
+    if (n.mode !== 'clear' && !text) throw bad('Type the note.');
+    if (text.length > LIMITS.noteMax) throw bad(`A note can be at most ${LIMITS.noteMax} characters.`);
+    changes.note = { mode: n.mode, text: n.mode === 'clear' ? '' : text };
+  }
+
   for (const key of ['stockMonitoring', 'priceMonitoring']) {
     if (src[key] === undefined) continue;
     if (typeof src[key] !== 'boolean') throw bad('Stock and price monitoring must be on or off.');
@@ -220,6 +230,14 @@ async function planDraft(listing, changes, ctx) {
     if (p.error) return p;
     Object.assign(fields, p.fields);
     diff.push(...p.diff);
+  }
+
+  if (changes.note) {
+    const current = String(listing.note || '');
+    const { mode, text } = changes.note;
+    const next = mode === 'clear' ? '' : mode === 'set' ? text : (current ? current + '\n' + text : text);
+    if (next.length > LIMITS.noteMax) return { error: `The note would be ${next.length} characters; the most is ${LIMITS.noteMax}.` };
+    if (next !== current) { fields.note = next; note('Note', current || null, next || null); }
   }
 
   if (changes.quantity !== undefined && Number(listing.quantity) !== changes.quantity) { fields.quantity = changes.quantity; note('Quantity', listing.quantity, changes.quantity); }
