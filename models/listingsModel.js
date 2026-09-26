@@ -133,6 +133,16 @@ async function listDraftAmazonLinks(userId) {
   return links;
 }
 
+/** Several of a user's listings in ONE query. Returns a Map: id (string) -> the listing as getListingById gives it. */
+async function getListingsByIds(userId, ids) {
+  const clean = [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter((id) => /^[a-f0-9]{24}$/i.test(id)))];
+  const out = new Map();
+  if (!clean.length) return out;
+  const docs = await Listing.find({ _id: { $in: clean }, userId });
+  for (const doc of docs) out.set(String(doc._id), serialize(doc));
+  return out;
+}
+
 async function getListingById(userId, id) {
   const doc = await Listing.findOne({ _id: id, userId });
   return doc ? serialize(doc) : null;
@@ -205,16 +215,20 @@ async function findListingInStore(userId, sku, ebayAccountId) {
   return doc ? serialize(doc) : null;
 }
 
-async function listListingsByStatuses(userId, statuses = [], accountId = null) {
+async function listListingsByStatuses(userId, statuses = [], accountId = null, { since = null } = {}) {
   const cleanStatuses = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
-  await claimUnassignedListings(userId, accountId);
+  // since: only what was created or changed after that moment (the Drafts page asks for this every few seconds while a background
+  // import runs, so it never reloads the whole queue). It leaves out the two things that are only worth doing for a full list.
+  const onlyNew = since instanceof Date && !Number.isNaN(since.getTime());
+  if (!onlyNew) await claimUnassignedListings(userId, accountId);
   const query = cleanStatuses.length ? { userId, status: { $in: cleanStatuses } } : { userId };
   if (accountId) query.ebayAccountId = accountId;
+  if (onlyNew) query.$or = [{ createdAt: { $gte: since } }, { updatedAt: { $gte: since } }];
   const docs = await Listing.find(query)
     .populate('importId')
     .populate('ebayAccountId')
     .sort({ updatedAt: -1 });
-  const soldByListing = await getSoldByListing(userId);
+  const soldByListing = onlyNew ? new Map() : await getSoldByListing(userId);
   return docs.map((doc) => {
     const serialized = serialize(doc);
     serialized.amazon_url = doc.importId?.amazonUrl || null;
@@ -799,6 +813,7 @@ module.exports = {
   createListing,
   upsertDraft,
   getListingById,
+  getListingsByIds,
   listDraftAmazonLinks,
   claimListingForPublishing,
   claimScheduledForPublishing,

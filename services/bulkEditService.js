@@ -251,10 +251,31 @@ async function planDraft(listing, changes, ctx) {
  * Applies `changes` to the drafts `ids`.
  * @returns {Promise<{ results: Array<{ id, title, status: 'changed'|'unchanged'|'skipped', diff?: Array, reason?: string }>, summary: { changed: number, unchanged: number, skipped: number } }>}
  */
+/** Runs fn over the items with at most `limit` at a time; the answers keep the order of the items. */
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next; next += 1;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+const PARALLEL = 20; // drafts changed at the same time: a draft is one read and one write, so the waiting for the database is shared
+
 async function bulkEdit({ userId, ids, changes, dryRun = false }, deps) {
   const ctx = { userId, getImportById: deps.getImportById };
-  const results = [];
   const loaded = new Map();
+  // All the drafts in ONE query (was one query each, one after the other); a test or caller without it falls back to one by one.
+  if (deps.getListingsByIds) {
+    const found = await deps.getListingsByIds(userId, ids);
+    for (const id of ids) loaded.set(id, found.get(String(id)) || null);
+  }
   const load = async (id) => { if (!loaded.has(id)) loaded.set(id, await deps.getListingById(userId, id)); return loaded.get(id); };
   // Policies belong to one eBay store: chosen policies only make sense when every selected draft is in the same store.
   if (changes.policies && changes.policies.useDynamicPolicies === false) {
@@ -262,21 +283,21 @@ async function bulkEdit({ userId, ids, changes, dryRun = false }, deps) {
     for (const id of ids) { const l = await load(id); if (l) accounts.add(l.ebay_account_id || null); }
     if (accounts.size !== 1 || accounts.has(null)) throw bad('The selected drafts are in different stores (or not assigned to one yet). Select drafts from one store to pick their policies, or use the account default policies.');
   }
-  for (const id of ids) {
+  const results = await mapPool(ids, PARALLEL, async (id) => {
     try {
       const listing = await load(id);
-      if (!listing) { results.push({ id, title: null, status: 'skipped', reason: 'Not found.' }); continue; }
+      if (!listing) return { id, title: null, status: 'skipped', reason: 'Not found.' };
       const title = listing.title || listing.sku || id;
-      if (!['draft', 'error'].includes(listing.status)) { results.push({ id, title, status: 'skipped', reason: 'Only drafts can be edited here. A live listing is revised on eBay.' }); continue; }
+      if (!['draft', 'error'].includes(listing.status)) return { id, title, status: 'skipped', reason: 'Only drafts can be edited here. A live listing is revised on eBay.' };
       const plan = await planDraft(listing, changes, ctx);
-      if (plan.error) { results.push({ id, title, status: 'skipped', reason: plan.error }); continue; }
-      if (!plan.diff.length) { results.push({ id, title, status: 'unchanged', diff: [] }); continue; }
+      if (plan.error) return { id, title, status: 'skipped', reason: plan.error };
+      if (!plan.diff.length) return { id, title, status: 'unchanged', diff: [] };
       if (!dryRun) await deps.updateListing(userId, id, plan.fields);
-      results.push({ id, title, status: 'changed', diff: plan.diff });
+      return { id, title, status: 'changed', diff: plan.diff };
     } catch (err) {
-      results.push({ id, title: null, status: 'skipped', reason: err.message || 'Could not update.' });
+      return { id, title: null, status: 'skipped', reason: err.message || 'Could not update.' };
     }
-  }
+  });
   const count = (s) => results.filter((r) => r.status === s).length;
   return { results, summary: { changed: count('changed'), unchanged: count('unchanged'), skipped: count('skipped') } };
 }

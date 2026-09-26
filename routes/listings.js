@@ -6,6 +6,7 @@ const {
   listListingsByStatuses,
   countListingsByStatus,
   getListingById,
+  getListingsByIds,
   getListingStatuses,
   claimListingForPublishing,
   markPublished,
@@ -80,15 +81,22 @@ router.get('/queue', requireAuth, async (req, res) => {
         ['draft', 'scheduled', 'error', 'publishing'].includes(s)
       );
 
+    // ?since=<ISO time> (the serverTime of an earlier answer): only the drafts created or changed after it.
+    const sinceRaw = req.query.since ? new Date(String(req.query.since)) : null;
+    const since = sinceRaw && !Number.isNaN(sinceRaw.getTime()) ? sinceRaw : null;
+    const serverTime = new Date().toISOString();
     const listings = await listListingsByStatuses(
       req.userId,
       statuses,
-      req.query.accountId || null
+      req.query.accountId || null,
+      { since }
     );
 
     res.json({
       success: true,
       listings,
+      serverTime,
+      partial: !!since,
     });
   } catch (err) {
     console.error(
@@ -722,7 +730,7 @@ router.post('/bulk-edit', requireAuth, async (req, res) => {
   const dryRun = req.body?.dryRun === true;
   try {
     const changes = await validateChanges(req.body?.changes, { userId: req.userId, getSavedRule: (userId) => getPricingRule(userId) });
-    const out = await bulkEdit({ userId: req.userId, ids, changes, dryRun }, { getListingById, updateListing, getImportById });
+    const out = await bulkEdit({ userId: req.userId, ids, changes, dryRun }, { getListingById, getListingsByIds, updateListing, getImportById });
     res.json({ success: true, dryRun, ...out });
   } catch (err) {
     if (!err.statusCode || err.statusCode >= 500) console.error('bulk edit error:', err.message);
