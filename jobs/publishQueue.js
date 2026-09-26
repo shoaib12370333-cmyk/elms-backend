@@ -4,9 +4,13 @@ const { processPublishQueue } = require('../services/publishQueueService');
 const { listStalePublishingListings, failStalePublishingListing } = require('../models/listingsModel');
 const { refundCredit } = require('../models/usersModel');
 const { createSystemNotification } = require('../models/systemNotificationsModel');
+const { isQueued } = require('../services/publishRunner');
+const { finishDueBatches } = require('../services/publishBatchService');
 
 async function runPublishQueue({ renew } = {}) {
-  const stale = await listStalePublishingListings(30);
+  // A listing that is waiting in this server's line (a long "Publish all") is not stuck: only the ones nothing is working on and nothing
+  // is waiting for are failed after 30 minutes. (Before, a listing that waited 30 minutes for its turn was failed as "interrupted".)
+  const stale = (await listStalePublishingListings(30)).filter((l) => !isQueued(l.id));
   for (const candidate of stale) {
     // The listing is failed by ONE atomic update that hands back what it was, so only the run that wins it gives the credit back
     // (two overlapping runs, or a run that stopped half way, no longer refund the same credit twice).
@@ -17,6 +21,8 @@ async function runPublishQueue({ renew } = {}) {
   }
   const count = await processPublishQueue({ afterEach: renew });
   if (count) console.log(`[publish-queue] processed ${count} listing job(s).`);
+  // Tell the person about every "Publish all" whose listings have all finished.
+  try { await finishDueBatches(); } catch (err) { console.warn('[publish-queue] batch notifications:', err.message); }
 }
 
 function startPublishQueue() {

@@ -7,7 +7,9 @@
  * The result lives on the listing itself (published / error + the message), which the app reads back; a listing whose publish
  * was interrupted by a restart is turned into "error" by recoverStalePublishingListings after 30 minutes.
  */
-const MAX_RUNNING = 3;
+// How many publishes run at the same time (PUBLISH_CONCURRENCY). eBay answers "system error" when it is hit with too many at once, and a
+// failed one is tried once more, so this stays modest; the real speed-up for big lists is eBay's bulk calls, not more parallel ones.
+const MAX_RUNNING = Math.max(1, Math.min(20, Number(process.env.PUBLISH_CONCURRENCY) || 6));
 
 let running = 0;
 const queues = new Map();   // userId -> [job]
@@ -64,6 +66,9 @@ function enqueuePublish(userId, listing) {
   return true;
 }
 
+/** True while the listing is waiting in line or being published by this runner (it is not "stuck": the publish job must not fail it). */
+const isQueued = (id) => known.has(String(id));
+
 const stats = () => ({ running, waiting: [...queues.values()].reduce((n, q) => n + q.length, 0) });
 
-module.exports = { enqueuePublish, stats, hooks, MAX_RUNNING };
+module.exports = { enqueuePublish, isQueued, stats, hooks, MAX_RUNNING };

@@ -1,6 +1,7 @@
 // Publishing in the background: the route claims the listing and answers at once (202); a runner does the slow part with at most
 // 3 publishes at a time and serves users in turn; the page reads the result back from GET /publish-status.
 const assert = require('assert');
+process.env.PUBLISH_CONCURRENCY = '3'; // the default is higher; this test is about the rule ("at most N at a time"), so it pins N
 const Module = require('module');
 
 const claims = [];
