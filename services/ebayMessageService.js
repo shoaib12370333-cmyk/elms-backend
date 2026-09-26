@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
 const { retryWithBackoff } = require('./retryService');
+const { messageToText } = require('./messageTextService');
 const { EBAY_API_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnvironment');
 
 /**
@@ -102,7 +103,7 @@ async function fetchConversations(refreshToken, options = {}) {
       referenceType: c.referenceType || c.reference?.referenceType || (c.itemId ? 'LISTING' : null),
       status: c.conversationStatus || null,
       isRead: readStatus,
-      lastMessageSnippet: latest.messageBody || latest.content || c.snippet || null,
+      lastMessageSnippet: messageToText(latest.messageBody || latest.content || c.snippet || '') || null,
       lastMessageDate: latest.createdDate || c.createdDate || c.lastMessageDate || null,
       itemId: c.referenceType === 'LISTING' ? (c.referenceId || c.itemId || null) : (c.itemId || null),
     };
@@ -138,7 +139,7 @@ async function fetchConversationDetail(refreshToken, conversationId, conversatio
     subject,
     messages: allMessages.map((m) => ({
       messageId: m.messageId || null,
-      content: m.messageBody || m.content || m.body || '',
+      content: messageToText(m.messageBody || m.content || m.body || ''),
       fromUsername: m.senderUsername || m.sender?.username || (m.isSelf ? 'You' : (conversationType === 'FROM_EBAY' ? 'eBay' : 'Member')),
       isSelf: typeof m.isSelf === 'boolean' ? m.isSelf : false,
       readStatus: m.readStatus,

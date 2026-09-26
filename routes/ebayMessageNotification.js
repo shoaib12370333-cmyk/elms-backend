@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const { messageToText } = require('../services/messageTextService');
 const router = express.Router();
 const { verifyEbaySignature } = require('../services/ebayNotificationVerifyService');
 const EbayAccount = require('../models/schemas/EbayAccount');
@@ -61,7 +62,7 @@ router.post('/', async (req, res) => {
       otherPartyUsername: data.senderUserName || data.senderUsername || 'eBay',
       referenceId: data.referenceId || null,
       referenceType: data.referenceType || null,
-      lastMessageSnippet: data.messageBody || '',
+      lastMessageSnippet: messageToText(data.messageBody || ''),
       lastMessageDate: data.createdDate || notification.eventDate || new Date().toISOString(),
       itemId: data.referenceType === 'LISTING' ? data.referenceId : null,
       isRead: typeof data.readStatus === 'boolean' ? data.readStatus : false,
@@ -72,7 +73,7 @@ router.post('/', async (req, res) => {
         ebayAccountId: account._id.toString(),
         conversationDoc: { _id: saved.id },
         ebayConversationId: data.conversationId,
-        messages: [{ messageId: data.messageId, content: data.messageBody || '', fromUsername: data.senderUserName || data.senderUsername || 'eBay', isSelf: false, readStatus: false, sentDate: data.createdDate || notification.eventDate || new Date().toISOString() }],
+        messages: [{ messageId: data.messageId, content: messageToText(data.messageBody || ''), fromUsername: data.senderUserName || data.senderUsername || 'eBay', isSelf: false, readStatus: false, sentDate: data.createdDate || notification.eventDate || new Date().toISOString() }],
       });
     }
   } catch (err) {

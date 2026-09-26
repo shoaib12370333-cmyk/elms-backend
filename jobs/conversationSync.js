@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { fetchConversations } = require('../services/ebayMessageService');
+const { messageToText } = require('../services/messageTextService');
 const { upsertConversation, purgeExpiredTrash } = require('../models/conversationsModel');
 const { upsertMessages } = require('../models/messagesModel');
 const { fetchConversationDetail } = require('../services/ebayMessageService');
@@ -64,7 +65,7 @@ async function syncOneAccountConversations(userId, accountId, refreshToken, last
               }
             }
             if (last) {
-              await Conversation.updateOne({ _id: saved.id, userId }, { $set: { lastMessageFromSelf: !!last.isSelf, lastMessageSnippet: last.content || '', lastMessageDate: last.sentDate ? new Date(last.sentDate) : undefined } });
+              await Conversation.updateOne({ _id: saved.id, userId }, { $set: { lastMessageFromSelf: !!last.isSelf, lastMessageSnippet: messageToText(last.content), lastMessageDate: last.sentDate ? new Date(last.sentDate) : undefined } });
               // Buyer wrote last: prepare an AI reply draft when the seller turned that on (Messages page).
               if (!last.isSelf && conv.conversationType === 'FROM_MEMBERS') {
                 require('../services/replyAssistantService').handleNewBuyerMessage({ userId, conversationId: saved.id, messages: normalized, refreshToken }).catch((e) => console.warn('[ai-reply] ' + e.message));

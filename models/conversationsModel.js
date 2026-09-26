@@ -1,5 +1,6 @@
 const Conversation = require('./schemas/Conversation');
 const { accountLabel, publicUsername } = require('../services/accountLabel');
+const { messageToText } = require('../services/messageTextService');
 
 /**
  * Creates or updates one conversation from an eBay sync, matched by the
@@ -23,7 +24,7 @@ async function upsertConversation(userId, ebayAccountId, conv) {
       otherPartyUsername: conv.otherPartyUsername || conv.fromUsername || null,
       referenceId: conv.referenceId || conv.itemId || null,
       referenceType: conv.referenceType || null,
-      lastMessageSnippet: conv.lastMessageSnippet,
+      lastMessageSnippet: messageToText(conv.lastMessageSnippet),
       lastMessageDate: conv.lastMessageDate ? new Date(conv.lastMessageDate) : null,
       itemId: conv.itemId,
       isRead: conv.isRead,
@@ -138,7 +139,7 @@ function serialize(doc) {
     subject: obj.subject,
     from_username: obj.fromUsername,
     conversation_type: obj.conversationType,
-    last_message_snippet: obj.lastMessageSnippet,
+    last_message_snippet: messageToText(obj.lastMessageSnippet), // older rows may still hold eBay's HTML
     last_message_date: obj.lastMessageDate,
     item_id: obj.itemId,
     is_read: obj.isRead,
