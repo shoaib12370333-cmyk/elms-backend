@@ -106,7 +106,9 @@ function addressOf(from) {
 // Sends one message. If the provider refuses the From address because the SMTP login does not own it
 // (alias not set up), it is sent again from the login address itself, with the wanted address as Reply-To,
 // so the mail still arrives and replies still reach the right mailbox.
-async function sendWithTimeout(tx, message, timeoutMs = 20000, loginUser) {
+async function sendWithTimeout(tx, rawMessage, timeoutMs = 20000, loginUser) {
+  // Every ELMS mail leaves through here, so this is where "every mail has the layout and the Privacy / Terms links" is guaranteed.
+  const message = mailTemplate.ensureLayout(rawMessage);
   const attempt = (msg) => Promise.race([
     tx.sendMail(msg),
     new Promise((_, reject) => setTimeout(() => {
@@ -253,6 +255,81 @@ async function sendWelcomeEmail({ to, name, credits = 0 }) {
       cta: { text: 'Open ' + appName, url },
     }),
   }, 'Welcome');
+}
+
+const ACTION_MAILS = {
+  suspended: { subject: 'your account has been suspended', title: 'Your account has been suspended', banner: { label: 'Account suspended', tone: 'amber' } },
+  banned: { subject: 'your account has been permanently banned', title: 'Your account has been permanently banned', banner: { label: 'Permanent ban', tone: 'red' } },
+  reinstated: { subject: 'your account is active again', title: 'Your account has been reinstated', banner: { label: 'Account reinstated', tone: 'green' } },
+};
+
+/**
+ * Tells a person what an admin did to their account: suspended (they can appeal), permanently banned (no appeal) or reinstated (with the
+ * admin's message). Everything written by an admin is escaped. `wasBanned` only changes the wording of a reinstatement.
+ */
+async function sendAccountActionEmail({ to, name, action, reason, message, at, wasBanned = false }) {
+  const spec = ACTION_MAILS[action];
+  if (!spec) throw new Error('Unknown account action: ' + action);
+  const appName = process.env.APP_NAME || 'ELMS';
+  const first = String(name || '').trim().split(/\s+/)[0];
+  const when = new Date(at || Date.now()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const reasonText = String(reason || '').trim();
+  const messageText = String(message || '').trim();
+  const signIn = frontendUrl('/signin');
+  const terms = frontendUrl('/terms.html#ending');
+
+  let intro; let facts; let body = ''; let cta; let text;
+  if (action === 'suspended') {
+    intro = 'We have suspended your ' + appName + ' account.';
+    facts = [['Account', to], ['Status', 'Suspended'], ['Date', when], ['Reason', reasonText || 'No reason was recorded.']];
+    body = mailTemplate.steps('What this means', [
+      'You cannot sign in or use ' + appName + ' while the account is suspended, and any open sessions were ended.',
+      'Listings that were scheduled to be published were moved back to drafts. Your drafts, listings and orders are kept, and nothing that is already live on eBay was changed by ' + appName + '.',
+    ]) + mailTemplate.steps('If you think this is a mistake', [
+      'Open the sign-in page and try to sign in. You will see this notice with an appeal form.',
+      'Enter the email address of your account and tell us what happened. A person on our team reads every appeal and answers by email.',
+    ], { ordered: true });
+    cta = { text: 'Go to sign in and appeal', url: signIn };
+    text = ['Your account has been suspended.', 'Account: ' + to, 'Date: ' + when, 'Reason: ' + (reasonText || 'No reason was recorded.'),
+      'You cannot sign in or use ' + appName + ' while the account is suspended. Scheduled listings were moved back to drafts; your data is kept.',
+      'If you think this is a mistake, open ' + signIn + ', try to sign in and use the appeal form. A person on our team reads every appeal and answers by email.'];
+  } else if (action === 'banned') {
+    intro = 'We have permanently banned your ' + appName + ' account.';
+    facts = [['Account', to], ['Status', 'Permanently banned'], ['Date', when], ['Reason', reasonText || 'No reason was recorded.']];
+    body = mailTemplate.steps('What this means', [
+      'You can no longer sign in or use ' + appName + ', and any open sessions were ended.',
+      'This decision is final. The appeal form is not available for a permanent ban.',
+      'Unused credits may be forfeited when an account is ended for a breach of the Terms (see section 9 of the Terms of Service).',
+      'Nothing that is already live on eBay was changed by ' + appName + '.',
+    ]);
+    cta = { text: 'Read the Terms of Service', url: terms };
+    text = ['Your account has been permanently banned.', 'Account: ' + to, 'Date: ' + when, 'Reason: ' + (reasonText || 'No reason was recorded.'),
+      'You can no longer sign in or use ' + appName + '. This decision is final and the appeal form is not available for a permanent ban.',
+      'Unused credits may be forfeited when an account is ended for a breach of the Terms (section 9): ' + terms];
+  } else {
+    intro = wasBanned ? 'Your ' + appName + ' account was permanently banned, and our team has now lifted the ban.' : 'Our team has lifted the suspension on your ' + appName + ' account.';
+    facts = [['Account', to], ['Status', 'Active'], ['Date', when]];
+    body = mailTemplate.steps('What happens now', [
+      'You can sign in again as usual.',
+      'Listings that were moved back to drafts when the account was blocked stay as drafts. Schedule or publish them again when you are ready.',
+      'Please follow the Terms of Service. Repeated breaches can lead to a permanent ban.',
+    ]);
+    cta = { text: 'Sign in to ' + appName, url: signIn };
+    text = [intro, 'Account: ' + to, 'Date: ' + when, messageText ? 'Message from our team:\n' + messageText : null,
+      'You can sign in again as usual: ' + signIn,
+      'Listings that were moved back to drafts stay as drafts. Please follow the Terms of Service; repeated breaches can lead to a permanent ban.'].filter(Boolean);
+  }
+
+  const bodyHtml = mailTemplate.paragraphsHtml((first ? 'Hi ' + first + ',' : 'Hi,') + '\n\n' + intro)
+    + mailTemplate.detailsTable(facts)
+    + (action === 'reinstated' && messageText ? mailTemplate.quote('Message from our team', messageText) : '')
+    + body;
+  return sendFrom('security', {
+    to,
+    subject: appName + ': ' + spec.subject,
+    text: (first ? 'Hi ' + first + ',' : 'Hi,') + '\n\n' + text.join('\n\n'),
+    html: mailTemplate.layout({ title: spec.title, preheader: intro, bodyHtml, cta, banner: spec.banner }),
+  }, 'Account ' + action);
 }
 
 /** Sends the invoice for a purchase. `purchase` (the recorded purchase) gives the full invoice with its PDF; without it a short receipt goes out. */
@@ -549,4 +626,4 @@ async function sendNewDeviceEmail({ to, device, where, method, when }) {
   });
 }
 
-module.exports = { credentialsFor, frontendUrl, sendWelcomeEmail, sendSignupCodeEmail, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordRemovedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };
+module.exports = { credentialsFor, frontendUrl, sendAccountActionEmail, sendWelcomeEmail, sendSignupCodeEmail, sendVoucherEmail, sendPurchaseReceiptEmail, sendInvoiceEmail, sendPlanEndedEmail, sendAffiliateDecisionEmail, sendAffiliatePaidEmail, availableSenders, sendCustomMail, sendTicketReplyEmail, sendAdminAlert, sendAnnouncementEmail, senderAddress, fromHeader, replyToFor, sendSecurityEmail, sendNewDeviceEmail, sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordRemovedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail, verifyEmailTransport };

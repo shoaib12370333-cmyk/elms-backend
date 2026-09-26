@@ -54,7 +54,7 @@ async function startSession(req, userId, method = 'password') {
   const ip = clientIp(req);
   const deviceId = deviceIdOf(req);
   // A suspended account, or a blocked address / browser, gets no session (admins and accounts the admin let through do).
-  const who = await User.findById(userId, { role: 1, suspendedAt: 1, suspendedReason: 1 }).lean();
+  const who = await User.findById(userId, { role: 1, suspendedAt: 1, suspendedReason: 1, suspendedPermanent: 1 }).lean();
   const denied = await accessGuard.checkAccess({ user: who, ip, deviceId });
   if (denied) throw accessGuard.blockedError(denied);
   const sid = crypto.randomUUID();
@@ -121,7 +121,7 @@ async function assertSessionActive({ userId, sid, iat }, ctx = null) {
   let entry = cache.get(key);
   if (!entry || Date.now() - entry.at > CACHE_MS) {
     const [user, session] = await Promise.all([
-      User.findById(userId, { sessionsValidFrom: 1, role: 1, suspendedAt: 1, suspendedReason: 1 }).lean(),
+      User.findById(userId, { sessionsValidFrom: 1, role: 1, suspendedAt: 1, suspendedReason: 1, suspendedPermanent: 1 }).lean(),
       sid ? Session.findOne({ sid }, { revokedAt: 1, lastSeenAt: 1 }).lean() : null,
     ]);
     entry = { at: Date.now(), user, session, touched: entry?.touched || 0 };

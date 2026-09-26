@@ -21,7 +21,7 @@ stub('models/schemas/AdminNotice', {
   find: () => ({ sort() { return this; }, limit() { return this; }, lean: async () => notices.filter((n) => !n.seenBy.includes('me') && (!n.userId || n.userId === 'me')) }),
   updateOne: async (f, u) => { const n = notices.find((x) => String(x._id) === objectId); if (n) n.seenBy.push('me'); },
 });
-stub('models/schemas/SupportTicket', { create: async (d) => { ticketMade = d; return { ...d, toObject: () => d }; } });
+stub('models/schemas/SupportTicket', { findOneAndUpdate: async () => null, create: async (d) => { ticketMade = d; return { ...d, toObject: () => d }; } }); // no open appeal yet: a new one is made
 stub('models/schemas/User', { findOne: () => ({ lean: async () => ({ _id: 'u9', name: 'Kim', suspendedAt: new Date(), suspendedReason: 'Fake orders' }) }) });
 stub('services/supportAssistantService', { alertAdmin: async (t, o) => { alerted = { t, o }; } });
 stub('models/schemas/Session', { aggregate: async () => [], updateOne: async () => ({}) });
@@ -50,7 +50,7 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.sta
   assert.deepStrictEqual(by.u1.plan, { paid: false });
   assert.deepStrictEqual({ ip: by.u1.lastLogin.ip, place: by.u1.lastLogin.place }, { ip: '8.8.8.8', place: 'Lahore, Pakistan' });
   assert.strictEqual(by.u3.suspended, true);
-  assert.deepStrictEqual(summary, { total: 4, online: 1, paid: 1, free: 3, suspended: 1, ebayConnected: 2, ebayNotConnected: 2 });
+  assert.deepStrictEqual(summary, { total: 4, online: 1, paid: 1, free: 3, suspended: 1, banned: 0, ebayConnected: 2, ebayNotConnected: 2 });
 
   // pop-up messages: pending ones come back, OK marks it seen
   notices.push({ _id: objectId, kind: 'offer', title: 'Just for you', body: '20% more credits this week', createdAt: new Date(), userId: 'me', seenBy: [] });

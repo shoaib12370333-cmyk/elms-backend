@@ -59,6 +59,8 @@ const userSchema = new mongoose.Schema(
     processedPayments: { type: [String], default: undefined, select: false },
     suspendedAt: { type: Date, default: null },
     suspendedReason: { type: String, default: null },
+    // true = a permanent ban: no appeal is accepted. Only an admin can lift it, and only with a message to the person.
+    suspendedPermanent: { type: Boolean, default: false },
     suspendedNote: { type: String, default: null }, // private, for the admins
     // Security: tokens issued before this moment are rejected ("log out everywhere"), and the new-device email switch.
     sessionsValidFrom: { type: Date, default: null },

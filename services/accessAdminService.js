@@ -69,14 +69,39 @@ async function revokeSessions(match, reason) {
   await Session.updateMany({ ...match, revokedAt: null }, { $set: { revokedAt: new Date(), revokedReason: reason } });
 }
 
-/** Suspends an account: it cannot sign in, its open sessions end, and its scheduled listings are put back to drafts. */
-async function suspendUser({ userId, reason, note = '', adminId }) {
+const MAIL_WAIT_MS = 12000; // how long an admin action waits for the mail before answering (the mail keeps going in the background)
+const MIN_LIFT_MESSAGE = 10; // a permanent ban is lifted only with a real message to the person
+const MAX_LIFT_MESSAGE = 1000;
+
+/** Mails the person about what was done to their account. Never throws: the action is already done. Returns whether the mail was accepted. */
+async function tellUser(user, action, details) {
+  if (!user || !user.email) return false;
+  try {
+    const sending = require('./emailService').sendAccountActionEmail({ to: user.email, name: user.name, action, ...details });
+    let timer;
+    const tooSlow = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('the mail server is slow')), MAIL_WAIT_MS); if (timer.unref) timer.unref(); });
+    try { await Promise.race([sending, tooSlow]); } finally { clearTimeout(timer); }
+    return true;
+  } catch (err) {
+    console.warn('account notice mail (' + action + ') was not sent to ' + user.email + ':', err.message);
+    return false;
+  }
+}
+
+/**
+ * Suspends an account (permanent = false: the person can appeal) or bans it for good (permanent = true: no appeal). Either way it
+ * cannot sign in, its open sessions end, and its scheduled listings are put back to drafts. The person is told by mail.
+ * @returns {Promise<{ userId: string, email: string, permanent: boolean, emailed: boolean }>}
+ */
+async function suspendUser({ userId, reason, note = '', adminId, permanent = false }) {
   const text = String(reason || '').trim();
   if (text.length < 3) throw fail('Write the reason - the person sees it when they try to sign in.');
-  const user = await User.findById(userId, { role: 1, email: 1, suspendedAt: 1 }).lean();
+  const user = await User.findById(userId, { role: 1, email: 1, name: 1, suspendedAt: 1, suspendedPermanent: 1 }).lean();
   if (!user) throw fail('User not found.', 404);
   if (user.role === 'admin') throw fail('An admin account cannot be suspended.');
-  await User.updateOne({ _id: userId }, { $set: { suspendedAt: new Date(), suspendedReason: text.slice(0, 500), suspendedNote: String(note || '').slice(0, 1000), sessionsValidFrom: new Date() } });
+  if (user.suspendedAt && user.suspendedPermanent && !permanent) throw fail('This account is permanently banned. Reinstate it first (with a message to the person), then suspend it again.');
+  const at = new Date();
+  await User.updateOne({ _id: userId }, { $set: { suspendedAt: at, suspendedPermanent: !!permanent, suspendedReason: text.slice(0, 500), suspendedNote: String(note || '').slice(0, 1000), sessionsValidFrom: new Date() } });
   await revokeSessions({ userId }, 'suspended');
   try {
     // A suspended seller must not keep publishing: scheduled listings go back to drafts.
@@ -84,14 +109,33 @@ async function suspendUser({ userId, reason, note = '', adminId }) {
   } catch (_) { /* best effort */ }
   forgetCache(null, null);
   accessGuard.invalidate();
-  return { userId: String(userId), email: user.email };
+  const emailed = await tellUser(user, permanent ? 'banned' : 'suspended', { reason: text.slice(0, 500), at });
+  return { userId: String(userId), email: user.email, permanent: !!permanent, emailed };
 }
 
-async function unsuspendUser(userId) {
-  const res = await User.updateOne({ _id: userId }, { $set: { suspendedAt: null, suspendedReason: null, suspendedNote: null } });
-  if (!res.matchedCount && !res.n) throw fail('User not found.', 404);
+/**
+ * Lifts a suspension or a permanent ban. A permanent ban can only be lifted with a message to the person (at least 10 characters):
+ * it goes into the mail they get. For a plain suspension the message is optional. Open appeals of that person are closed.
+ * @returns {Promise<{ userId: string, email: string, emailed: boolean, wasBanned: boolean, wasSuspended: boolean }>}
+ */
+async function unsuspendUser(userId, { message = '' } = {}) {
+  const user = await User.findById(userId, { email: 1, name: 1, suspendedAt: 1, suspendedPermanent: 1 }).lean();
+  if (!user) throw fail('User not found.', 404);
+  const wasSuspended = !!user.suspendedAt;
+  const wasBanned = wasSuspended && !!user.suspendedPermanent;
+  const text = String(message || '').trim().slice(0, MAX_LIFT_MESSAGE);
+  if (wasBanned && text.length < MIN_LIFT_MESSAGE) {
+    throw fail('Write a message to the person first (at least ' + MIN_LIFT_MESSAGE + ' characters). A permanently banned account can only be reinstated with a message, and it is sent to them by email.');
+  }
+  await User.updateOne({ _id: userId }, { $set: { suspendedAt: null, suspendedReason: null, suspendedNote: null, suspendedPermanent: false } });
   forgetCache(null, null);
   accessGuard.invalidate();
+  if (!wasSuspended) return { userId: String(userId), email: user.email, emailed: false, wasBanned: false, wasSuspended: false };
+  try {
+    await require('./appealService').closeOpenAppeals(userId, user.email, 'The account was reinstated by an admin' + (text ? ': ' + text : '.'));
+  } catch (err) { console.warn('could not close the appeals of ' + user.email + ':', err.message); }
+  const emailed = await tellUser(user, 'reinstated', { message: text, wasBanned, at: new Date() });
+  return { userId: String(userId), email: user.email, emailed, wasBanned, wasSuspended };
 }
 
 /**
@@ -138,6 +182,7 @@ async function createIpBlock({ ip, deviceIds, reason, note = '', days = 0, suspe
 async function liftIpBlock(id, { adminId, reinstate = false } = {}) {
   const block = await IpBlock.findOneAndUpdate({ _id: id, active: true }, { $set: { active: false, liftedAt: new Date(), liftedBy: adminId } }, { new: true }).lean();
   if (!block) throw fail('That block is not active any more.', 404);
+  // A permanently banned account is refused here on purpose (it needs a message to the person), so it stays banned.
   if (reinstate) for (const userId of block.suspendedUserIds || []) await unsuspendUser(userId).catch(() => {});
   accessGuard.invalidate();
   return serializeBlock(block);
