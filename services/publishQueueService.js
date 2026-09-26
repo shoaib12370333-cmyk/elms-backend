@@ -9,6 +9,7 @@ const {
 } = require('../models/listingsModel');
 const { ensureDraftCategory } = require('./draftCategoryService');
 const bulkPublisher = require('./ebayBulkPublisher');
+const { missingIdentifiers } = require('./productIdentifiers');
 
 const { getImportById } = require('../models/importsModel');
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
@@ -59,8 +60,15 @@ const FIRST_ATTEMPT_MS = 4 * 60 * 1000; // the deadline of a first attempt; the 
  * ebayBulkPublisher.js, which falls back to this same ordinary path whenever anything is unusual); a retry after a transient error, and
  * everything when bulk publishing is off, goes the ordinary way.
  */
-function publishOnEbay(args) {
-  return bulkPublisher.isEnabled() && args.timeoutMs >= FIRST_ATTEMPT_MS ? bulkPublisher.publish(args) : publishListing(args);
+async function publishOnEbay(args) {
+  try {
+    return await (bulkPublisher.isEnabled() && args.timeoutMs >= FIRST_ATTEMPT_MS ? bulkPublisher.publish(args) : publishListing(args));
+  } catch (err) {
+    // eBay: "The UPC field is missing ..." (a category that wants a barcode). Once, that listing goes again with "Does not apply" for what eBay named.
+    const missing = missingIdentifiers(err);
+    if (!missing.length || (args.product && args.product.identifiersNotApplicable)) throw err;
+    return publishListing({ ...args, product: { ...args.product, identifiersNotApplicable: missing } });
+  }
 }
 
 async function publishWithTransientRetry(publishFn, args, { delayMs = 3000, log = () => {} } = {}) {

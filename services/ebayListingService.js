@@ -1,4 +1,5 @@
 const { requireAsinSku } = require('./skuService');
+const { identifierFields } = require('./productIdentifiers');
 const { stripInvisible } = require('./textCleanService');
 const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
@@ -331,6 +332,9 @@ function buildListingBodies({ product, sellPrice, quantity, categoryId, sku, sel
       imageUrls,
 
       aspects: buildAspects(product),
+
+      // Only after eBay said a barcode is missing: "Does not apply" (see services/productIdentifiers.js).
+      ...identifierFields(product),
     },
   };
 
