@@ -80,4 +80,4 @@ Admin -> Users -> Security: **Suspend** (the person can appeal from the blocked 
 
 Appeals are support tickets with source `appeal`. **Admin -> Appeals** lists them (open first, with the state of the account); a person who already has an open appeal adds to it instead of opening another. Reinstating an account closes its open appeals.
 
-Every ELMS mail carries the same layout and the Privacy Policy / Terms links (`/policy`, `/terms.html`): `mailTemplate.ensureLayout` runs on every message inside `emailService.sendWithTimeout`, so a mail written without the layout still gets it, and `tests/banAppeals.test.js` fails if a new `send...` function has no sample there.
+Every ELMS mail carries the same layout and the Privacy Policy / Terms links (`/policy.html`, `/terms.html`): `mailTemplate.ensureLayout` runs on every message inside `emailService.sendWithTimeout`, so a mail written without the layout still gets it, and `tests/banAppeals.test.js` fails if a new `send...` function has no sample there.

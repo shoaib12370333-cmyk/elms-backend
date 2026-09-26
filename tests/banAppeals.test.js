@@ -248,7 +248,7 @@ const fakeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.sta
     for (const msg of mails) {
       assert.ok(msg.html.includes(mailTemplate.LAYOUT_MARK), name + ': the ELMS layout');
       assert.ok(msg.html.includes('logo-wordmark.png'), name + ': logo');
-      assert.ok(msg.html.includes('href="https://elmstool.com/policy"') && msg.html.includes('Privacy Policy'), name + ': Privacy Policy link');
+      assert.ok(msg.html.includes('href="https://elmstool.com/policy.html"') && msg.html.includes('Privacy Policy'), name + ': Privacy Policy link');
       assert.ok(msg.html.includes('href="https://elmstool.com/terms.html"') && msg.html.includes('Terms of Service'), name + ': Terms link');
       assert.match(msg.text, /Privacy Policy: https:\/\/elmstool\.com\/policy/, name + ': text version has the Privacy link');
       assert.match(msg.text, /Terms of Service: https:\/\/elmstool\.com\/terms\.html/, name + ': text version has the Terms link');

@@ -31,7 +31,7 @@ function appName() {
 /** The legal pages every mail points to. */
 function legalLinks() {
   return [
-    { text: 'Privacy Policy', url: siteUrl('/policy') },
+    { text: 'Privacy Policy', url: siteUrl('/policy.html') },
     { text: 'Terms of Service', url: siteUrl('/terms.html') },
     { text: 'User Guide', url: siteUrl('/user-guide.html') },
   ];
