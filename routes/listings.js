@@ -730,6 +730,40 @@ router.post('/bulk-edit', requireAuth, async (req, res) => {
   }
 });
 
+const MAX_PUBLISH_BATCH = 2000;
+
+/**
+ * POST /api/listings/publish-batch   { ids: [...] }
+ *
+ * "Publish all": claims every selected draft, puts them in line for the background publisher and answers at once (202) - one request
+ * instead of one per draft. The person is notified (bell) when the whole batch is done: see services/publishBatchService.js.
+ * A draft that is already live or already being published is not started again and is listed in `skipped` with the reason.
+ */
+router.post('/publish-batch', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body).filter((id) => /^[a-f0-9]{24}$/i.test(id));
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_PUBLISH_BATCH) return res.status(400).json({ success: false, error: `Please publish at most ${MAX_PUBLISH_BATCH} drafts at a time.` });
+  try {
+    const out = await require('../services/publishBatchService').startBatch(req.userId, ids, { claim: claimListingForPublishing, enqueue: enqueuePublish, getListing: getListingById });
+    res.status(out.started ? 202 : 200).json({ success: true, ...out });
+  } catch (err) {
+    console.error('publish batch error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not start publishing. Please try again.' });
+  }
+});
+
+/** GET /api/listings/publish-batch/:id - how many of a "Publish all" are published, failed and still going (cheap: counts only). */
+router.get('/publish-batch/:id', requireAuth, async (req, res) => {
+  try {
+    const progress = await require('../services/publishBatchService').batchProgress(req.userId, req.params.id);
+    if (!progress) return res.status(404).json({ success: false, error: 'Batch not found.' });
+    res.json({ success: true, batch: progress });
+  } catch (err) {
+    console.error('publish batch progress error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not read the progress.' });
+  }
+});
+
 const MAX_AI_BATCH = 25;
 
 /** GET /api/listings/bulk-aspects/cost - what one AI item-specifics fill costs right now (the admin sets it). */
