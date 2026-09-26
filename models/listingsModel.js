@@ -215,6 +215,12 @@ async function findListingInStore(userId, sku, ebayAccountId) {
   return doc ? serialize(doc) : null;
 }
 
+// A list of listings (Live listings, Drafts) is read as plain objects, and from each listing's import only what the list uses (the rest of the
+// import - A+ content, product information, categories ... - stays in the database; the eBay answer of a publish is not sent either).
+const IMPORT_FOR_LIST = 'asin amazonUrl amazonPrice currency product.asin product.price product.brand product.variants product.images product.description product.bulletPoints product.specifications product.ebayAspects';
+const LIST_EXCLUDE = '-publishResponse -publishErrorDetails';
+const ACCOUNT_FOR_LIST = 'displayName storeName ebayUserId storeNumber';
+
 async function listListingsByStatuses(userId, statuses = [], accountId = null, { since = null } = {}) {
   const cleanStatuses = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
   // since: only what was created or changed after that moment (the Drafts page asks for this every few seconds while a background
@@ -225,9 +231,11 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null, {
   if (accountId) query.ebayAccountId = accountId;
   if (onlyNew) query.$or = [{ createdAt: { $gte: since } }, { updatedAt: { $gte: since } }];
   const docs = await Listing.find(query)
-    .populate('importId')
-    .populate('ebayAccountId')
-    .sort({ updatedAt: -1 });
+    .select(LIST_EXCLUDE)
+    .populate({ path: 'importId', select: IMPORT_FOR_LIST })
+    .populate({ path: 'ebayAccountId', select: ACCOUNT_FOR_LIST })
+    .sort({ updatedAt: -1 })
+    .lean();
   const soldByListing = onlyNew ? new Map() : await getSoldByListing(userId);
   return docs.map((doc) => {
     const serialized = serialize(doc);
@@ -307,7 +315,7 @@ async function countListingsByStatus(userId, status, accountId = null) {
 async function claimUnassignedListings(userId, accountId) {
   if (!accountId) return 0;
   try {
-    const orphans = await Listing.find({ userId, ebayAccountId: null }).populate('importId').lean();
+    const orphans = await Listing.find({ userId, ebayAccountId: null }).populate({ path: 'importId', select: 'amazonUrl' }).lean();
     if (!orphans.length) return 0;
     const EbayAccount = require('./schemas/EbayAccount');
     const accounts = await EbayAccount.find({ userId }).sort({ createdAt: 1 }).lean();
@@ -348,7 +356,7 @@ async function listListings(userId, status, accountId = null) {
   await claimUnassignedListings(userId, accountId);
   const query = status ? { userId, status } : { userId };
   if (accountId) query.ebayAccountId = accountId;
-  const docs = await Listing.find(query).populate('importId').populate('ebayAccountId').sort({ updatedAt: -1 });
+  const docs = await Listing.find(query).select(LIST_EXCLUDE).populate({ path: 'importId', select: IMPORT_FOR_LIST }).populate({ path: 'ebayAccountId', select: ACCOUNT_FOR_LIST }).sort({ updatedAt: -1 }).lean();
   const soldByListing = await getSoldByListing(userId);
   return docs.map((doc) => {
     const serialized = serialize(doc);
@@ -622,7 +630,7 @@ function idString(ref) {
  * Converts a Mongoose document into the plain shape the rest of the app expects.
  */
 function serialize(doc) {
-  const obj = doc.toObject();
+  const obj = typeof doc.toObject === 'function' ? doc.toObject() : doc; // a plain object (a lean read) or a document
   return {
     id: obj._id.toString(),
     userId: obj.userId ? obj.userId.toString() : null,

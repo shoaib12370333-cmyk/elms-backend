@@ -94,6 +94,8 @@ app.use(cors({
   },
 }));
 
+app.use(require('./middleware/compression')); // the API's answers are gzipped (the lists are big JSON)
+
 // IMPORTANT: the Paddle webhook needs the raw (unparsed) request body to
 // verify its signature - it's registered here, BEFORE the global
 // express.json() below, with its own express.raw() middleware. If this were

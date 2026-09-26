@@ -116,6 +116,9 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
  * an extra API call.
  */
 const { buildLine: buildNetProfitLine } = require('../services/netProfitService');
+// What an order needs from its listing (title, picture, cost), that listing's import (the Amazon link and price) and its store; the rest stays in the database.
+const LISTING_FOR_ORDER = { path: 'listingId', select: 'title mainImage amazonPrice sku currency importId ebayListingId ebayAccountId', populate: { path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' } };
+const ACCOUNT_FOR_ORDER = { path: 'ebayAccountId', select: 'displayName storeName ebayUserId storeNumber' };
 const positive = (v) => { const n = Number(v); return v !== null && v !== undefined && v !== '' && Number.isFinite(n) && n > 0 ? n : null; };
 
 /**
@@ -130,7 +133,7 @@ async function attachMissingListings(userId, docs) {
   const itemIds = [...new Set(loose.map((d) => d.legacyItemId).filter(Boolean))];
   if (!skus.length && !itemIds.length) return docs;
   const found = await Listing.find({ userId, $or: [...(skus.length ? [{ sku: { $in: skus } }] : []), ...(itemIds.length ? [{ ebayListingId: { $in: itemIds } }] : [])] })
-    .populate('importId').lean();
+    .select('sku ebayListingId ebayAccountId title mainImage amazonPrice currency importId').populate({ path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' }).lean();
   const accountOf = (x) => String((x && (x._id || x)) || '');
   for (const d of loose) {
     const matches = found.filter((l) => (d.sku && l.sku === d.sku) || (d.legacyItemId && l.ebayListingId === d.legacyItemId));
@@ -143,8 +146,8 @@ async function attachMissingListings(userId, docs) {
 async function listOrders(userId, accountId) {
   const query = accountId ? { userId, ebayAccountId: accountId } : { userId };
   const docs = await Order.find(query)
-    .populate({ path: 'listingId', populate: { path: 'importId' } })
-    .populate('ebayAccountId')
+    .populate(LISTING_FOR_ORDER)
+    .populate(ACCOUNT_FOR_ORDER)
     .sort({ ebayCreatedAt: -1, createdAt: -1 })
     .lean();
   await attachMissingListings(userId, docs);
@@ -221,8 +224,8 @@ function enrichOrder(serialized, doc) {
 
 async function getOrderById(userId, id) {
   const doc = await Order.findOne({ _id: id, userId })
-    .populate({ path: 'listingId', populate: { path: 'importId' } })
-    .populate('ebayAccountId')
+    .populate(LISTING_FOR_ORDER)
+    .populate(ACCOUNT_FOR_ORDER)
     .lean();
   if (doc) await attachMissingListings(userId, [doc]);
   if (doc && needsRates([doc])) await warmRates();
@@ -366,6 +369,46 @@ function serialize(doc) {
   };
 }
 
+// ---------------------------------------------------------------- the dashboard's order totals
+const summaryCache = new Map();
+const SUMMARY_TTL_MS = 60 * 1000;
+
+/**
+ * Orders, revenue and profit for the dashboard, worked out here (the dashboard used to download every order to add them up).
+ * Revenue and profit are per currency (a pound and a dollar are never added), in whole cents, cancelled orders left out; the profit is the
+ * same per-order profit the Orders page shows. Kept for a minute per seller.
+ */
+async function ordersSummary(userId, accountId = null) {
+  const key = String(userId) + '|' + String(accountId || '');
+  const hit = summaryCache.get(key);
+  if (hit && Date.now() - hit.at < SUMMARY_TTL_MS) return hit.value;
+  const query = accountId ? { userId, ebayAccountId: accountId } : { userId };
+  const docs = await Order.find(query)
+    .select('userId listingId ebayAccountId sku legacyItemId quantity salePrice currency buyPriceOverride ebayCancelStatus ebayPaymentStatus fulfillmentStatus lineItemStatus ebayOrderFulfillmentStatus')
+    .populate(LISTING_FOR_ORDER)
+    .lean();
+  await attachMissingListings(userId, docs);
+  if (needsRates(docs)) await warmRates();
+  const by = new Map();
+  for (const doc of docs) {
+    const o = enrichOrder(serialize(doc), doc);
+    if (o.order_status === 'cancelled') continue;
+    const cur = o.currency ? String(o.currency).toUpperCase() : null;
+    if (!by.has(cur)) by.set(cur, { currency: cur, orders: 0, revenueCents: 0, profitCents: 0, profitOrders: 0 });
+    const t = by.get(cur);
+    t.orders += 1;
+    const sale = Number(o.sale_price);
+    if (o.sale_price !== null && o.sale_price !== undefined && Number.isFinite(sale)) t.revenueCents += Math.round(sale * 100 + 1e-7);
+    const profit = Number(o.profit);
+    if (o.profit !== null && o.profit !== undefined && Number.isFinite(profit)) { t.profitCents += Math.sign(profit) * Math.round(Math.abs(profit) * 100 + 1e-7); t.profitOrders += 1; }
+  }
+  const currencies = [...by.values()].sort((a, b) => b.orders - a.orders).map((t) => ({ currency: t.currency, orders: t.orders, revenue: t.revenueCents / 100, profit: t.profitOrders ? t.profitCents / 100 : null, profit_orders: t.profitOrders }));
+  const value = { orders: docs.length, currencies };
+  summaryCache.set(key, { at: Date.now(), value });
+  if (summaryCache.size > 500) summaryCache.delete(summaryCache.keys().next().value);
+  return value;
+}
+
 // ---------------------------------------------------------------- the Net Profit sheet (services/netProfitService.js)
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -430,8 +473,8 @@ async function countNetProfitLines(userId, filters) {
 /** Lines of the sheet, newest first: `limit` of them from `offset`. */
 async function listNetProfitLines(userId, filters, { offset = 0, limit = 1000 } = {}) {
   const docs = await Order.find(await netProfitQuery(userId, filters))
-    .populate({ path: 'listingId', populate: { path: 'importId' } })
-    .populate('ebayAccountId')
+    .populate(LISTING_FOR_ORDER)
+    .populate(ACCOUNT_FOR_ORDER)
     .sort({ ebayCreatedAt: -1, createdAt: -1, _id: -1 })
     .skip(offset)
     .limit(limit)
@@ -442,7 +485,7 @@ async function listNetProfitLines(userId, filters, { offset = 0, limit = 1000 } 
 }
 
 async function getNetProfitLine(userId, id) {
-  const doc = await Order.findOne({ _id: id, userId }).populate({ path: 'listingId', populate: { path: 'importId' } }).populate('ebayAccountId').lean();
+  const doc = await Order.findOne({ _id: id, userId }).populate(LISTING_FOR_ORDER).populate(ACCOUNT_FOR_ORDER).lean();
   if (!doc) return null;
   await attachMissingListings(userId, [doc]);
   if (needsRates([doc])) await warmRates();
@@ -456,4 +499,4 @@ async function setNetProfit(userId, id, value) {
   return !!doc;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setNetProfit, netProfitSummary };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setNetProfit, netProfitSummary, ordersSummary, _summaryCache: summaryCache };

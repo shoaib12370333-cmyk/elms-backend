@@ -19,7 +19,7 @@ const fakes = {
       return chain;
     },
   },
-  './schemas/Listing': { distinct: async (field, q) => { distinctCalls.push([field, q]); return distinctData[field] || []; }, find: (q) => ({ select: () => ({ limit: () => ({ lean: async () => { seen.listingQuery = q; return listings; } }) }), populate: () => ({ lean: async () => [] }) }) },
+  './schemas/Listing': { distinct: async (field, q) => { distinctCalls.push([field, q]); return distinctData[field] || []; }, find: (q) => { const picked = { limit: () => ({ lean: async () => { seen.listingQuery = q; return listings; } }), populate: () => ({ lean: async () => [] }) }; return { select: () => picked, populate: () => ({ lean: async () => [] }) }; } },
   './schemas/Import': {},
 };
 const orig = Module._load;

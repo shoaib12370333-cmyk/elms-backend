@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing } = require('../models/ordersModel');
+const { ordersSummary, listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing } = require('../models/ordersModel');
 const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
@@ -66,6 +66,19 @@ router.get('/sync-status', requireAuth, (req, res) => {
  * the Semi-Auto workflow: ELMS can prepare the order, while the seller places
  * the Amazon order manually until a buyer-account adapter is available.
  */
+/**
+ * GET /api/orders/summary?accountId=
+ * For the dashboard: how many orders, and the revenue and profit per currency, without sending every order (light; kept for a minute).
+ */
+router.get('/summary', requireAuth, async (req, res) => {
+  try {
+    res.json({ success: true, ...(await ordersSummary(req.userId, /^[a-f0-9]{24}$/i.test(String(req.query.accountId || '')) ? String(req.query.accountId) : null)) });
+  } catch (err) {
+    console.error('orders summary error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not load the order totals.' });
+  }
+});
+
 router.get('/processing', requireAuth, async (req, res) => {
   const orders = await listOrders(req.userId, req.query.accountId);
   const pending = orders.filter((order) => ['pending', 'ordered_from_amazon'].includes(order.fulfillment_status));
