@@ -9,7 +9,10 @@
  */
 // How many publishes run at the same time (PUBLISH_CONCURRENCY). eBay answers "system error" when it is hit with too many at once, and a
 // failed one is tried once more, so this stays modest; the real speed-up for big lists is eBay's bulk calls, not more parallel ones.
-const MAX_RUNNING = Math.max(1, Math.min(20, Number(process.env.PUBLISH_CONCURRENCY) || 6));
+// With bulk publishing on (EBAY_BULK_PUBLISH) many more listings are worked on at the same time (each mostly waits for its group of 25 to go to
+// eBay together), so 30 is the default then.
+const BULK_ON = ['1', 'true', 'on', 'yes'].includes(String(process.env.EBAY_BULK_PUBLISH || '').trim().toLowerCase());
+const MAX_RUNNING = Math.max(1, Math.min(50, Number(process.env.PUBLISH_CONCURRENCY) || (BULK_ON ? 30 : 6)));
 
 let running = 0;
 const queues = new Map();   // userId -> [job]

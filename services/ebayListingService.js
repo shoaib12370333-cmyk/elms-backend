@@ -20,6 +20,20 @@ function getCurrencyForMarketplace(marketplaceId) {
 const { retryWithBackoff } = require('./retryService');
 
 /**
+ * One eBay error as text. eBay's generic errors ("A system error has occurred", "Invalid value") only say what is wrong in
+ * their `parameters` (field name/value) or `longMessage`, so those are included instead of hidden.
+ */
+function describeEbayError(e) {
+  const extra = [];
+  if (e.longMessage && e.longMessage !== e.message) extra.push(e.longMessage);
+  if (Array.isArray(e.parameters) && e.parameters.length) {
+    extra.push(e.parameters.map((p) => `${p.name}: ${String(p.value).slice(0, 80)}`).join(', '));
+  }
+  const base = e.errorId ? `${e.message} (eBay error ${e.errorId})` : e.message;
+  return extra.length ? `${base} [${extra.join(' | ')}]` : base;
+}
+
+/**
  * A small helper that sends an authenticated request to eBay (on behalf of
  * a specific user's refresh token) and turns eBay-style error objects into
  * a readable message.
@@ -63,7 +77,7 @@ async function ebayRequest(refreshToken, method, path, body, options = {}) {
         'Accept-Language': requestLocale,
         ...(requestMarketplaceId ? { 'X-EBAY-C-MARKETPLACE-ID': requestMarketplaceId } : {}),
       },
-      timeout: Math.min(20000, remaining),
+      timeout: Math.min(options.maxTimeoutMs || 20000, remaining),
     });
   };
 
@@ -76,20 +90,9 @@ async function ebayRequest(refreshToken, method, path, body, options = {}) {
   } catch (err) {
     const ebayErrors = err.response?.data?.errors;
 
-    // eBay's generic errors ("A system error has occurred", "Invalid value") only say what is wrong in
-    // their `parameters` (field name/value) or `longMessage`, so include those instead of hiding them.
-    const describe = (e) => {
-      const extra = [];
-      if (e.longMessage && e.longMessage !== e.message) extra.push(e.longMessage);
-      if (Array.isArray(e.parameters) && e.parameters.length) {
-        extra.push(e.parameters.map((p) => `${p.name}: ${String(p.value).slice(0, 80)}`).join(', '));
-      }
-      const base = e.errorId ? `${e.message} (eBay error ${e.errorId})` : e.message;
-      return extra.length ? `${base} [${extra.join(' | ')}]` : base;
-    };
     const message =
       ebayErrors && ebayErrors.length
-        ? ebayErrors.map(describe).join('; ')
+        ? ebayErrors.map(describeEbayError).join('; ')
         : err.message || 'The eBay API request failed.';
 
     const wrapped = new Error(message);
@@ -270,6 +273,100 @@ async function uploadImagesToEbay(refreshToken, imageUrls, deadlineAt = null, ma
 }
 
 /**
+ * Everything eBay needs for one listing, checked and built: the inventory item body and the offer body. Throws the same errors a
+ * publish always threw for a missing policy / category. Used by publishListing (one listing, one call at a time) and by the bulk
+ * publisher (25 listings per call), so both send exactly the same thing.
+ */
+function buildListingBodies({ product, sellPrice, quantity, categoryId, sku, sellerSettings, packageWeightAndSize = null }) {
+  const {
+    merchantLocationKey,
+    paymentPolicyId,
+    fulfillmentPolicyId,
+    returnPolicyId,
+    marketplaceId = 'EBAY_US',
+  } = sellerSettings || {};
+
+  const normalizedMarketplaceId = assertSupportedMarketplace(marketplaceId);
+  const marketplaceConfig = getMarketplaceConfig(normalizedMarketplaceId);
+
+  if (!merchantLocationKey || !paymentPolicyId || !fulfillmentPolicyId || !returnPolicyId) {
+    throw new Error('This eBay account is missing its business policy setup (merchant location, payment/fulfillment/return policies).');
+  }
+
+  if (!categoryId) {
+    throw new Error('An eBay categoryId is required.');
+  }
+
+  const finalSku = requireAsinSku(sku || product.asin, 'Amazon product');
+
+  // Pass the image URLs straight to eBay in the inventory item, the way the known-working build did. eBay fetches these URLs itself when
+  // the listing publishes. We intentionally do NOT pre-upload via the Media API (create_image_from_url): that extra call is unreliable
+  // (especially on Sandbox, where it's a v1_beta endpoint) and was failing every publish with "could not import any of the product
+  // images". Our images are already materialized to our own public, high-res URLs at import time, so eBay can fetch them directly.
+  const imageUrls = [
+    ...new Set(
+      (Array.isArray(product.images) ? product.images : [])
+        .map((u) => String(u || '').trim())
+        .filter((u) => /^https:\/\//i.test(u))
+    ),
+  ].slice(0, 24);
+
+  const inventoryItemBody = {
+    availability: {
+      shipToLocationAvailability: {
+        quantity: quantity || 1,
+      },
+    },
+
+    condition: 'NEW',
+
+    // Needed by CALCULATED-shipping policies (eBay works the buyer's postage out from it).
+    ...(packageWeightAndSize ? { packageWeightAndSize } : {}),
+
+    product: {
+      title: (product.title || '').slice(0, 80),
+
+      description: product.description || product.bulletPoints?.join('\n') || product.title,
+
+      imageUrls,
+
+      aspects: buildAspects(product),
+    },
+  };
+
+  const offerBody = {
+    sku: finalSku,
+
+    marketplaceId: normalizedMarketplaceId,
+
+    format: 'FIXED_PRICE',
+
+    listingDescription: product.description || product.title,
+
+    availableQuantity: quantity || 1,
+
+    categoryId,
+
+    merchantLocationKey,
+
+    pricingSummary: {
+      price: {
+        value: Number(sellPrice).toFixed(2),
+        currency: marketplaceConfig.currency,
+      },
+    },
+
+    listingPolicies: {
+      paymentPolicyId,
+      fulfillmentPolicyId,
+      returnPolicyId,
+    },
+  };
+
+  return { finalSku, marketplaceId: normalizedMarketplaceId, imageUrls, inventoryItemBody, offerBody };
+}
+
+/**
  * Publishes an Amazon product as a live listing on eBay, on behalf of a
  * specific ELMS user (using their connected eBay account).
  * 3 steps: inventory item -> offer -> publish.
@@ -296,179 +393,39 @@ async function publishListing({
 }) {
   const deadlineAt = Date.now() + timeoutMs;
 
-  const {
-    merchantLocationKey,
-    paymentPolicyId,
-    fulfillmentPolicyId,
-    returnPolicyId,
-    marketplaceId = 'EBAY_US',
-  } = sellerSettings || {};
-
-  const normalizedMarketplaceId = assertSupportedMarketplace(marketplaceId);
-  const marketplaceConfig = getMarketplaceConfig(normalizedMarketplaceId);
-
-  if (
-    !merchantLocationKey ||
-    !paymentPolicyId ||
-    !fulfillmentPolicyId ||
-    !returnPolicyId
-  ) {
-    throw new Error(
-      'This eBay account is missing its business policy setup (merchant location, payment/fulfillment/return policies).'
-    );
-  }
-
-  if (!categoryId) {
-    throw new Error(
-      'An eBay categoryId is required.'
-    );
-  }
-
-  const finalSku = requireAsinSku(sku || product.asin, 'Amazon product');
+  const built = buildListingBodies({ product, sellPrice, quantity, categoryId, sku, sellerSettings, packageWeightAndSize });
+  const { finalSku, marketplaceId: normalizedMarketplaceId, inventoryItemBody, offerBody } = built;
+  const directImageUrls = built.imageUrls;
 
   // ---------- Step 1: Inventory Item ----------
-  // Pass the image URLs straight to eBay in the inventory item, the way the
-  // known-working build did. eBay fetches these URLs itself when the listing
-  // publishes. We intentionally do NOT pre-upload via the Media API
-  // (create_image_from_url): that extra call is unreliable (especially on
-  // Sandbox, where it's a v1_beta endpoint) and was failing every publish with
-  // "could not import any of the product images". Our images are already
-  // materialized to our own public, high-res URLs at import time, so eBay can
-  // fetch them directly.
-
-  const directImageUrls = [
-    ...new Set(
-      (Array.isArray(product.images)
-        ? product.images
-        : [])
-        .map((u) => String(u || '').trim())
-        .filter((u) => /^https:\/\//i.test(u))
-    ),
-  ].slice(0, 24);
+  // (The image URLs go straight to eBay in the inventory item - see buildListingBodies.)
 
   // ---------- IMAGE DEBUG ----------
   // Temporary diagnostics: confirms exactly which URLs ELMS sends to eBay.
-  console.log(
-    '========== EBAY IMAGE DEBUG =========='
-  );
-
-  console.log(
-    'Product ASIN:',
-    product.asin || 'N/A'
-  );
-
-  console.log(
-    'Product image count:',
-    Array.isArray(product.images)
-      ? product.images.length
-      : 0
-  );
-
-  console.log(
-    'Filtered HTTPS image count:',
-    directImageUrls.length
-  );
-
-  console.log(
-    'Image URLs sent to eBay:'
-  );
-
-  console.log(
-    JSON.stringify(directImageUrls, null, 2)
-  );
-
-  console.log(
-    '======================================'
-  );
-
-  const inventoryItemBody = {
-    availability: {
-      shipToLocationAvailability: {
-        quantity: quantity || 1,
-      },
-    },
-
-    condition: 'NEW',
-
-    // Needed by CALCULATED-shipping policies (eBay works the buyer's postage out from it).
-    ...(packageWeightAndSize ? { packageWeightAndSize } : {}),
-
-    product: {
-      title: (product.title || '').slice(
-        0,
-        80
-      ),
-
-      description:
-        product.description ||
-        product.bulletPoints?.join('\n') ||
-        product.title,
-
-      imageUrls: directImageUrls,
-
-      aspects: buildAspects(product),
-    },
-  };
+  console.log('========== EBAY IMAGE DEBUG ==========');
+  console.log('Product ASIN:', product.asin || 'N/A');
+  console.log('Product image count:', Array.isArray(product.images) ? product.images.length : 0);
+  console.log('Filtered HTTPS image count:', directImageUrls.length);
+  console.log('Image URLs sent to eBay:');
+  console.log(JSON.stringify(directImageUrls, null, 2));
+  console.log('======================================');
 
   await ebayRequest(
     refreshToken,
     'PUT',
-    `/sell/inventory/v1/inventory_item/${encodeURIComponent(
-      finalSku
-    )}`,
+    `/sell/inventory/v1/inventory_item/${encodeURIComponent(finalSku)}`,
     inventoryItemBody,
     {
       deadlineAt,
       marketplaceId: normalizedMarketplaceId,
-      timeoutMessage:
-        'eBay publish timed out while creating the inventory item.',
+      timeoutMessage: 'eBay publish timed out while creating the inventory item.',
     }
   );
 
-  console.log(
-    'eBay inventory item accepted for SKU:',
-    finalSku
-  );
-
-  console.log(
-    'eBay inventory item image count:',
-    inventoryItemBody.product.imageUrls.length
-  );
+  console.log('eBay inventory item accepted for SKU:', finalSku);
+  console.log('eBay inventory item image count:', inventoryItemBody.product.imageUrls.length);
 
   // ---------- Step 2: Create Offer ----------
-  const offerBody = {
-    sku: finalSku,
-
-    marketplaceId: normalizedMarketplaceId,
-
-    format: 'FIXED_PRICE',
-
-    listingDescription:
-      product.description ||
-      product.title,
-
-    availableQuantity:
-      quantity || 1,
-
-    categoryId,
-
-    merchantLocationKey,
-
-    pricingSummary: {
-      price: {
-        value: Number(sellPrice).toFixed(2),
-        currency:
-          marketplaceConfig.currency,
-      },
-    },
-
-    listingPolicies: {
-      paymentPolicyId,
-      fulfillmentPolicyId,
-      returnPolicyId,
-    },
-  };
-
   let existingOffer = null;
 
   try {
@@ -1274,6 +1231,9 @@ function buildAspects(product) {
 
 module.exports = {
   publishListing,
+  buildListingBodies,
+  describeEbayError,
+  ebayRequest,
   buildAspects,
   publishExistingOffer,
   deleteOffer,
