@@ -13,7 +13,7 @@ function fakeDoc(fields) {
 
 const docs = [
   // Order WITH a linked listing that has a title - the common/working case.
-  fakeDoc({ id: 'o1', itemTitle: 'Raw eBay title (should not be used)', listingId: { title: 'ELMS Draft Title', mainImage: 'https://x/img.jpg', importId: { amazonPrice: 9.5 } }, ebayAccountId: { ebayUserId: 'seller1' }, salePrice: 20 }),
+  fakeDoc({ id: 'o1', itemTitle: 'Raw eBay title (should not be used)', listingId: { title: 'ELMS Draft Title', mainImage: 'https://x/img.jpg', sku: 'B0ABC12345', importId: { amazonPrice: 9.5, amazonUrl: 'https://www.amazon.co.uk/dp/B0ABC12345' } }, ebayAccountId: { ebayUserId: 'seller1' }, salePrice: 20 }),
   // Order with NO linked listing (e.g. not sourced from ELMS, or the listing was deleted) -
   // this is the exact shape that used to throw "obj is not defined". Also has no itemImage,
   // so main_image should end up null rather than throwing.
@@ -51,6 +51,9 @@ Module._load = origLoad;
   assert.strictEqual(orders[1].listing_title, 'Buyer bought this directly on eBay', 'falls back to the order\'s own item title with no linked listing');
   assert.strictEqual(orders[1].buy_price, null);
   assert.strictEqual(orders[1].main_image, null, 'no listing and no eBay image -> null, not a crash');
+  assert.strictEqual(orders[0].amazon_url, 'https://www.amazon.co.uk/dp/B0ABC12345', 'an order carries the Amazon link of its listing');
+  assert.strictEqual(orders[0].asin, 'B0ABC12345');
+  assert.strictEqual(orders[1].amazon_url, null); assert.strictEqual(orders[1].asin, null);
   assert.strictEqual(orders[2].main_image, 'https://ebay.example/pic.jpg', 'falls back to eBay\'s own line-item image with no linked listing');
   console.log('orders list tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });

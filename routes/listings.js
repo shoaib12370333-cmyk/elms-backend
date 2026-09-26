@@ -1181,6 +1181,7 @@ router.patch('/:id/settings', requireAuth, async (req, res) => {
   }
   const listing = await updateListingSettings(req.userId, req.params.id, {
     tags: req.body?.tags,
+    note: req.body?.note,
     shippingMethod: req.body?.shippingMethod,
     useDynamicPolicies: req.body?.useDynamicPolicies,
     paymentPolicyId: req.body?.paymentPolicyId,
