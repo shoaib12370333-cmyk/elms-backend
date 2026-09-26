@@ -111,6 +111,28 @@ async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku
   return serialize(doc);
 }
 
+/**
+ * The Amazon links of a user's drafts (the "Ready to publish" list of the Drafts page: drafts and drafts that failed to publish), oldest
+ * first, each link once. A draft with no saved link is left out (no link is ever made up).
+ * @returns {Promise<string[]>}
+ */
+async function listDraftAmazonLinks(userId) {
+  const docs = await Listing.find({ userId, status: { $in: ['draft', 'error'] } })
+    .select('importId createdAt')
+    .populate('importId', 'amazonUrl')
+    .sort({ createdAt: 1 })
+    .lean();
+  const seen = new Set();
+  const links = [];
+  for (const doc of docs) {
+    const url = String((doc.importId && doc.importId.amazonUrl) || '').trim();
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    links.push(url);
+  }
+  return links;
+}
+
 async function getListingById(userId, id) {
   const doc = await Listing.findOne({ _id: id, userId });
   return doc ? serialize(doc) : null;
@@ -777,6 +799,7 @@ module.exports = {
   createListing,
   upsertDraft,
   getListingById,
+  listDraftAmazonLinks,
   claimListingForPublishing,
   claimScheduledForPublishing,
   markPublishCreditCharged,
