@@ -105,6 +105,7 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
       sku,
       title: product.title,
       mainImage: (product.images && product.images[0]) || null,
+      images: product.images || [], // the whole gallery: the editor lists the draft's own pictures, and only one (the main one) was kept before
       sellPrice: suggestedPrice ?? product.price,
       markupPercent: ruled ? ruled.markupPercent : (Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0),
       currency: product.currency,

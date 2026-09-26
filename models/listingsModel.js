@@ -230,6 +230,11 @@ function withImportFallback(serialized, doc) {
   serialized.variants = compactVariants(p.variants);
   serialized.variants_count = serialized.variants.length;
   serialized.brand = String(p.brand || '');
+  // A draft made by a server-side import had only its main picture saved on it; its whole gallery is on the import.
+  if (!Array.isArray(serialized.images) || !serialized.images.length) {
+    const gallery = (Array.isArray(p.images) ? p.images : []).filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, 24);
+    if (gallery.length) serialized.images = gallery;
+  }
   if (!serialized.description) serialized.description = String(p.description || '');
   if (!Array.isArray(serialized.bullet_points) || !serialized.bullet_points.length) serialized.bullet_points = Array.isArray(p.bulletPoints) ? p.bulletPoints : [];
   if (!Array.isArray(serialized.specifications) || !serialized.specifications.length) serialized.specifications = Array.isArray(p.specifications) ? p.specifications : [];
