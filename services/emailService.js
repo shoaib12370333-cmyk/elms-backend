@@ -276,7 +276,7 @@ async function sendAccountActionEmail({ to, name, action, reason, message, at, w
   const reasonText = String(reason || '').trim();
   const messageText = String(message || '').trim();
   const signIn = frontendUrl('/signin');
-  const terms = frontendUrl('/terms.html#ending');
+  const terms = frontendUrl('/terms#ending');
 
   let intro; let facts; let body = ''; let cta; let text;
   if (action === 'suspended') {
