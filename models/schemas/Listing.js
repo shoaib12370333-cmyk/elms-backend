@@ -69,6 +69,8 @@ const listingSchema = new mongoose.Schema(
 
     // ---- Per-product settings edited in the inline / full listing editor ----
     tags: { type: [String], default: [] },
+    // The seller's private note. It stays with the draft when it is published, and is never sent to eBay (or anywhere else).
+    note: { type: String, default: '' },
     shippingMethod: { type: String, default: null },
     // true  = use the eBay account's default Payment/Shipping/Return policies.
     // false = per-product policy IDs below win (blank ones fall back to the account).

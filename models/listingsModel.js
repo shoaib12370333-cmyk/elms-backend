@@ -457,6 +457,8 @@ function buildSettingsUpdate(fields = {}) {
     update.tags = Array.from(new Set(list.map((t) => String(t || '').trim().slice(0, 40)).filter(Boolean))).slice(0, 30);
   }
   if (fields.shippingMethod !== undefined) update.shippingMethod = text(fields.shippingMethod, 60);
+  // The private note: kept as typed (line breaks stay), trimmed and cut at 2000 characters; empty clears it.
+  if (fields.note !== undefined) update.note = fields.note === null ? '' : String(fields.note).replace(/\r\n/g, '\n').trim().slice(0, 2000);
   if (fields.useDynamicPolicies !== undefined) update.useDynamicPolicies = fields.useDynamicPolicies === true;
   for (const [key, column] of [['paymentPolicyId', 'paymentPolicyId'], ['fulfillmentPolicyId', 'fulfillmentPolicyId'], ['returnPolicyId', 'returnPolicyId']]) {
     if (fields[key] === undefined) continue;
@@ -661,6 +663,7 @@ function serialize(doc) {
     ebay_image_urls: Array.isArray(obj.ebayImageUrls) ? obj.ebayImageUrls : [],
     publish_error_details: obj.publishErrorDetails || null,
     tags: Array.isArray(obj.tags) ? obj.tags : [],
+    note: obj.note || '',
     shipping_method: obj.shippingMethod || null,
     use_dynamic_policies: !!obj.useDynamicPolicies,
     payment_policy_id: obj.paymentPolicyId || null,

@@ -186,6 +186,9 @@ function enrichOrder(serialized, doc) {
   serialized.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
   serialized.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
   serialized.buy_price = savedAmazonPrice;
+  // Where the product is on Amazon (the link of the import the listing was made from), so an order shows the same eBay and Amazon links as a live listing.
+  serialized.asin = listing?.sku || doc.sku || null;
+  serialized.amazon_url = importRecord?.amazonUrl || null;
 
   // The sale is in the eBay site's currency and the cost in the Amazon site's. They are usually the same (a UK store sells
   // items from amazon.co.uk), but not always (a site with no Amazon of its own, an old draft): then the cost is converted

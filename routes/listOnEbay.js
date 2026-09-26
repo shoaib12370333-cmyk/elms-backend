@@ -426,6 +426,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       specifications: productToSave?.specifications ?? req.body.specifications,
       // Per-product settings from the listing editor (validated in listingsModel.buildSettingsUpdate).
       tags: req.body.tags,
+      note: req.body.note,
       shippingMethod: req.body.shippingMethod,
       useDynamicPolicies: req.body.useDynamicPolicies,
       paymentPolicyId: req.body.paymentPolicyId,

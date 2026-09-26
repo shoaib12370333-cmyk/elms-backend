@@ -13,6 +13,19 @@ const loc = buildSettingsUpdate({ countryLocation: 'uk', postalCode: 'sw1a 2dx',
 assert.strictEqual(loc.countryLocation, 'GB');
 assert.strictEqual(loc.postalCode, 'SW1A 2DX');
 assert.ok(!('postalCode' in buildSettingsUpdate({ postalCode: '<script>' })));
+// the private note: line breaks kept, trimmed, cut at 2000 characters, empty (or null) clears it, not sent = not touched
+assert.strictEqual(buildSettingsUpdate({ note: '  Buy from seller A\r\nsecond line  ' }).note, 'Buy from seller A\nsecond line');
+assert.strictEqual(buildSettingsUpdate({ note: 'x'.repeat(3000) }).note.length, 2000);
+assert.strictEqual(buildSettingsUpdate({ note: '' }).note, '');
+assert.strictEqual(buildSettingsUpdate({ note: null }).note, '');
+assert.ok(!('note' in buildSettingsUpdate({ tags: 'a' })));
+// ... and it is never part of what goes to eBay
+{
+  const { buildListingBodies } = require('../services/ebayListingService');
+  const bodies = buildListingBodies({ product: { asin: 'B012345678', title: 'Kettle', description: 'Desc', images: ['https://img.example/1.jpg'], note: 'PRIVATE-NOTE-TEXT' }, sellPrice: 20, quantity: 1, categoryId: '9355',
+    sellerSettings: { merchantLocationKey: 'l', paymentPolicyId: 'p', fulfillmentPolicyId: 'f', returnPolicyId: 'r', marketplaceId: 'EBAY_GB' } });
+  assert.ok(!JSON.stringify(bodies).includes('PRIVATE-NOTE-TEXT'), 'the private note is not in the eBay request');
+}
 // monitoring defaults stay on unless explicitly false
 assert.strictEqual(buildSettingsUpdate({ stockMonitoring: false }).stockMonitoring, false);
 assert.strictEqual(buildSettingsUpdate({ priceMonitoring: 'yes' }).priceMonitoring, true);
