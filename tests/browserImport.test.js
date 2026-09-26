@@ -57,10 +57,10 @@ Module._load = function (request, parent) {
 };
 const { withImportFallback, compactVariants } = require('../models/listingsModel');
 Module._load = origLoad;
-const row = withImportFallback({ description: 'd', bullet_points: ['b'], specifications: [{ name: 'a', value: 'b' }], ebay_aspects: { x: ['y'] } }, { importId: { product: { brand: 'Acme', variants: product.variants } } });
-assert.strictEqual(row.variants_count, 2);
+const row = withImportFallback({ description: 'd', bullet_points: ['b'], specifications: [{ name: 'a', value: 'b' }], ebay_aspects: { x: ['y'] } }, { sku: 'B0BLACK002', importId: { product: { brand: 'Acme', variants: product.variants } } });
+assert.strictEqual(row.variants_count, 1, 'only the product itself travels with the row, not its other colours / sizes');
 assert.deepStrictEqual(Object.keys(row.variants[0]).sort(), ['asin', 'dimensions', 'image', 'isCurrentProduct', 'label', 'price', 'title'], 'only what the list needs: the long picture lists stay on the import');
-assert.strictEqual(row.variants[1].image, 'https://m.media-amazon.com/images/I/C.jpg');
+assert.strictEqual(row.variants[0].asin, 'B0BLACK002'); assert.strictEqual(row.variants[0].image, 'https://m.media-amazon.com/images/I/C.jpg');
 assert.deepStrictEqual(withImportFallback({}, { importId: { product: { brand: 'x' } } }).variants, [], 'a product with no variants has an empty list, not a made-up one');
 assert.deepStrictEqual(compactVariants(null), []);
 console.log('listing variants tests passed');

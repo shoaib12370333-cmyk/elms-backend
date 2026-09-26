@@ -246,6 +246,7 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null, {
  * The colour / size variants of an imported product, small enough to travel with every listing row: what makes each one
  * different, its own title, one picture and its price (the full picture lists stay on the import).
  */
+const { ownVariantOnly } = require('../services/productVariants');
 function compactVariants(list) {
   if (!Array.isArray(list)) return [];
   return list.filter((v) => v && v.asin).slice(0, 50).map((v) => ({
@@ -263,7 +264,7 @@ function compactVariants(list) {
 function withImportFallback(serialized, doc) {
   const p = doc.importId?.product;
   if (!p) return serialized;
-  serialized.variants = compactVariants(p.variants);
+  serialized.variants = compactVariants(ownVariantOnly(p.variants, doc.sku || p.asin)); // only the product itself, also for imports made before
   serialized.variants_count = serialized.variants.length;
   serialized.brand = String(p.brand || '');
   // A draft made by a server-side import had only its main picture saved on it; its whole gallery is on the import.

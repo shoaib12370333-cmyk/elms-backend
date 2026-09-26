@@ -14,7 +14,7 @@ const S = require('../services/bulkEditService');
 const P = require('../services/pricingService');
 
 // ---- an in-memory set of drafts that saves the way the real model does (serialized names) ----
-const COLUMN = { title: 'title', sellPrice: 'sell_price', markupPercent: 'markup_percent', marginAmount: 'margin_amount', pricingRule: 'pricing_rule', amazonPrice: 'amazon_price', quantity: 'quantity', ebayAspects: 'ebay_aspects', tags: 'tags',
+const COLUMN = { note: 'note', title: 'title', sellPrice: 'sell_price', markupPercent: 'markup_percent', marginAmount: 'margin_amount', pricingRule: 'pricing_rule', amazonPrice: 'amazon_price', quantity: 'quantity', ebayAspects: 'ebay_aspects', tags: 'tags',
   stockMonitoring: 'stock_monitoring', priceMonitoring: 'price_monitoring', countryLocation: 'country_location', locationCity: 'location_city', postalCode: 'postal_code', useDynamicPolicies: 'use_dynamic_policies',
   paymentPolicyId: 'payment_policy_id', fulfillmentPolicyId: 'shipping_policy_id', returnPolicyId: 'return_policy_id' };
 let rows = {};
@@ -181,6 +181,22 @@ const RULE = { enabled: true, currency: 'GBP', feePercent: 13, feeFixed: 0.3, pr
   reset(); saved = RULE;
   await run({ price: { mode: 'saved' } }, ['D1']);
   assert.strictEqual(repriceFor(rows.D1, 20, 5.29).sellPrice, P.computePrice(20, RULE).price);
+
+  // ---------- the private note: replace, add to, clear ----------
+  reset();
+  await refuses({ note: {} }, /what to do with the notes/); await refuses({ note: { mode: 'set', text: '  ' } }, /Type the note/); await refuses({ note: { mode: 'append' } }, /Type the note/);
+  await refuses({ note: { mode: 'set', text: 'x'.repeat(2001) } }, /at most 2000/);
+  assert.deepStrictEqual((await valid({ note: { mode: 'clear', text: 'ignored' } })).note, { mode: 'clear', text: '' });
+  assert.deepStrictEqual((await valid({ note: { mode: 'set', text: ' Buy from A\r\nlater ' } })).note, { mode: 'set', text: 'Buy from A\nlater' });
+  let nout = await run({ note: { mode: 'set', text: 'Buy from A' } });
+  assert.deepStrictEqual(nout.summary, { changed: 3, unchanged: 0, skipped: 0 }); assert.strictEqual(rows.D1.note, 'Buy from A'); assert.deepStrictEqual(nout.results[0].diff, [{ field: 'Note', from: null, to: 'Buy from A' }]);
+  nout = await run({ note: { mode: 'set', text: 'Buy from A' } }); assert.strictEqual(nout.summary.unchanged, 3, 'the same note again changes nothing');
+  nout = await run({ note: { mode: 'append', text: 'reorder in May' } }); assert.strictEqual(rows.D2.note, 'Buy from A\nreorder in May');
+  rows.D3.note = 'x'.repeat(1990);
+  nout = await run({ note: { mode: 'append', text: 'y'.repeat(20) } });
+  assert.deepStrictEqual(nout.results.map((r) => r.status), ['changed', 'changed', 'skipped']); assert.match(nout.results[2].reason, /the most is 2000/); assert.strictEqual(rows.D3.note.length, 1990, 'a note that would be too long is not cut');
+  nout = await run({ note: { mode: 'clear' } }); assert.strictEqual(nout.summary.changed, 3); assert.strictEqual(rows.D1.note, '');
+  nout = await run({ note: { mode: 'clear' } }); assert.strictEqual(nout.summary.unchanged, 3);
 
   // ---------- which drafts are edited ----------
   reset(); rows.D2.status = 'published'; rows.D3.status = 'error';

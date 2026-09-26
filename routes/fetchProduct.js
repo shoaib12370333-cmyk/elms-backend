@@ -16,6 +16,7 @@ const { currencyForAmazonUrl } = require('../config/amazonDomains');
 const { convertAmount } = require('../services/currencyService');
 const { storeForImport, assertStoreForImport, bulkCostFor, alreadyListedMessage } = require('../services/extensionService');
 const { priceByRule, markupGiven } = require('../services/importPricingService');
+const { onlyThisProduct } = require('../services/productVariants');
 const { getPricingRule } = require('../models/usersModel');
 const { normalizeRule } = require('../services/pricingService');
 
@@ -74,6 +75,7 @@ async function alignPriceCurrency(product, sourceUrl) {
 async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req, knownActiveEbayAccount, { alreadyCharged = false, cost = ACTION_COSTS.AMAZON_IMPORT, pricingRule } = {}) {
   const activeEbayAccount = knownActiveEbayAccount !== undefined ? knownActiveEbayAccount : await getActiveEbayAccount(userId);
   await alignPriceCurrency(product, sourceUrl); // before the credit is taken: a price that cannot be put right saves nothing
+  onlyThisProduct(product); // the product of the link only: its other colours / sizes are not kept
   // The seller's pricing rule (Settings > Pricing) prices the product when the request has no markup % of its own; null = the markup
   // below works exactly as it always did. Also before the credit: a rule that cannot be used saves nothing and costs nothing.
   const ruled = await priceByRule({ userId, price: product.price, currency: product.currency, markupPercent, pricingRule });

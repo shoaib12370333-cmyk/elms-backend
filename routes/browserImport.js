@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { createImport, updateImportImages } = require('../models/importsModel');
+const { onlyThisProduct } = require('../services/productVariants');
 const { upsertDraft, findListingInStore } = require('../models/listingsModel');
 const { hasCredits, getUserById } = require('../models/usersModel');
 const { withCredits } = require('../services/creditService');
@@ -196,6 +197,7 @@ router.post('/', requireAuth, async (req, res) => {
     let draft;
     // Pays first (nothing is saved without the credit) and gives it back if saving fails.
     await withCredits(req.userId, ACTION_COSTS.BROWSER_IMPORT_SCRAPE, async () => {
+      onlyThisProduct(normalized); // the product of the link only: its other colours / sizes are not kept
       importRecord = await createImport(req.userId, normalized, suggestedPrice, amazonUrl.trim(), activeEbayAccount?.id || null);
       const storedImages = normalized.images.length
         ? await materializeImageUrls({ urls: normalized.images, userId: req.userId, listingId: importRecord.id, req })
