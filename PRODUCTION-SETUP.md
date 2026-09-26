@@ -73,3 +73,11 @@ A seller can save one pricing rule (`GET/PUT /api/pricing/rule`, `POST /api/pric
 
 It prices a product **only when it is switched on and the request has no markup % of its own**: the single import, the extension's import and the background list. A markup typed on the Import page (or sent by an older extension) always wins and works exactly as before; with no rule, or a rule that is off, nothing changes. A rule that cannot be used (a broken saved rule, or a rule in another currency with no exchange rate right now) refuses the import (409 / 503) before any credit is taken. A background list keeps the rule of the moment it started (`BulkImportJob.pricingRule`). A draft keeps a copy of its rule (`Listing.pricingRule`, money in the listing's currency): the stock monitor then re-prices it by the rule instead of keeping the cash margin, and a price typed by hand ends the rule for that listing. Existing drafts and live listings are never touched by saving a rule.
 
+
+## Suspend, permanent ban, appeals and account mails
+
+Admin -> Users -> Security: **Suspend** (the person can appeal from the blocked screen) or **Permanent ban** (`permanent: true`: no appeal, `POST /api/appeals` answers 403 for that account). Both mail the person the reason; **reinstating** mails them too. A permanent ban can only be reinstated with a message of 10+ characters (checked on the server), and that message goes into the mail. The mails go out from the **Security** sender (`SMTP_FROM_SECURITY`, or the default sender when it is not set up), replies go to Support. If the mail cannot be sent, the action still happens and the admin is told ("the email could not be sent").
+
+Appeals are support tickets with source `appeal`. **Admin -> Appeals** lists them (open first, with the state of the account); a person who already has an open appeal adds to it instead of opening another. Reinstating an account closes its open appeals.
+
+Every ELMS mail carries the same layout and the Privacy Policy / Terms links (`/policy`, `/terms.html`): `mailTemplate.ensureLayout` runs on every message inside `emailService.sendWithTimeout`, so a mail written without the layout still gets it, and `tests/banAppeals.test.js` fails if a new `send...` function has no sample there.

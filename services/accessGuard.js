@@ -42,14 +42,15 @@ async function findBlock({ ip, deviceId }) {
 const sameId = (a, b) => String(a) === String(b);
 
 /**
- * @param {{ user: { _id?, id?, role?, suspendedAt?, suspendedReason? }, ip?: string, deviceId?: string }} ctx
- * @returns {Promise<null | { kind: 'account'|'ip', reason: string }>} null = allowed
+ * @param {{ user: { _id?, id?, role?, suspendedAt?, suspendedReason?, suspendedPermanent? }, ip?: string, deviceId?: string }} ctx
+ * @returns {Promise<null | { kind: 'account'|'ip', reason: string, permanent?: boolean }>} null = allowed. permanent = a ban that cannot be appealed.
  */
 async function checkAccess({ user, ip, deviceId }) {
   if (!user) return null;
   if (user.role === 'admin') return null; // an admin can never be locked out
   if (user.suspendedAt) {
-    return { kind: 'account', reason: (user.suspendedReason || 'Your account has been suspended.') + ' ' + APPEAL_HINT };
+    if (user.suspendedPermanent) return { kind: 'account', permanent: true, reason: user.suspendedReason || 'Your account has been permanently banned.' };
+    return { kind: 'account', permanent: false, reason: (user.suspendedReason || 'Your account has been suspended.') + ' ' + APPEAL_HINT };
   }
   const block = await findBlock({ ip, deviceId });
   if (!block) return null;
@@ -69,7 +70,7 @@ async function checkNewAccount({ ip, deviceId }) {
 function blockedError(access) {
   const err = new Error(access.reason);
   err.statusCode = 403;
-  err.blocked = { kind: access.kind, reason: access.reason };
+  err.blocked = { kind: access.kind, reason: access.reason, ...(access.permanent ? { permanent: true } : {}) };
   return err;
 }
 

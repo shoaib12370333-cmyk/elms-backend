@@ -509,6 +509,7 @@ function serialize(doc) {
     planTerm: obj.planTerm || null,
     suspendedAt: obj.suspendedAt || null,
     suspendedReason: obj.suspendedReason || null,
+    suspendedPermanent: !!obj.suspendedPermanent,
     // the welcome popup: only for an account that was given welcome credits and whose owner has not closed it yet
     welcomePopup: obj.welcomeCredits > 0 && !obj.welcomePopupSeenAt ? { credits: obj.welcomeCredits } : null,
     createdAt: obj.createdAt,

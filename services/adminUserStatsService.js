@@ -13,7 +13,7 @@ const place = (e) => [e.city, e.country].filter(Boolean).join(', ') || null;
  * whether they bought a plan (paid) or use the free plan, the IP + place of their last sign-in, and whether they have
  * connected an eBay store (and how many).
  * @param {Array<{id: string}>} users serialised users
- * @returns {Promise<{ users: Array, summary: { total, online, paid, free, suspended, ebayConnected, ebayNotConnected } }>}
+ * @returns {Promise<{ users: Array, summary: { total, online, paid, free, suspended, banned, ebayConnected, ebayNotConnected } }>}
  */
 async function enrichUsers(users) {
   const [seen, bought, logins, stores] = await Promise.all([
@@ -35,7 +35,7 @@ async function enrichUsers(users) {
   const storesBy = new Map(stores.map((r) => [String(r._id), r]));
 
   const now = Date.now();
-  const summary = { total: users.length, online: 0, paid: 0, free: 0, suspended: 0, ebayConnected: 0, ebayNotConnected: 0 };
+  const summary = { total: users.length, online: 0, paid: 0, free: 0, suspended: 0, banned: 0, ebayConnected: 0, ebayNotConnected: 0 };
   const out = users.map((u) => {
     const s = seenBy.get(String(u.id));
     const l = loginBy.get(String(u.id));
@@ -46,7 +46,7 @@ async function enrichUsers(users) {
     const paid = !!b;
     if (online) summary.online += 1;
     if (paid) summary.paid += 1; else summary.free += 1;
-    if (u.suspendedAt) summary.suspended += 1;
+    if (u.suspendedAt && u.suspendedPermanent) summary.banned += 1; else if (u.suspendedAt) summary.suspended += 1;
     if (e) summary.ebayConnected += 1; else summary.ebayNotConnected += 1;
     return {
       ...u,
@@ -58,6 +58,7 @@ async function enrichUsers(users) {
         : { paid: false },
       lastLogin: l ? { ip: l.ip || null, place: place(l), at: l.at } : null,
       suspended: !!u.suspendedAt,
+      banned: !!(u.suspendedAt && u.suspendedPermanent),
       ebay: { connected: !!e, stores: e ? e.stores : 0, marketplaces: e ? (e.marketplaces || []).filter(Boolean) : [] },
     };
   });

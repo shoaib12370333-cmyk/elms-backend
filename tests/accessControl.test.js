@@ -57,6 +57,10 @@ stub('models/schemas/IpBlock', {
   find: () => lean(db.blocks.filter((b) => b.active)),
 });
 
+// suspending / reinstating also closes appeals and mails the person; both are covered in banAppeals.test.js
+stub('models/schemas/SupportTicket', { updateMany: async () => ({}) });
+stub('services/emailService', { sendAccountActionEmail: async () => ({}) });
+
 const guard = require('../services/accessGuard');
 const tracker = require('../services/sessionTracker');
 const svc = require('../services/accessAdminService');

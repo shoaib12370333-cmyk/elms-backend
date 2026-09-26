@@ -40,17 +40,29 @@ router.post('/blocks/:id/lift', wrap(async (req, res) => {
   res.json({ success: true, block: await svc.liftIpBlock(req.params.id, { adminId: req.userId, reinstate: !!req.body?.reinstate }) });
 }));
 
-/** POST /api/admin/security/users/:id/suspend  { reason, note? } */
+/**
+ * POST /api/admin/security/users/:id/suspend  { reason, note?, permanent? }
+ * permanent: true is a ban for good (no appeal). The person is told by mail either way; `emailed` says whether the mail was accepted.
+ */
 router.post('/users/:id/suspend', wrap(async (req, res) => {
   if (!isValidObjectIdString(req.params.id)) throw notFound();
-  await svc.suspendUser({ userId: req.params.id, reason: req.body?.reason, note: req.body?.note, adminId: req.userId });
-  res.json({ success: true });
+  const out = await svc.suspendUser({ userId: req.params.id, reason: req.body?.reason, note: req.body?.note, adminId: req.userId, permanent: req.body?.permanent === true });
+  res.json({ success: true, permanent: out.permanent, emailed: out.emailed });
 }));
 
+/**
+ * POST /api/admin/security/users/:id/unsuspend  { message? }
+ * Reinstates the account and mails the person. The message is required (10+ characters) to lift a permanent ban; it is optional for a suspension.
+ */
 router.post('/users/:id/unsuspend', wrap(async (req, res) => {
   if (!isValidObjectIdString(req.params.id)) throw notFound();
-  await svc.unsuspendUser(req.params.id);
-  res.json({ success: true });
+  const out = await svc.unsuspendUser(req.params.id, { message: req.body?.message });
+  res.json({ success: true, emailed: out.emailed, wasBanned: out.wasBanned });
+}));
+
+/** GET /api/admin/security/appeals - every appeal (open first) with the state of the account it is about, and how many are open. */
+router.get('/appeals', wrap(async (req, res) => {
+  res.json({ success: true, ...(await require('../services/appealService').listAppeals()) });
 }));
 
 // ---------- messages that pop up on a user's screen ----------
