@@ -3,7 +3,7 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/requireAuth');
 const User = require('../models/schemas/User');
 const { getLimits } = require('../models/settingsModel');
-const { listNetProfitLines, countNetProfitLines, getNetProfitLine, setNetProfit, setBuyPrice } = require('../models/ordersModel');
+const { listNetProfitLines, countNetProfitLines, getNetProfitLine, setNetProfit, setBuyPrice, netProfitSummary } = require('../models/ordersModel');
 const { PAGE_SIZE, isPaidUser, paging, csvHeader, csvLine, csvTotals } = require('../services/netProfitService');
 
 /** What the request asks for: the filters of the sheet (store, dates, search, cancelled orders). */
@@ -39,6 +39,23 @@ router.get('/', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('net profit list error:', err.message);
     res.status(500).json({ success: false, error: 'Could not load the sheet. Please try again.' });
+  }
+});
+
+/**
+ * GET /api/net-profit/summary?from=&to=&accountId=
+ * For the dashboard: the net profit the seller typed on the sheet, added up per currency (a euro and a dollar are never added together),
+ * and how many orders have one. One light database sum; only orders of ELMS listings, cancelled ones left out.
+ */
+router.get('/summary', requireAuth, async (req, res) => {
+  try {
+    const filters = filtersOf(req.query);
+    filters.q = '';
+    filters.includeCancelled = false;
+    res.json({ success: true, ...(await netProfitSummary(req.userId, filters)) });
+  } catch (err) {
+    console.error('net profit summary error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not load the net profit. Please try again.' });
   }
 });
 

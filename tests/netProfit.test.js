@@ -104,6 +104,7 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
       countNetProfitLines: async (u, f) => { calls.push({ count: f }); return total; },
       listNetProfitLines: async (u, f, o) => { calls.push({ list: o }); return Array.from({ length: Math.min(o.limit, Math.max(0, total - o.offset)) }, (_, i) => S.buildLine(order({ id: 'x' + (o.offset + i), ebay_order_id: '1-' + (o.offset + i) }))); },
       getNetProfitLine: async () => S.buildLine(order({ net_profit: 30 })),
+      netProfitSummary: async (u, f) => { calls.push({ summary: f }); return { currencies: [{ currency: 'GBP', net_profit: 30, orders: 1 }], orders: 1, ordersTotal: 4 }; },
       setNetProfit: async (u, id, v) => { saved.push(['net', id, v]); return true; },
       setBuyPrice: async (u, id, v) => { saved.push(['amazon', id, v]); if (v !== null && Number(v) <= 0) throw new Error('Enter the cost of one item as a number above 0.'); return {}; },
     },
@@ -138,6 +139,11 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   assert.strictEqual(res.chunks.join('').split('\r\n').filter(Boolean).length, 1 + 1000 + 1, 'free: header + its 1000 lines + the total');
   who = 'paid'; res = await call(handler('get', '/export'));
   assert.strictEqual(res.chunks.join('').split('\r\n').filter(Boolean).length, 1 + 2431 + 1, 'a plan: every line, more than the 1000 of one page');
+
+  // the dashboard sum: the filters are cleaned (no search, cancelled orders never counted) and the answer is passed on
+  calls.length = 0; res = await call(handler('get', '/summary'), { query: { q: 'wash', includeCancelled: '1', accountId: 'zzz', from: '2026-09-01T00:00:00Z' } });
+  assert.deepStrictEqual([res.statusCode, res.body.success, res.body.orders, res.body.ordersTotal, res.body.currencies[0].net_profit], [200, true, 1, 4, 30]);
+  const sf = calls.find((c) => c.summary).summary; assert.deepStrictEqual([sf.q, sf.includeCancelled, sf.accountId], ['', false, null]); assert.ok(sf.from instanceof Date);
 
   // saving the two typed cells
   res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: { netProfit: '30', amazonPrice: 100 } });
