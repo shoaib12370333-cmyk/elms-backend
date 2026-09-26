@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Order = require('./schemas/Order');
 const Listing = require('./schemas/Listing');
 const Import = require('./schemas/Import');
@@ -368,7 +369,21 @@ function serialize(doc) {
 // ---------------------------------------------------------------- the Net Profit sheet (services/netProfitService.js)
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** The database filter of the sheet: store, dates, a search in the title / order ID / SKU / item number, and cancelled orders (left out unless asked). */
+/**
+ * The orders of products listed WITH ELMS: the order is linked to an ELMS listing, or its SKU / eBay item number is one of the seller's ELMS
+ * listings (the same matching the sheet uses to find an order's title and cost). Orders for things the seller listed on eBay some other way
+ * are not part of the sheet.
+ */
+async function elmsOrdersCondition(userId) {
+  const [skus, itemIds] = await Promise.all([
+    Listing.distinct('sku', { userId, status: { $nin: ['draft', 'error'] } }),
+    Listing.distinct('ebayListingId', { userId, ebayListingId: { $nin: [null, ''] } }),
+  ]);
+  const ownSkus = skus.filter((s) => s && !/^EBAY-/.test(String(s)));
+  return { $or: [{ listingId: { $ne: null } }, ...(ownSkus.length ? [{ sku: { $in: ownSkus } }] : []), ...(itemIds.length ? [{ legacyItemId: { $in: itemIds.map(String) } }] : [])] };
+}
+
+/** The database filter of the sheet: only orders of ELMS listings, store, dates, a search in the title / order ID / SKU / item number, and cancelled orders (left out unless asked). */
 async function netProfitQuery(userId, { accountId, from, to, q, includeCancelled } = {}) {
   const query = { userId };
   const and = [];
@@ -386,8 +401,26 @@ async function netProfitQuery(userId, { accountId, from, to, q, includeCancelled
     const listings = await Listing.find({ userId, title: re }).select('_id').limit(2000).lean();
     and.push({ $or: [{ itemTitle: re }, { ebayOrderId: re }, { sku: re }, { legacyItemId: re }, ...(listings.length ? [{ listingId: { $in: listings.map((l) => l._id) } }] : [])] });
   }
-  if (and.length) query.$and = and;
+  and.push(await elmsOrdersCondition(userId));
+  query.$and = and;
   return query;
+}
+
+/**
+ * What was typed as net profit, per currency, over the same orders the sheet has (light: one database sum, no lines are read).
+ * `orders` = how many orders have a net profit typed; `ordersTotal` = all the orders the filters give.
+ */
+async function netProfitSummary(userId, filters = {}) {
+  const base = await netProfitQuery(userId, filters);
+  const cast = (id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(String(id)));
+  const match = { ...base, userId: cast(userId), netProfit: { $ne: null } };
+  if (match.ebayAccountId) match.ebayAccountId = cast(match.ebayAccountId);
+  const [rows, ordersTotal] = await Promise.all([
+    Order.aggregate([{ $match: match }, { $group: { _id: '$currency', sum: { $sum: { $multiply: ['$netProfit', 100] } }, count: { $sum: 1 } } }]),
+    Order.countDocuments(base),
+  ]);
+  const currencies = rows.map((r) => ({ currency: r._id ? String(r._id).toUpperCase() : null, net_profit: Math.round(r.sum) / 100, orders: r.count })).sort((a, b) => b.orders - a.orders);
+  return { currencies, orders: currencies.reduce((n, c) => n + c.orders, 0), ordersTotal };
 }
 
 async function countNetProfitLines(userId, filters) {
@@ -423,4 +456,4 @@ async function setNetProfit(userId, id, value) {
   return !!doc;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setNetProfit };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setNetProfit, netProfitSummary };

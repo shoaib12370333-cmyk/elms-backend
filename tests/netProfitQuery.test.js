@@ -6,16 +6,20 @@ const Module = require('module');
 const seen = { find: null, sort: null, skip: null, limit: null, count: null, populates: [] };
 let docs = [];
 const listings = [{ _id: 'L1' }, { _id: 'L2' }];
+let distinctData = { sku: ['B0a', 'EBAY-1', '', null, 'B0b'], ebayListingId: ['110001', 110002] };
+let aggRows = [];
+const distinctCalls = [];
 const fakes = {
   './schemas/Order': {
     countDocuments: async (q) => { seen.count = q; return 7; },
+    aggregate: async (pipeline) => { seen.pipeline = pipeline; return aggRows; },
     find: (q) => {
       seen.find = q;
       const chain = { populate: (p) => { seen.populates.push(typeof p === 'string' ? p : p.path); return chain; }, sort: (s) => { seen.sort = s; return chain; }, skip: (n) => { seen.skip = n; return chain; }, limit: (n) => { seen.limit = n; return chain; }, lean: async () => docs };
       return chain;
     },
   },
-  './schemas/Listing': { find: (q) => ({ select: () => ({ limit: () => ({ lean: async () => { seen.listingQuery = q; return listings; } }) }), populate: () => ({ lean: async () => [] }) }) },
+  './schemas/Listing': { distinct: async (field, q) => { distinctCalls.push([field, q]); return distinctData[field] || []; }, find: (q) => ({ select: () => ({ limit: () => ({ lean: async () => { seen.listingQuery = q; return listings; } }) }), populate: () => ({ lean: async () => [] }) }) },
   './schemas/Import': {},
 };
 const orig = Module._load;
@@ -29,7 +33,11 @@ const doc = (id, extra = {}) => ({ _id: { toString: () => id }, userId: { toStri
 (async () => {
   // ---------- the filter ----------
   let q = await M.netProfitQuery('u1', {});
-  assert.deepStrictEqual(q, { userId: 'u1', ebayCancelStatus: { $nin: ['CANCELED', 'CANCELLED'] } }, 'cancelled orders are left out by default');
+  assert.deepStrictEqual(q.ebayCancelStatus, { $nin: ['CANCELED', 'CANCELLED'] }, 'cancelled orders are left out by default'); assert.strictEqual(q.userId, 'u1');
+  // only orders of products listed WITH ELMS: linked to a listing, or with the SKU / item number of one of the seller's ELMS listings (never eBay's own "EBAY-" placeholder SKU)
+  assert.deepStrictEqual(q.$and, [{ $or: [{ listingId: { $ne: null } }, { sku: { $in: ['B0a', 'B0b'] } }, { legacyItemId: { $in: ['110001', '110002'] } }] }]);
+  assert.deepStrictEqual(distinctCalls[0], ['sku', { userId: 'u1', status: { $nin: ['draft', 'error'] } }], 'a draft is not a listing that sold anything'); assert.deepStrictEqual(distinctCalls[1][0], 'ebayListingId');
+  distinctData = { sku: [], ebayListingId: [] }; assert.deepStrictEqual((await M.netProfitQuery('u1', {})).$and, [{ $or: [{ listingId: { $ne: null } }] }], 'no ELMS listings: only orders already linked to one'); distinctData = { sku: ['B0a', 'EBAY-1', '', null, 'B0b'], ebayListingId: ['110001', 110002] };
   q = await M.netProfitQuery('u1', { includeCancelled: true }); assert.ok(!('ebayCancelStatus' in q));
   q = await M.netProfitQuery('u1', { accountId: 'A1' }); assert.strictEqual(q.ebayAccountId, 'A1');
   const from = new Date('2026-09-01T00:00:00Z'); const to = new Date('2026-09-30T23:59:59Z');
@@ -43,7 +51,7 @@ const doc = (id, extra = {}) => ({ _id: { toString: () => id }, userId: { toStri
   assert.deepStrictEqual(Object.keys(or.map((o) => Object.keys(o)[0]).reduce((a, k) => ({ ...a, [k]: 1 }), {})), ['itemTitle', 'ebayOrderId', 'sku', 'legacyItemId', 'listingId']);
   assert.deepStrictEqual(or[4].listingId.$in, ['L1', 'L2'], 'orders of the listings whose title matches'); assert.ok(seen.listingQuery.title.test('A.B(C)') && seen.listingQuery.userId === 'u1');
   await assert.doesNotReject(() => M.netProfitQuery('u1', { q: '((([[[***' }), 'a broken pattern is only text');
-  assert.strictEqual((await M.netProfitQuery('u1', { q: '   ' })).$and, undefined, 'an empty search filters nothing');
+  assert.strictEqual((await M.netProfitQuery('u1', { q: '   ' })).$and.length, 1, 'an empty search filters nothing (only the ELMS-orders condition is there)');
   assert.strictEqual(await M.countNetProfitLines('u1', { q: '' }), 7);
 
   // ---------- the lines: newest first, sliced, with the money worked out ----------
@@ -56,6 +64,19 @@ const doc = (id, extra = {}) => ({ _id: { toString: () => id }, userId: { toStri
   assert.strictEqual(lines[0].amazon_url, 'https://www.amazon.co.uk/dp/B0a');
   assert.deepStrictEqual([lines[1].profit, lines[1].ebay_cost], [0.2, null], 'exact cents, eBay cost empty without a net profit');
   assert.deepStrictEqual([lines[2].title, lines[2].amazon_price, lines[2].profit, lines[2].currency], ['From eBay', null, null, 'EUR'], 'an order with no listing: eBay\'s title, no Amazon price to invent');
+
+  // ---------- the dashboard sum: what was typed, per currency, over the same (ELMS) orders; exact cents ----------
+  const mongoose = require('mongoose');
+  const uid = 'a1b2c3d4e5f6a7b8c9d0e1f2'; const acc = '0123456789abcdef01234567';
+  aggRows = [{ _id: 'gbp', sum: 12500.000000001, count: 2 }, { _id: 'EUR', sum: -350.00000002, count: 5 }, { _id: null, sum: 100, count: 1 }];
+  const sum = await M.netProfitSummary(uid, { accountId: acc, includeCancelled: false });
+  const match = seen.pipeline[0].$match;
+  assert.ok(match.userId instanceof mongoose.Types.ObjectId && String(match.userId) === uid, 'the aggregation needs real ids'); assert.ok(match.ebayAccountId instanceof mongoose.Types.ObjectId);
+  assert.deepStrictEqual(match.netProfit, { $ne: null }, 'only orders with a net profit typed'); assert.ok(match.$and && match.ebayCancelStatus, 'the same ELMS-only / not cancelled filter as the sheet');
+  assert.deepStrictEqual(seen.pipeline[1], { $group: { _id: '$currency', sum: { $sum: { $multiply: ['$netProfit', 100] } }, count: { $sum: 1 } } });
+  assert.deepStrictEqual(sum.currencies, [{ currency: 'EUR', net_profit: -3.5, orders: 5 }, { currency: 'GBP', net_profit: 125, orders: 2 }, { currency: null, net_profit: 1, orders: 1 }], 'per currency, rounded to the cent, most orders first');
+  assert.strictEqual(sum.orders, 8); assert.strictEqual(sum.ordersTotal, 7);
+  aggRows = []; assert.deepStrictEqual(await M.netProfitSummary(uid, {}), { currencies: [], orders: 0, ordersTotal: 7 });
 
   console.log('net profit query tests passed');
   process.exit(0);
