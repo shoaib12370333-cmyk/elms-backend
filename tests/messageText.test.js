@@ -22,16 +22,31 @@ assert.ok(text.startsWith('Hi Sam,'), 'starts with the real words: ' + JSON.stri
 assert.ok(text.includes('Blue & Green Mug') && text.includes('£12.50 - please ship by Friday.'), 'entities are decoded');
 assert.ok(text.includes('Buyer\'s note: "gift wrap"'));
 assert.ok(text.includes('- Print the label\n- Add tracking'), 'list items on their own lines: ' + JSON.stringify(text));
-assert.ok(text.includes('View order (https://www.ebay.co.uk/sh/ord/details?orderid=1)'), 'a link keeps its words and its address');
+assert.ok(text.includes('View order or') && !text.includes('orderid=1'), 'a tracking-style link (it has a query) keeps only its words');
 assert.ok(text.includes('https://www.ebay.co.uk/help') && !text.includes('https://www.ebay.co.uk/help (https'), 'a link whose words are its address is not doubled');
 assert.ok(text.includes('eBay logo'), 'an image with alt text keeps the alt');
 assert.ok(!/\n{3,}/.test(text) && text === text.trim(), 'no big gaps');
 
-// a very long tracking address loses only its query part
-const long = messageToText('<p>Go <a href="https://www.ebay.com/track?' + 'x=1&'.repeat(60) + '">here</a></p>');
-assert.strictEqual(long, 'Go here (https://www.ebay.com/track)');
+// a link with a plain short address keeps it; a tracking address (query, or very long) is dropped when the link has words
+assert.strictEqual(messageToText('<p>Read the <a href="https://www.ebay.com/help/policies">policy</a></p>'), 'Read the policy (https://www.ebay.com/help/policies)');
+assert.strictEqual(messageToText('<p>Go <a href="https://www.ebay.com/track?' + 'x=1&'.repeat(60) + '">here</a></p>'), 'Go here');
+assert.strictEqual(messageToText('<p><a href="https://www.ebay.com/track?x=1"></a></p>'), 'https://www.ebay.com/track', 'a link with no words shows its address without the query');
 // only web links keep an address
 assert.strictEqual(messageToText('<p><a href="javascript:alert(1)">click</a> <a href="mailto:a@b.com">mail</a></p>'), 'click mail');
+
+// ---- an eBay mail as it really looks: a hidden preview line padded with invisible characters, spacer images, tracking links, junk entities
+const noisy = '<html><body><div style="display:none;font-size:1px;color:#fff;max-height:0px;opacity:0;overflow:hidden">Your order has shipped &#847; &zwnj; &#8203; &nbsp; &#847; &zwnj; xqzk vwpl &#847; &zwnj;</div>'
+  + '<table><tr><td><img src="https://i.ebayimg.com/s.gif" alt="a" width="1"><img src="x.gif" alt="  "><img src="l.png" alt="eBay"></td></tr>'
+  + '<tr><td style="font-size:0px">hidden filler abc</td></tr>'
+  + '<tr><td>Hello Sam,\u200B\u00AD\u034F you sold <b>1 item</b>.</td></tr>'
+  + '<tr><td><a href="https://rover.ebay.com/rover/0/e1/7?mpre=https%3A%2F%2Fwww.ebay.com%2Forder&amp;_trkparms=abc123&amp;euid=zzzzzzzzzzzzzzzz">Go to order</a></td></tr>'
+  + '<tr><td><a href="https://rover.ebay.com/rover/0/e1/8?x=1"><img src="btn.png" alt="b"></a></td></tr>'
+  + '<tr><td>&copy; 2026 eBay Inc.&thinsp;All rights reserved.</td></tr></table></body></html>';
+const clean = messageToText(noisy);
+assert.strictEqual(clean, 'eBay\n\nHello Sam, you sold 1 item.\nGo to order\nhttps://rover.ebay.com/rover/0/e1/8\n(c) 2026 eBay Inc. All rights reserved.');
+assert.ok(!/xqzk|vwpl|filler|zzzz|mpre|abc123|&zwnj|&#/.test(clean), 'no hidden filler, no tracking junk, no raw entities');
+assert.ok(!/[\u200B-\u200F\u00AD\u034F\uFEFF]/.test(clean), 'no invisible characters are left');
+assert.strictEqual(messageToText('<p>Hi&zwnj;&shy;there &#847;</p>'), 'Hithere', 'invisible entities leave nothing behind');
 
 // ---- plain messages are returned exactly as they are
 for (const plain of ['Hello, is this still available?', 'Size < 5 and price > 10?', 'Line one\n\nLine two', 'x <3 you', 'Use the <name> field', '', 'a & b &amp; c']) {
