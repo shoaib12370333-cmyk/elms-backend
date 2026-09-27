@@ -3,7 +3,7 @@ const router = express.Router();
 const { requireAuth } = require('../middleware/requireAuth');
 const User = require('../models/schemas/User');
 const { getLimits } = require('../models/settingsModel');
-const { listNetProfitLines, countNetProfitLines, getNetProfitLine, setNetProfit, setBuyPrice, netProfitSummary } = require('../models/ordersModel');
+const { listNetProfitLines, countNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary } = require('../models/ordersModel');
 const { PAGE_SIZE, isPaidUser, paging, csvHeader, csvLine, csvTotals } = require('../services/netProfitService');
 
 /** What the request asks for: the filters of the sheet (store, dates, search, cancelled orders). */
@@ -44,8 +44,8 @@ router.get('/', requireAuth, async (req, res) => {
 
 /**
  * GET /api/net-profit/summary?from=&to=&accountId=
- * For the dashboard: the net profit the seller typed on the sheet, added up per currency (a euro and a dollar are never added together),
- * and how many orders have one. One light database sum; only orders of ELMS listings, cancelled ones left out.
+ * For the dashboard: the net profit of the orders (ORDER EARNING - AMAZON PRICE, typed on the sheet), added up per currency (a euro and a
+ * dollar are never added together), and how many orders have one. One light database sum; only orders of ELMS listings, cancelled ones left out.
  */
 router.get('/summary', requireAuth, async (req, res) => {
   try {
@@ -77,7 +77,7 @@ router.get('/export', requireAuth, async (req, res) => {
     for (let offset = 0; offset < cap; offset += PAGE_SIZE) {
       const lines = await listNetProfitLines(req.userId, filters, { offset, limit: Math.min(PAGE_SIZE, cap - offset) });
       if (!lines.length) break;
-      for (const l of lines) { res.write(csvLine(l)); all.push({ currency: l.currency, amazon_price: l.amazon_price, ebay_price: l.ebay_price, profit: l.profit, ebay_cost: l.ebay_cost, net_profit: l.net_profit }); }
+      for (const l of lines) { res.write(csvLine(l)); all.push({ currency: l.currency, amazon_price: l.amazon_price, ebay_price: l.ebay_price, profit: l.profit, order_earning: l.order_earning, ebay_cost: l.ebay_cost, net_profit: l.net_profit }); }
     }
     res.write(csvTotals(all));
     res.end();
@@ -90,27 +90,34 @@ router.get('/export', requireAuth, async (req, res) => {
 
 const isNumberOrEmpty = (v) => v === null || v === '' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)));
 
+const asNumber = (v) => (v === null || v === '' || v === undefined ? null : Number(v));
+
 /**
- * PATCH /api/net-profit/:id   { amazonPrice?: number | null, netProfit?: number | null }
- * The two cells a seller types. AMAZON PRICE is the same cost figure the Orders page uses (per piece; empty = back to the listing's
- * price); NET PROFIT is kept with the order (empty clears it). Answers with the line as the sheet now shows it.
+ * PATCH /api/net-profit/:id   { amazonPrice?: number | null, orderEarning?: number | null }
+ * The two cells a seller types: AMAZON PRICE (what the order cost on Amazon, 0 or more) and ORDER EARNING (what eBay pays out for it).
+ * They belong to the sheet only (the cost the Orders page uses for its own profit is not touched). Empty clears one. EBAY COST and NET PROFIT
+ * are worked out from them. (`netProfit` is still accepted for a client of the first version of the sheet.) Answers with the line as the sheet now shows it.
  */
 router.patch('/:id', requireAuth, async (req, res) => {
   const id = String(req.params.id || '');
   if (!/^[a-f0-9]{24}$/i.test(id)) return res.status(404).json({ success: false, error: 'Order not found.' });
   const body = req.body || {};
-  if (body.amazonPrice === undefined && body.netProfit === undefined) return res.status(400).json({ success: false, error: 'Nothing to save.' });
+  if (body.amazonPrice === undefined && body.orderEarning === undefined && body.netProfit === undefined) return res.status(400).json({ success: false, error: 'Nothing to save.' });
   if (body.amazonPrice !== undefined && !isNumberOrEmpty(body.amazonPrice)) return res.status(400).json({ success: false, error: 'Enter the Amazon price as a number.' });
+  if (body.orderEarning !== undefined && !isNumberOrEmpty(body.orderEarning)) return res.status(400).json({ success: false, error: 'Enter the order earning as a number.' });
   if (body.netProfit !== undefined && !isNumberOrEmpty(body.netProfit)) return res.status(400).json({ success: false, error: 'Enter the net profit as a number.' });
+  const amazon = asNumber(body.amazonPrice);
+  if (amazon !== null && (amazon < 0 || amazon > 1e9)) return res.status(400).json({ success: false, error: 'Enter the Amazon price as a number, 0 or more.' });
+  const earning = asNumber(body.orderEarning);
+  if (earning !== null && Math.abs(earning) > 1e9) return res.status(400).json({ success: false, error: 'That order earning is too large.' });
+  const net = asNumber(body.netProfit);
+  if (net !== null && Math.abs(net) > 1e9) return res.status(400).json({ success: false, error: 'That net profit is too large.' });
   try {
-    if (body.amazonPrice !== undefined) {
-      try { await setBuyPrice(req.userId, id, body.amazonPrice === '' ? null : body.amazonPrice); } catch (err) { return res.status(400).json({ success: false, error: err.message }); }
-    }
-    if (body.netProfit !== undefined) {
-      const n = body.netProfit === null || body.netProfit === '' ? null : Number(body.netProfit);
-      if (n !== null && Math.abs(n) > 1e9) return res.status(400).json({ success: false, error: 'That net profit is too large.' });
-      await setNetProfit(req.userId, id, n);
-    }
+    const inputs = {};
+    if (body.amazonPrice !== undefined) inputs.amazonPrice = amazon;
+    if (body.orderEarning !== undefined) inputs.orderEarning = earning;
+    if (body.netProfit !== undefined) inputs.netProfit = net;
+    await setSheetInputs(req.userId, id, inputs);
     const line = await getNetProfitLine(req.userId, id);
     if (!line) return res.status(404).json({ success: false, error: 'Order not found.' });
     res.json({ success: true, line });

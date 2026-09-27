@@ -55,25 +55,29 @@ const doc = (id, extra = {}) => ({ _id: { toString: () => id }, userId: { toStri
   assert.strictEqual(await M.countNetProfitLines('u1', { q: '' }), 7);
 
   // ---------- the lines: newest first, sliced, with the money worked out ----------
-  docs = [doc('a', { netProfit: 30 }), doc('b', { salePrice: 0.3, listingId: { title: 'Cheap', sku: 'B0b', amazonPrice: 0.1, importId: null } }), doc('c', { itemTitle: 'From eBay', listingId: null, currency: 'EUR', salePrice: 20 })];
+  docs = [doc('a', { sheetAmazonPrice: 100, orderEarning: 130 }), doc('b', { salePrice: 0.3, sheetAmazonPrice: 0.1, listingId: { title: 'Cheap', sku: 'B0b', amazonPrice: 0.1, importId: null } }), doc('c', { itemTitle: 'From eBay', listingId: null, currency: 'EUR', salePrice: 20 }), doc('d', { netProfit: 12 })];
   const lines = await M.listNetProfitLines('u1', {}, { offset: 2000, limit: 1000 });
   assert.deepStrictEqual([seen.skip, seen.limit], [2000, 1000]); assert.deepStrictEqual(seen.sort, { ebayCreatedAt: -1, createdAt: -1, _id: -1 }, 'newest first, and a stable order so "Add lines" never repeats or skips one');
   assert.ok(seen.populates.includes('listingId') && seen.populates.includes('ebayAccountId'));
-  assert.strictEqual(lines.length, 3);
-  assert.deepStrictEqual([lines[0].title, lines[0].amazon_price, lines[0].ebay_price, lines[0].profit, lines[0].net_profit, lines[0].ebay_cost], ['Listing a', 100, 150, 50, 30, 20]);
+  assert.strictEqual(lines.length, 4);
+  assert.deepStrictEqual([lines[0].title, lines[0].amazon_price, lines[0].ebay_price, lines[0].profit, lines[0].order_earning, lines[0].ebay_cost, lines[0].net_profit], ['Listing a', 100, 150, 50, 130, 20, 30], 'the typed Amazon price and order earning; eBay cost and net profit worked out');
   assert.strictEqual(lines[0].amazon_url, 'https://www.amazon.co.uk/dp/B0a');
-  assert.deepStrictEqual([lines[1].profit, lines[1].ebay_cost], [0.2, null], 'exact cents, eBay cost empty without a net profit');
-  assert.deepStrictEqual([lines[2].title, lines[2].amazon_price, lines[2].profit, lines[2].currency], ['From eBay', null, null, 'EUR'], 'an order with no listing: eBay\'s title, no Amazon price to invent');
+  assert.deepStrictEqual([lines[1].profit, lines[1].ebay_cost, lines[1].net_profit], [0.2, null, null], 'exact cents; without the order earning there is no eBay cost and no net profit');
+  assert.deepStrictEqual([lines[2].title, lines[2].amazon_price, lines[2].profit, lines[2].currency], ['From eBay', null, null, 'EUR'], "an order with no listing: eBay's title, no Amazon price to invent");
+  assert.strictEqual(lines[3].amazon_price, null, 'the Amazon price is never taken from the listing (it is 60 on the listing, and the sheet leaves it empty)');
+  assert.deepStrictEqual([lines[3].net_profit, lines[3].net_profit_older], [12, true], 'a net profit typed in the first version of the sheet is still shown');
 
-  // ---------- the dashboard sum: what was typed, per currency, over the same (ELMS) orders; exact cents ----------
+  // ---------- the dashboard sum: the net profit (order earning - Amazon price; else the older typed figure), per currency, over the same (ELMS) orders; exact cents ----------
   const mongoose = require('mongoose');
   const uid = 'a1b2c3d4e5f6a7b8c9d0e1f2'; const acc = '0123456789abcdef01234567';
   aggRows = [{ _id: 'gbp', sum: 12500.000000001, count: 2 }, { _id: 'EUR', sum: -350.00000002, count: 5 }, { _id: null, sum: 100, count: 1 }];
   const sum = await M.netProfitSummary(uid, { accountId: acc, includeCancelled: false });
   const match = seen.pipeline[0].$match;
   assert.ok(match.userId instanceof mongoose.Types.ObjectId && String(match.userId) === uid, 'the aggregation needs real ids'); assert.ok(match.ebayAccountId instanceof mongoose.Types.ObjectId);
-  assert.deepStrictEqual(match.netProfit, { $ne: null }, 'only orders with a net profit typed'); assert.ok(match.$and && match.ebayCancelStatus, 'the same ELMS-only / not cancelled filter as the sheet');
-  assert.deepStrictEqual(seen.pipeline[1], { $group: { _id: '$currency', sum: { $sum: { $multiply: ['$netProfit', 100] } }, count: { $sum: 1 } } });
+  assert.ok(match.$and && match.ebayCancelStatus, 'the same ELMS-only / not cancelled filter as the sheet'); assert.ok(!('netProfit' in match), 'the filter no longer needs a typed net profit: it is worked out below');
+  assert.strictEqual(JSON.stringify(seen.pipeline[1].$addFields._net), JSON.stringify({ $cond: [{ $and: [{ $ne: [{ $ifNull: ['$orderEarning', null] }, null] }, { $ne: [{ $ifNull: ['$sheetAmazonPrice', null] }, null] }] }, { $subtract: ['$orderEarning', '$sheetAmazonPrice'] }, { $ifNull: ['$netProfit', null] }] }), 'earning - Amazon price when both are typed, else the older figure');
+  assert.deepStrictEqual(seen.pipeline[2], { $match: { _net: { $ne: null } } }, 'only orders that have a net profit');
+  assert.deepStrictEqual(seen.pipeline[3], { $group: { _id: '$currency', sum: { $sum: { $round: [{ $multiply: ['$_net', 100] }, 0] } }, count: { $sum: 1 } } }, 'whole cents per order, added up');
   assert.deepStrictEqual(sum.currencies, [{ currency: 'EUR', net_profit: -3.5, orders: 5 }, { currency: 'GBP', net_profit: 125, orders: 2 }, { currency: null, net_profit: 1, orders: 1 }], 'per currency, rounded to the cent, most orders first');
   assert.strictEqual(sum.orders, 8); assert.strictEqual(sum.ordersTotal, 7);
   aggRows = []; assert.deepStrictEqual(await M.netProfitSummary(uid, {}), { currencies: [], orders: 0, ordersTotal: 7 });
