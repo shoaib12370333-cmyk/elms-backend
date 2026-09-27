@@ -1,6 +1,7 @@
 const Listing = require('./schemas/Listing');
 const { normalizeAsinSku, requireAsinSku } = require('../services/skuService');
 const { accountLabel, publicUsername } = require('../services/accountLabel');
+const { isMissingLocalImage } = require('../services/imageStorageService');
 
 // Amazon product prices are positive monetary values. Treat null/undefined/empty
 // values (and the legacy 0 created by Number(null)) as missing so the UI can
@@ -363,14 +364,26 @@ function compactVariants(list) {
 /** Drafts made before description/bullets/specs were copied onto the listing read them from the linked import. */
 function withImportFallback(serialized, doc) {
   const p = doc.importId?.product;
+  // Render's disk is ephemeral, so a draft's own re-hosted /uploads/listing-images/... pictures can vanish after a deploy.
+  // Drop any that are gone before deciding whether a gallery fallback is needed, so a partially-wiped draft self-heals too.
+  if (Array.isArray(serialized.images) && serialized.images.length) {
+    serialized.images = serialized.images.filter((u) => !isMissingLocalImage(u));
+  }
+  if (serialized.main_image && isMissingLocalImage(serialized.main_image)) {
+    serialized.main_image = serialized.images[0] || null;
+  }
   if (!p) return serialized;
   serialized.variants = compactVariants(ownVariantOnly(p.variants, doc.sku || p.asin)); // only the product itself, also for imports made before
   serialized.variants_count = serialized.variants.length;
   serialized.brand = String(p.brand || '');
-  // A draft made by a server-side import had only its main picture saved on it; its whole gallery is on the import.
+  // A draft made by a server-side import had only its main picture saved on it (or lost its own re-hosted copies above);
+  // its whole gallery lives on the import too, under the supplier's own stable URLs which our own deploys never touch.
   if (!Array.isArray(serialized.images) || !serialized.images.length) {
     const gallery = (Array.isArray(p.images) ? p.images : []).filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, 24);
-    if (gallery.length) serialized.images = gallery;
+    if (gallery.length) {
+      serialized.images = gallery;
+      if (!serialized.main_image) serialized.main_image = gallery[0];
+    }
   }
   if (!serialized.description) serialized.description = String(p.description || '');
   if (!Array.isArray(serialized.bullet_points) || !serialized.bullet_points.length) serialized.bullet_points = Array.isArray(p.bulletPoints) ? p.bulletPoints : [];

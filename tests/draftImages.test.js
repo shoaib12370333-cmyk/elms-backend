@@ -13,7 +13,8 @@ stub('models/usersModel', { getPricingRule: async () => null, hasCredits: async 
 stub('models/ebayAccountsModel', { listEbayAccounts: async () => [], getActiveEbayAccount: async () => ({ id: 'a'.repeat(24), label: 'UK', marketplaceId: 'EBAY_GB' }), getEbayAccountById: async () => null });
 stub('models/listingsModel', { listListingsBySkus: async () => [], listListingsBySku: async () => [], findListingInStore: async () => null, upsertDraft: async (u, fields) => { drafts.push(fields); return { id: 'D1' }; } });
 stub('models/importsModel', { createImport: async () => ({ id: 'IMP1' }), updateImportImages: async () => {} });
-stub('services/imageStorageService', { materializeImageUrls: async ({ urls }) => urls });
+const missingLocal = new Set();
+stub('services/imageStorageService', { materializeImageUrls: async ({ urls }) => urls, isMissingLocalImage: (url) => missingLocal.has(url) });
 stub('services/productCacheService', { getCachedProduct: async () => null, setCachedProduct: async () => {} });
 const realCanopy = require('../services/canopyAmazonService');
 stub('services/canopyAmazonService', { ...realCanopy, fetchProductByUrl: async (url) => ({ asin: realCanopy.extractAsinFromUrl(url), title: 'Widget', price: 8, currency: 'GBP', images: GALLERY, bulletPoints: [], specifications: [], sourceUrl: url }) });
@@ -51,6 +52,16 @@ const handler = (() => { const l = fetchRoutes.stack.find((x) => x.route && x.ro
   assert.deepStrictEqual(row.images, [], 'no import: untouched');
   row = withImportFallback({ images: [] }, importDoc(Array.from({ length: 40 }, (_, i) => 'https://m.media-amazon.com/images/I/' + i + '.jpg')));
   assert.strictEqual(row.images.length, 24, 'at most 24, as everywhere else');
+
+  // ---------- a draft's own re-hosted pictures wiped by a Render deploy self-heal from the import's gallery ----------
+  const OWN = 'https://elms-backend.onrender.com/uploads/listing-images/u1/D1/deadbeef.jpg';
+  missingLocal.add(OWN);
+  row = withImportFallback({ images: [OWN], main_image: OWN }, importDoc(GALLERY));
+  assert.deepStrictEqual(row.images, GALLERY, 'wiped own picture falls back to the import gallery');
+  assert.strictEqual(row.main_image, GALLERY[0], 'main_image falls back too');
+  row = withImportFallback({ images: [OWN, GALLERY[0]], main_image: OWN }, importDoc(GALLERY));
+  assert.deepStrictEqual(row.images, [GALLERY[0]], 'only the wiped one is dropped, a surviving own picture is kept');
+  missingLocal.delete(OWN);
 
   console.log('draft images: all good');
 })().catch((err) => { console.error(err); process.exit(1); });

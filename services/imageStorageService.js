@@ -144,4 +144,24 @@ async function materializeImageUrls({urls,userId,listingId,req,concurrency=4}) {
   }
   return [...new Set(out)].slice(0, MAX_IMAGES);
 }
-module.exports={MAX_FILE_BYTES,MAX_IMAGES,rootDir,saveLocalImage,downloadAndSaveImage,materializeImageUrls};
+/**
+ * Render's disk is ephemeral - every deploy wipes files downloadAndSaveImage wrote for a previous release, so a listing's
+ * own /uploads/listing-images/... URL can end up pointing at a file that no longer exists. Used by listingsModel to detect
+ * that and fall back to the import's original (CJ/Amazon CDN) URLs, which live outside our own storage and survive a deploy.
+ */
+function localFilePathFromUrl(url) {
+  let pathname;
+  try { pathname = new URL(String(url)).pathname; } catch { return null; }
+  const m = pathname.match(/^\/uploads\/listing-images\/(.+)$/);
+  if (!m) return null;
+  const segments = m[1].split('/').map((s) => decodeURIComponent(s));
+  if (segments.some((s) => s === '..' || s === '.')) return null;
+  return path.join(rootDir(), ...segments);
+}
+function isMissingLocalImage(url) {
+  const filePath = localFilePathFromUrl(url);
+  if (!filePath) return false; // not one of our own hosted images - nothing to check
+  try { return !fs.existsSync(filePath); } catch { return true; }
+}
+
+module.exports={MAX_FILE_BYTES,MAX_IMAGES,rootDir,saveLocalImage,downloadAndSaveImage,materializeImageUrls,isMissingLocalImage};
