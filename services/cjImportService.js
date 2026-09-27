@@ -83,7 +83,6 @@ async function saveCjProductAsDraft(userId, product, markupPercent, req, knownAc
       marketplaceId: activeEbayAccount?.marketplaceId || null,
       cjProductId: product.cjProductId,
       cjVariantId: product.cjVariantId,
-      variantSku: product.variantSku,
       title: product.title,
       mainImage: images[0] || null,
       images,

@@ -112,25 +112,4 @@ function paging({ paid, freeLines, offset, limit, total }) {
   return { offset: off, take, hasMore: end < reachable, locked: !paid && count > cap && end >= cap, reachable };
 }
 
-// ---------------------------------------------------------------- CSV
-const CSV_HEADER = ['Title', 'Order ID', 'Buying price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Net profit', 'Currency', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN'];
-const quoted = (s) => '"' + String(s).replace(/"/g, '""') + '"';
-/** Text: quoted, and a text that would be read as a formula by Excel gets a ' in front. */
-const csvText = (s) => quoted(/^[=+\-@\t\r]/.test(String(s == null ? '' : s)) ? "'" + s : (s == null ? '' : s));
-/** Long numbers (an eBay item number has 12 digits) would turn into 1.1E+11 in Excel: they are written as text. */
-const csvDigits = (s) => (s ? quoted('="' + String(s).replace(/"/g, '') + '"') : '""');
-const csvNumber = (n) => (n === null || n === undefined ? '' : (Math.round(n * 100) / 100).toFixed(2));
-const csvDate = (d) => { const t = d ? new Date(d) : null; return t && !Number.isNaN(t.getTime()) ? t.toISOString().slice(0, 10) : ''; };
-
-const csvHeader = () => '﻿' + CSV_HEADER.map(quoted).join(',') + '\r\n';
-function csvLine(l) {
-  return [csvText(l.title), csvText(l.ebay_order_id), csvNumber(l.amazon_price), csvNumber(l.ebay_price), csvNumber(l.profit), csvNumber(l.order_earning), csvNumber(l.ebay_cost), csvNumber(l.net_profit),
-    csvText(l.currency || ''), String(l.quantity), csvDate(l.date), csvText(l.store), csvDigits(l.ebay_item_id), csvText(l.asin)].join(',') + '\r\n';
-}
-/** The total rows at the end of the file (one per currency), the same numbers the sheet shows. */
-function csvTotals(lines) {
-  return totalsOf(lines).map((t) => [csvText('TOTAL (' + t.lines + ' line' + (t.lines === 1 ? '' : 's') + ')'), '""', csvNumber(t.amazon_price), csvNumber(t.ebay_price), csvNumber(t.profit), csvNumber(t.order_earning), csvNumber(t.ebay_cost), csvNumber(t.net_profit),
-    csvText(t.currency || ''), '', '', '""', '""', '""'].join(',') + '\r\n').join('');
-}
-
-module.exports = { PAGE_SIZE, cents, money, isPaidUser, resolveNetProfit, buildLine, totalsOf, paging, csvHeader, csvLine, csvTotals };
+module.exports = { PAGE_SIZE, cents, money, isPaidUser, resolveNetProfit, buildLine, totalsOf, paging };
