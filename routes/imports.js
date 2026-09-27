@@ -1,17 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { listImports, getImportById, updateImportImages } = require('../models/importsModel');
+const { getImportById, updateImportImages } = require('../models/importsModel');
 const { requireAuth } = require('../middleware/requireAuth');
-
-/**
- * GET /api/imports
- * Requires a valid session token.
- * Returns the current user's recent history of Amazon products fetched.
- */
-router.get('/', requireAuth, async (req, res) => {
-  const imports = await listImports(req.userId, 50, req.query.accountId || null);
-  res.json({ success: true, imports });
-});
 
 /**
  * GET /api/imports/:id

@@ -36,6 +36,7 @@ const ebayOrderNotificationRoute = require('./routes/ebayOrderNotification');
 const ebayMessageNotificationRoute = require('./routes/ebayMessageNotification');
 const { startStockMonitor } = require('./jobs/stockMonitor');
 const { startScheduledPublisher } = require('./jobs/scheduledPublisher');
+const { startImageCleanup } = require('./jobs/imageCleanup');
 const { startOrderSync } = require('./jobs/orderSync');
 const { startConversationSync } = require('./jobs/conversationSync');
 const { startStatsSync } = require('./jobs/statsSync');
@@ -173,7 +174,7 @@ app.use('/api/list-on-ebay', listOnEbayRoute);
 // Saved listings (Live Listings page)
 app.use('/api/listings', listingsRoute);
 
-// Import history
+// One import's own detail/image-gallery editing (no more "Import history" list route - that page was removed)
 app.use('/api/imports', importsRoute);
 
 // CJdropshipping - a second, separate product source next to Amazon (services/cjAdapter.js)
@@ -272,6 +273,7 @@ app.listen(PORT, () => {
     console.log(`Server is running: http://localhost:${PORT}`);
     startStockMonitor();
     startScheduledPublisher();
+    startImageCleanup();
     startOrderSync();
     startConversationSync();
     startStatsSync();

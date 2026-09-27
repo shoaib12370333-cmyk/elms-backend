@@ -126,18 +126,6 @@ async function updateImportPrice(userId, id, amazonPrice) {
   return doc ? serialize(doc) : null;
 }
 
-async function listImports(userId, limit = 50, accountId = null) {
-  const query = { userId };
-  if (accountId) {
-    // Imports made before they were tied to a store are matched through the listing that came from them.
-    const Listing = require('./schemas/Listing');
-    const ids = (await Listing.find({ userId, ebayAccountId: accountId, importId: { $ne: null } }, { importId: 1 }).lean()).map((l) => l.importId);
-    query.$or = [{ ebayAccountId: accountId }, { _id: { $in: ids } }];
-  }
-  const docs = await Import.find(query).sort({ createdAt: -1 }).limit(limit);
-  return docs.map(serialize);
-}
-
 /**
  * Converts a Mongoose document into the plain shape the rest of the app expects
  * (matching the old SQLite column names, e.g. main_image instead of mainImage,
@@ -165,4 +153,4 @@ function serialize(doc) {
   };
 }
 
-module.exports = { createImport, createCjImport, createAliexpressImport, getImportById, listImports, updateImportImages, updateImportProduct, updateImportPrice };
+module.exports = { createImport, createCjImport, createAliexpressImport, getImportById, updateImportImages, updateImportProduct, updateImportPrice };
