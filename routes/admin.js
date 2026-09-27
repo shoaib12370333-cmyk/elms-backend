@@ -436,14 +436,14 @@ router.get('/settings/ai', async (req, res) => {
       { $group: { _id: { kind: '$kind', ok: '$ok' }, calls: { $sum: 1 }, credits: { $sum: '$credits' }, input: { $sum: '$inputTokens' }, output: { $sum: '$outputTokens' } } },
     ]),
   ]);
-  const summary = { title: { calls: 0, failed: 0, credits: 0 }, description: { calls: 0, failed: 0, credits: 0 }, aspects: { calls: 0, failed: 0, credits: 0 }, reply: { calls: 0, failed: 0, credits: 0 }, vero: { calls: 0, failed: 0, credits: 0 }, inputTokens: 0, outputTokens: 0 };
+  const summary = { title: { calls: 0, failed: 0, credits: 0 }, description: { calls: 0, failed: 0, credits: 0 }, aspects: { calls: 0, failed: 0, credits: 0 }, reply: { calls: 0, failed: 0, credits: 0 }, category: { calls: 0, failed: 0, credits: 0 }, vero: { calls: 0, failed: 0, credits: 0 }, inputTokens: 0, outputTokens: 0 };
   for (const row of usage) {
     const bucket = summary[row._id.kind];
     if (!bucket) continue;
     if (row._id.ok) { bucket.calls += row.calls; bucket.credits += row.credits; } else bucket.failed += row.calls;
     summary.inputTokens += row.input; summary.outputTokens += row.output;
   }
-  res.json({ success: true, settings, apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY, costs: { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION, AI_ASPECTS: ACTION_COSTS.AI_ASPECTS, AI_REPLY: ACTION_COSTS.AI_REPLY }, usage: summary });
+  res.json({ success: true, settings, apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY, costs: { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION, AI_ASPECTS: ACTION_COSTS.AI_ASPECTS, AI_REPLY: ACTION_COSTS.AI_REPLY, AI_CATEGORY: ACTION_COSTS.AI_CATEGORY }, usage: summary });
 });
 
 /**
@@ -457,14 +457,47 @@ router.put('/settings/ai', async (req, res) => {
     let savedCosts = null;
     if (costs && typeof costs === 'object') {
       const pick = {};
-      for (const k of ['AI_TITLE', 'AI_DESCRIPTION', 'AI_ASPECTS', 'AI_REPLY']) if (costs[k] !== undefined) pick[k] = costs[k];
+      for (const k of ['AI_TITLE', 'AI_DESCRIPTION', 'AI_ASPECTS', 'AI_REPLY', 'AI_CATEGORY']) if (costs[k] !== undefined) pick[k] = costs[k];
       if (Object.keys(pick).length) await updateActionCosts(pick);
     }
     const { ACTION_COSTS } = require('../config/actionCosts');
-    savedCosts = { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION, AI_ASPECTS: ACTION_COSTS.AI_ASPECTS, AI_REPLY: ACTION_COSTS.AI_REPLY };
+    savedCosts = { AI_TITLE: ACTION_COSTS.AI_TITLE, AI_DESCRIPTION: ACTION_COSTS.AI_DESCRIPTION, AI_ASPECTS: ACTION_COSTS.AI_ASPECTS, AI_REPLY: ACTION_COSTS.AI_REPLY, AI_CATEGORY: ACTION_COSTS.AI_CATEGORY };
     res.json({ success: true, settings, costs: savedCosts });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message || 'Could not save the AI settings.' });
+  }
+});
+
+/**
+ * Category lists (Admin Panel -> Categories): the eBay "Category IDs" CSV of a marketplace, uploaded by the admin. When eBay's own category
+ * suggestion is out of calls for the day, the AI chooses from this list (services/aiCategoryService.js).
+ *   GET    /api/admin/category-lists                  -> every supported marketplace with what is uploaded for it
+ *   PUT    /api/admin/category-lists/:marketplaceId  body { csv, filename } -> saves or replaces that marketplace's list
+ *   DELETE /api/admin/category-lists/:marketplaceId  -> removes it
+ */
+router.get('/category-lists', async (req, res) => {
+  try {
+    res.json({ success: true, lists: await require('../services/categoryListService').listCategoryLists() });
+  } catch (err) {
+    console.error('category lists error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not load the category lists.' });
+  }
+});
+router.put('/category-lists/:marketplaceId', async (req, res) => {
+  try {
+    const csv = req.body && req.body.csv;
+    if (typeof csv !== 'string' || !csv.trim()) return res.status(400).json({ success: false, error: 'The CSV text is required.' });
+    const saved = await require('../services/categoryListService').saveCategoryList(req.params.marketplaceId, csv, { filename: req.body.filename });
+    res.json({ success: true, ...saved });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message || 'Could not save this category list.' });
+  }
+});
+router.delete('/category-lists/:marketplaceId', async (req, res) => {
+  try {
+    res.json({ success: true, ...(await require('../services/categoryListService').deleteCategoryList(req.params.marketplaceId)) });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message || 'Could not remove this category list.' });
   }
 });
 

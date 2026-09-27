@@ -169,7 +169,7 @@ async function processOneQueuedListing(listing) {
       // the draft and go on, instead of failing every draft that never got one.
       const found = await ensureDraftCategory(userId, listing, { save: updateListing });
       listing.category_id = found.categoryId;
-      debug('CATEGORY SUGGESTED', { listingId: id, categoryId: found.categoryId, name: found.categoryName });
+      debug('CATEGORY SUGGESTED', { listingId: id, categoryId: found.categoryId, name: found.categoryName, source: found.source, creditsUsed: found.creditsUsed });
     }
 
 

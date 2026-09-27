@@ -1,4 +1,4 @@
-const { suggestCategories } = require('./ebayTaxonomyService');
+const { suggestCategoriesWithBackup } = require('./aiCategoryService');
 const { getEbayAccountById } = require('../models/ebayAccountsModel');
 
 /**
@@ -7,6 +7,9 @@ const { getEbayAccountById } = require('../models/ebayAccountsModel');
  *
  * The Drafts page also suggests categories, but only for the cards on the page you are looking at, one after the other; every other
  * draft (and every draft published a moment after import) still has none. Doing it here, where the publish happens, covers them all.
+ *
+ * When eBay's daily limit for category lookups is used up, the AI chooses from the marketplace's category list instead (services/aiCategoryService.js,
+ * when the admin has uploaded that list); that costs the seller the admin-set AI_CATEGORY credits.
  */
 
 async function marketplaceOf(userId, listing) {
@@ -24,7 +27,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {string} userId
  * @param {object} listing the draft (serialized: title, category_id, marketplace_id, ebay_account_id, id)
  * @param {{ save: (userId, id, fields) => Promise, retryDelayMs?: number }} deps save = listingsModel.updateListing
- * @returns {Promise<{ categoryId: string, categoryName: string, picked: boolean }>} throws with a reason a person can act on
+ * @returns {Promise<{ categoryId: string, categoryName: string, picked: boolean, source?: string, creditsUsed?: number }>} throws with a reason a person can act on
  */
 async function ensureDraftCategory(userId, listing, deps) {
   if (listing.category_id) return { categoryId: String(listing.category_id), categoryName: '', picked: false };
@@ -33,15 +36,18 @@ async function ensureDraftCategory(userId, listing, deps) {
 
   const marketplaceId = await marketplaceOf(userId, listing);
   let top = null;
+  let found = null;
   let lastError = null;
   // eBay's category service answers "busy" now and then when many drafts are published at once: two more tries.
   for (let attempt = 0; attempt < 3 && !top; attempt += 1) {
     try {
-      top = (await suggestCategories(null, title, marketplaceId)).topSuggestion;
+      found = await suggestCategoriesWithBackup(userId, title, marketplaceId);
+      top = found.topSuggestion;
       lastError = null;
       if (!top) break; // an answer with no suggestion: asking again gives the same
     } catch (err) {
       lastError = err;
+      if (err.limitReached) break; // the day's limit is used up (and the AI backup had nothing): asking again in a second does not help
       if (attempt < 2) await wait(deps.retryDelayMs === undefined ? 1500 * (attempt + 1) : deps.retryDelayMs);
     }
   }
@@ -50,7 +56,7 @@ async function ensureDraftCategory(userId, listing, deps) {
 
   const categoryId = String(top.categoryId);
   await deps.save(userId, listing.id, { categoryId });
-  return { categoryId, categoryName: top.categoryName || '', picked: true };
+  return { categoryId, categoryName: top.categoryName || '', picked: true, source: found.source || 'ebay', creditsUsed: found.creditsUsed || 0 };
 }
 
 module.exports = { ensureDraftCategory };
