@@ -79,42 +79,62 @@ const asSuggestion = (pick, creditsUsed) => {
 };
 
 /**
+ * The AI's choice of a category for a title from the category list of THE marketplace given (a US store uses the US list, a UK store the UK list),
+ * charged the admin-set AI_CATEGORY credits (given back when nothing is found; the same product words again are free).
+ * @returns {Promise<{ id, path, name, creditsUsed }>}
+ * @throws Error with `reason`: 'unavailable' (AI off / no key / no list for this marketplace: nothing was tried or charged), 'no_credits', or 'failed'
+ */
+async function pickCategory(userId, title, marketplaceId) {
+  const { aiConfigured } = require('./aiService');
+  const { getAiSettings } = require('../models/settingsModel');
+  const site = lists.DOMAINS[String(marketplaceId).toUpperCase()] || String(marketplaceId);
+  const stop = (reason, message, extra) => Object.assign(new Error(message), { reason, ...extra });
+  if (!aiConfigured()) throw stop('unavailable', 'The AI is not set up on the server.');
+  if (!(await getAiSettings()).aiCategoryEnabled) throw stop('unavailable', 'AI category is turned off by the administrator.');
+  const index = await lists.getIndex(marketplaceId);
+  if (!index) throw stop('unavailable', 'No category list is uploaded for ' + site + ' (the admin adds it in Admin Panel > Categories).');
+
+  const key = wordsKey(marketplaceId, title);
+  const known = picks.get(key);
+  if (known && Date.now() - known.at < CACHE_MS) return { ...known.pick, creditsUsed: 0 };
+
+  const { withCredits } = require('./creditService');
+  const AiUsage = require('../models/schemas/AiUsage');
+  const cost = Number(ACTION_COSTS.AI_CATEGORY || 0);
+  let pick;
+  let usage = null;
+  try {
+    pick = await withCredits(userId, cost, async () => {
+      try { return await chooseFromList(index, site, title); } catch (err) { usage = err.usage || null; throw err; }
+    });
+    usage = pick.usage;
+  } catch (err) {
+    if (err.outOfCredits) throw stop('no_credits', 'it needs ' + cost + ' credit' + (cost === 1 ? '' : 's') + ' and there are not enough.', { outOfCredits: true });
+    AiUsage.create({ userId, kind: 'category', ok: false, credits: 0, model: usage && usage.model, inputTokens: usage ? usage.inputTokens : 0, outputTokens: usage ? usage.outputTokens : 0 }).catch(() => {});
+    throw stop('failed', err.message || 'the AI request failed.');
+  }
+  AiUsage.create({ userId, kind: 'category', ok: true, credits: cost, model: usage.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }).catch(() => {});
+  const chosen = { id: pick.id, path: pick.path, name: pick.name };
+  picks.set(key, { pick: chosen, at: Date.now() });
+  if (picks.size > CACHE_MAX) picks.delete(picks.keys().next().value);
+  return { ...chosen, creditsUsed: cost };
+}
+
+/**
  * Called when eBay's category service said its limit is reached (limitErr). Throws limitErr itself when the backup is not available (the admin
  * has not uploaded this marketplace's list, the AI switch is off, no AI key); throws a longer message of the same kind when it was tried and
  * found nothing or the seller has too few credits.
  */
 async function backupSuggestion(userId, title, marketplaceId, limitErr) {
-  const { aiConfigured } = require('./aiService');
-  const { getAiSettings } = require('../models/settingsModel');
-  if (!aiConfigured() || !(await getAiSettings()).aiCategoryEnabled) throw limitErr;
-  const index = await lists.getIndex(marketplaceId);
-  if (!index) throw limitErr;
-
-  const key = wordsKey(marketplaceId, title);
-  const known = picks.get(key);
-  if (known && Date.now() - known.at < CACHE_MS) return asSuggestion(known.pick, 0);
-
-  const { withCredits } = require('./creditService');
-  const AiUsage = require('../models/schemas/AiUsage');
-  const domain = lists.DOMAINS[String(marketplaceId).toUpperCase()] || String(marketplaceId);
-  const cost = Number(ACTION_COSTS.AI_CATEGORY || 0);
-  const fail = (reason, extra) => Object.assign(new Error(limitErr.message + ' The AI category backup could not help: ' + reason), { statusCode: limitErr.statusCode, limitReached: true, aiBackup: 'failed', ...extra });
   let pick;
-  let usage = null;
   try {
-    pick = await withCredits(userId, cost, async () => {
-      try { return await chooseFromList(index, domain, title); } catch (err) { usage = err.usage || null; throw err; }
-    });
-    usage = pick.usage;
+    pick = await pickCategory(userId, title, marketplaceId);
   } catch (err) {
-    if (err.outOfCredits) throw fail('it needs ' + cost + ' credit' + (cost === 1 ? '' : 's') + ' and there are not enough. Buy credits, or try again after the limit restarts.', { outOfCredits: true });
-    AiUsage.create({ userId, kind: 'category', ok: false, credits: 0, model: usage && usage.model, inputTokens: usage ? usage.inputTokens : 0, outputTokens: usage ? usage.outputTokens : 0 }).catch(() => {});
-    throw fail(err.message || 'the AI request failed.');
+    if (err.reason === 'unavailable') throw limitErr;
+    const more = err.reason === 'no_credits' ? ' Buy credits, or try again after the limit restarts.' : '';
+    throw Object.assign(new Error(limitErr.message + ' The AI category backup could not help: ' + err.message + more), { statusCode: limitErr.statusCode, limitReached: true, aiBackup: 'failed', ...(err.outOfCredits ? { outOfCredits: true } : {}) });
   }
-  AiUsage.create({ userId, kind: 'category', ok: true, credits: cost, model: usage.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }).catch(() => {});
-  picks.set(key, { pick: { id: pick.id, path: pick.path, name: pick.name }, at: Date.now() });
-  if (picks.size > CACHE_MAX) picks.delete(picks.keys().next().value);
-  return asSuggestion(pick, cost);
+  return asSuggestion(pick, pick.creditsUsed);
 }
 
 /**
@@ -130,4 +150,4 @@ async function suggestCategoriesWithBackup(userId, title, marketplaceId) {
   }
 }
 
-module.exports = { suggestCategoriesWithBackup, parseAnswer, _picks: picks };
+module.exports = { suggestCategoriesWithBackup, pickCategory, parseAnswer, _picks: picks };

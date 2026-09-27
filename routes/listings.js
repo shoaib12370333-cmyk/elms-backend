@@ -6,6 +6,8 @@ const {
   listListingsByStatuses,
   countListingsByStatus,
   getListingById,
+  getListingsForDelete,
+  deleteListingsMany,
   getListingsByIds,
   getListingStatuses,
   claimListingForPublishing,
@@ -58,7 +60,7 @@ const {
   refundCredit,
   getPricingRule,
 } = require('../models/usersModel');
-const { bulkEdit, validateChanges } = require('../services/bulkEditService');
+const { bulkEdit, validateChanges, mapPool } = require('../services/bulkEditService');
 const { bulkLivePrice } = require('../services/liveBulkPriceService');
 
 const { ACTION_COSTS } = require('../config/actionCosts');
@@ -595,41 +597,51 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
+const MAX_BULK_DELETE = 5000;
+
 /**
  * POST /api/listings/bulk-delete
- * Body: { ids: string[] }
+ * Body: { ids: string[] }   (at most 5000 per request; the Drafts page sends 1000 at a time)
  *
- * Deletes several listings at once (the Drafts page's "select several -> Remove" bar).
- * Same per-listing logic as DELETE /:id (ends the eBay offer first if the listing is
- * live) - one bad id doesn't stop the rest, so the response reports how many actually
- * got deleted plus a message for each one that failed.
+ * Deletes several listings at once (the Drafts page's "select several -> Remove" bar). It used to read and delete them one by one (two database
+ * round trips each, so thousands took minutes); now ONE query finds them and ONE command removes every listing that has no eBay offer (all the
+ * drafts). A listing that has an eBay offer (a live or half-published one) still has that offer ended first, a few at a time, exactly as
+ * DELETE /:id does, and stays if eBay refuses. One bad id never stops the rest: the response says how many were deleted and why each other one was not.
  */
 router.post('/bulk-delete', requireAuth, async (req, res) => {
-  const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+  const ids = Array.from(new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map((id) => String(id || '').trim()).filter(Boolean)));
   if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_BULK_DELETE) return res.status(400).json({ success: false, error: `Please delete at most ${MAX_BULK_DELETE} at a time.` });
 
-  let deletedCount = 0;
-  const errors = [];
-  for (const id of ids) {
-    try {
-      const listing = await getListingById(req.userId, id);
-      if (!listing) { errors.push(`${id}: not found.`); continue; }
+  try {
+    const found = await getListingsForDelete(req.userId, ids);
+    const foundIds = new Set(found.map((l) => l.id));
+    const errors = ids.filter((id) => !foundIds.has(id)).map((id) => `${id}: not found.`);
+    const withOffer = found.filter((l) => l.ebay_offer_id && l.ebay_account_id);
+    const plain = found.filter((l) => !(l.ebay_offer_id && l.ebay_account_id));
 
-      if (listing.ebay_offer_id && listing.ebay_account_id) {
-        const refreshToken = await getEbayAccountRefreshToken(req.userId, listing.ebay_account_id);
-        if (!refreshToken) { errors.push(`${listing.title || id}: the connected eBay account is missing a refresh token.`); continue; }
-        await deleteOffer(refreshToken, listing.ebay_offer_id);
+    let deletedCount = plain.length ? await deleteListingsMany(req.userId, plain.map((l) => l.id)) : 0;
+
+    const tokens = new Map(); // one refresh token lookup per eBay account
+    const tokenOf = (accountId) => { if (!tokens.has(accountId)) tokens.set(accountId, getEbayAccountRefreshToken(req.userId, accountId)); return tokens.get(accountId); };
+    await mapPool(withOffer, 4, async (l) => {
+      try {
+        const refreshToken = await tokenOf(l.ebay_account_id);
+        if (!refreshToken) { errors.push(`${l.title || l.id}: the connected eBay account is missing a refresh token.`); return; }
+        await deleteOffer(refreshToken, l.ebay_offer_id);
+        const removed = await deleteListingsMany(req.userId, [l.id]); // (not `deletedCount += await ...`: that reads the old total before the await, so listings finishing together would be lost from the count)
+        deletedCount += removed;
+      } catch (err) {
+        console.error(`bulk listing delete error for ${l.id}:`, err.message);
+        errors.push(`${l.title || l.id}: ${err.message || 'Could not delete.'}`);
       }
+    });
 
-      await deleteListing(req.userId, id);
-      deletedCount += 1;
-    } catch (err) {
-      console.error(`bulk listing delete error for ${id}:`, err.message);
-      errors.push(`${id}: ${err.message || 'Could not delete.'}`);
-    }
+    res.json({ success: true, deletedCount, errors: errors.length ? errors : undefined });
+  } catch (err) {
+    console.error('bulk listing delete error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not delete the selected drafts. Please try again.' });
   }
-
-  res.json({ success: true, deletedCount, errors: errors.length ? errors : undefined });
 });
 
 const MAX_BULK_IDS = 500;
@@ -829,6 +841,43 @@ router.post('/bulk-aspects', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('bulk aspects error:', err.message);
     res.status(500).json({ success: false, error: 'Could not fill the item specifics. Please try again.' });
+  }
+});
+
+/** GET /api/listings/bulk-category/cost - what one AI category costs right now (the admin sets it). */
+router.get('/bulk-category/cost', requireAuth, (req, res) => {
+  res.json({ success: true, cost: Number(ACTION_COSTS.AI_CATEGORY || 0) });
+});
+
+const MAX_CATEGORY_BATCH = 20;
+
+/**
+ * POST /api/listings/bulk-category   { ids: [...] }
+ *
+ * The AI chooses the eBay category of every selected draft that has none, from the category list of that draft's OWN eBay site (a US store's draft
+ * from the US list, a UK store's draft from the UK list - the lists the admin uploads in Admin > Categories) and saves it. It does not ask eBay.
+ * Each draft that really gets a category costs the admin-set AI_CATEGORY credits; a draft that already has one, is skipped, fails, or finds
+ * nothing costs nothing. One draft failing never stops the others. At most 20 per request - the app sends bigger selections in several requests.
+ */
+router.post('/bulk-category', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_CATEGORY_BATCH) return res.status(400).json({ success: false, error: `Please fill at most ${MAX_CATEGORY_BATCH} drafts per request.` });
+  try {
+    const { getAiSettings } = require('../models/settingsModel');
+    if (!(await getAiSettings()).aiCategoryEnabled) return res.status(403).json({ success: false, error: 'This AI feature is turned off by the administrator.' });
+    const { fillManyDraftCategories } = require('../services/categoryFillService');
+    const results = await fillManyDraftCategories(req.userId, ids);
+    res.json({
+      success: true,
+      results,
+      filled: results.filter((r) => r.status === 'filled').length,
+      creditsUsed: results.reduce((sum, r) => sum + (r.creditsUsed || 0), 0),
+      cost: Number(ACTION_COSTS.AI_CATEGORY || 0),
+    });
+  } catch (err) {
+    console.error('bulk category error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not fill the categories. Please try again.' });
   }
 });
 
