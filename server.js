@@ -118,6 +118,10 @@ app.use('/api/ebay/message-notification', express.raw({ type: 'application/json'
 // the raw body available for signature verification before express.json().
 app.use('/api/ebay/account-deletion', express.raw({ type: 'application/json' }), ebayAccountDeletionRoute);
 
+// AliExpress's order-status push notifications are signed over the raw bytes too (Authorization header, see
+// services/aliexpressWebhookService.js) - same reasoning as the webhooks above.
+app.use('/api/aliexpress/webhook', express.raw({ type: 'application/json' }), require('./routes/aliexpressWebhook'));
+
 app.use(express.json({ limit: '15mb' }));
 
 // Health check
