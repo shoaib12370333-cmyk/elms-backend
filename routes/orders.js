@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { ordersSummary, listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing } = require('../models/ordersModel');
+const { ordersSummary, listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, setBuyPrice, linkOrderToListing } = require('../models/ordersModel');
 const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
@@ -50,6 +50,31 @@ router.get('/', requireAuth, async (req, res) => {
   backfillOrderImagesForUser(req.userId); // orders without a picture get theirs from eBay in the background; the next load shows them
 });
 
+
+/**
+ * GET / PUT /api/orders/ebay-note-setting   { enabled: boolean }
+ * The seller's switch for writing "ELMS: ordered <date>" in the private note of the eBay order when they mark an order as ordered (off by default).
+ * Must stay above PUT /:id.
+ */
+router.get('/ebay-note-setting', requireAuth, async (req, res) => {
+  try {
+    const user = await require('../models/schemas/User').findById(req.userId).select('ebayOrderNote').lean();
+    res.json({ success: true, enabled: !!(user && user.ebayOrderNote) });
+  } catch (err) {
+    console.error('ebay note setting error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not read this setting.' });
+  }
+});
+router.put('/ebay-note-setting', requireAuth, async (req, res) => {
+  if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ success: false, error: 'enabled must be true or false.' });
+  try {
+    await require('../models/schemas/User').updateOne({ _id: req.userId }, { $set: { ebayOrderNote: req.body.enabled } });
+    res.json({ success: true, enabled: req.body.enabled });
+  } catch (err) {
+    console.error('ebay note setting error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not save this setting.' });
+  }
+});
 
 /**
  * GET /api/orders/sync-status?accountId=...
@@ -133,6 +158,37 @@ router.put('/:id/amazon-order', requireAuth, async (req, res) => {
     res.json({ success: true, order: updated });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/orders/:id/ebay-note   { ordered: boolean }
+ * After "Mark as ordered" (or Undo) in ELMS: writes (or takes out) "ELMS: ordered <date>" in the private note of the eBay order, keeping the seller's own
+ * text (services/ebayOrderNoteService.js). Only when the seller switched it on. Answers { result: { status, message }, order } and never fails the mark itself:
+ * status is written | removed | unchanged | skipped | failed, and the reason is kept on the order for the order window.
+ */
+router.post('/:id/ebay-note', requireAuth, async (req, res) => {
+  if (typeof req.body?.ordered !== 'boolean') return res.status(400).json({ success: false, error: 'ordered must be true or false.' });
+  try {
+    const user = await require('../models/schemas/User').findById(req.userId).select('ebayOrderNote').lean();
+    if (!(user && user.ebayOrderNote)) return res.status(403).json({ success: false, error: 'Writing the eBay note is switched off. Switch it on in Orders first.' });
+    const order = await getOrderById(req.userId, req.params.id);
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
+    let result;
+    if (!order.ebay_account_id) result = { status: 'skipped', message: 'This order is not linked to an eBay store.' };
+    else {
+      const account = await getEbayAccountById(req.userId, order.ebay_account_id).catch(() => null);
+      const refreshToken = account ? await getEbayAccountRefreshToken(req.userId, order.ebay_account_id) : null;
+      result = await require('../services/ebayOrderNoteService').syncOrderNote(refreshToken, order.marketplace_id || (account && account.marketplaceId) || 'EBAY_US', { orderId: order.ebay_order_id, itemId: order.legacy_item_id, ordered: req.body.ordered });
+    }
+    const ok = ['written', 'removed', 'unchanged'].includes(result.status);
+    // the mark is in the eBay note after "written" or when it was already there; it is out after "removed" or when it was not there
+    const inEbay = ok ? (req.body.ordered ? true : false) : null;
+    const updated = await setEbayNoteState(req.userId, req.params.id, { written: inEbay, error: ok ? null : result.message });
+    res.json({ success: true, result, order: updated || order });
+  } catch (err) {
+    console.error('ebay note error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not update the eBay note. The order is still marked in ELMS.' });
   }
 });
 

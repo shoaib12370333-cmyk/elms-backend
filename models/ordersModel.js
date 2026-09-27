@@ -311,6 +311,15 @@ async function setBuyPrice(userId, id, price) {
   return doc ? serialize(doc) : null;
 }
 
+/** What happened to the "ordered" mark in the eBay note of an order: written (true), removed (false), or nothing changed (null); `error` says why it did not work (null = fine). */
+async function setEbayNoteState(userId, id, { written = null, error = null } = {}) {
+  const set = { ebayNoteError: error ? String(error).slice(0, 300) : null };
+  if (written === true) set.ebayNoteAt = new Date();
+  if (written === false) set.ebayNoteAt = null;
+  const doc = await Order.findOneAndUpdate({ _id: id, userId }, { $set: set }, { new: true });
+  return doc ? serialize(doc) : null;
+}
+
 async function setSellerNote(userId, id, note) {
   const doc = await Order.findOneAndUpdate({ _id: id, userId }, { sellerNote: String(note || '').slice(0, 2000) }, { new: true });
   return doc ? serialize(doc) : null;
@@ -362,6 +371,8 @@ function serialize(doc) {
     est_delivery_min: obj.estDeliveryMin || null,
     est_delivery_max: obj.estDeliveryMax || null,
     seller_note: obj.sellerNote || '',
+    ebay_note_at: obj.ebayNoteAt || null,
+    ebay_note_error: obj.ebayNoteError || null,
     sheet_amazon_price: obj.sheetAmazonPrice ?? null, // Net Profit sheet: typed by the seller
     order_earning: obj.orderEarning ?? null, // Net Profit sheet: typed by the seller
     net_profit_typed: obj.netProfit ?? null, // typed in the first version of the sheet
@@ -516,4 +527,4 @@ async function setSheetInputs(userId, id, { amazonPrice, orderEarning, netProfit
   return !!doc;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, _summaryCache: summaryCache };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, _summaryCache: summaryCache };

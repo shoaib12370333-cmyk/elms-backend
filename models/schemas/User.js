@@ -69,6 +69,8 @@ const userSchema = new mongoose.Schema(
     marketingOptOut: { type: Boolean, default: false },
     aiReplyMode: { type: String, enum: ['off', 'draft', 'auto'], default: 'off' },
     aiReplyEnabledAt: { type: Date, default: null },
+    // "Mark as ordered" in Orders also writes "ELMS: ordered <date>" in the private note of the eBay order (services/ebayOrderNoteService.js). Off until the seller switches it on.
+    ebayOrderNote: { type: Boolean, default: false },
 
     // How often (in days) this user's published listings should be checked
     // for Amazon stock. Set manually by an admin per user. The stock check
