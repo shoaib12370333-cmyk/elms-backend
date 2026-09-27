@@ -1,10 +1,12 @@
-// The Net Profit sheet: the money is worked out in whole cents (so the numbers are exact), EBAY COST is PROFIT - NET PROFIT and stays empty
-// until NET PROFIT is typed, currencies are never mixed, a free account reaches only its lines, and the CSV has every column.
+// The Net Profit sheet: the money is worked out in whole cents (so the numbers are exact). The seller types AMAZON PRICE and ORDER EARNING (both empty
+// until typed); EBAY COST = EBAY PRICE - ORDER EARNING and NET PROFIT = ORDER EARNING - AMAZON PRICE are worked out, PROFIT = EBAY PRICE - AMAZON PRICE;
+// what cannot be worked out yet is empty (never 0), every price is for the whole order line, currencies are never mixed, a free account reaches only
+// its lines, and the CSV has every column.
 const assert = require('assert');
 const Module = require('module');
 const S = require('../services/netProfitService');
 
-const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Windscreen Wash', ebay_order_id: '11-12345-67890', legacy_item_id: '110001234567', asin: 'B0ABC12345', quantity: 1, sale_price: 150, buy_price: 100, currency: 'GBP', ebay_account_label: 'Trendy UK', ebay_created_at: '2026-09-20T10:00:00Z', order_status: 'shipped', ...over });
+const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Windscreen Wash', ebay_order_id: '11-12345-67890', legacy_item_id: '110001234567', asin: 'B0ABC12345', quantity: 1, sale_price: 150, sheet_amazon_price: null, order_earning: null, net_profit_typed: null, currency: 'GBP', ebay_account_label: 'Trendy UK', ebay_created_at: '2026-09-20T10:00:00Z', order_status: 'shipped', ...over });
 
 (async () => {
   // ---------- cents: exact, half away from zero ----------
@@ -12,46 +14,52 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   assert.strictEqual(S.cents(null), null); assert.strictEqual(S.cents(''), null); assert.strictEqual(S.cents('abc'), null); assert.strictEqual(S.cents(0), 0);
   assert.strictEqual(S.money(1999), 19.99); assert.strictEqual(S.money(null), null);
 
-  // ---------- the seller's own example: 100 + 150 -> profit 50; net profit 30 -> eBay cost 20 ----------
-  let l = S.buildLine(order());
-  assert.strictEqual(l.amazon_price, 100); assert.strictEqual(l.ebay_price, 150); assert.strictEqual(l.profit, 50);
-  assert.strictEqual(l.net_profit, null); assert.strictEqual(l.ebay_cost, null, 'eBay cost stays empty until the net profit is typed');
-  l = S.buildLine(order({ net_profit: 30 }));
-  assert.strictEqual(l.profit, 50); assert.strictEqual(l.ebay_cost, 20); assert.strictEqual(l.net_profit, 30);
+  // ---------- nothing typed: only the eBay price; everything else is empty (the Amazon price is NOT taken from the listing any more) ----------
+  let l = S.buildLine(order({ buy_price: 100 })); // a cost ELMS knows from the listing is ignored by the sheet
+  assert.deepStrictEqual([l.amazon_price, l.ebay_price, l.profit, l.order_earning, l.ebay_cost, l.net_profit, l.net_profit_older], [null, 150, null, null, null, null, false]);
+  // the Amazon price typed: PROFIT only
+  l = S.buildLine(order({ sheet_amazon_price: 100 }));
+  assert.deepStrictEqual([l.amazon_price, l.profit, l.order_earning, l.ebay_cost, l.net_profit], [100, 50, null, null, null]);
+  // the order earning typed alone: EBAY COST (what eBay kept) needs no Amazon price
+  l = S.buildLine(order({ order_earning: 130 }));
+  assert.deepStrictEqual([l.amazon_price, l.profit, l.ebay_cost, l.net_profit], [null, null, 20, null]);
+  // both typed: everything is worked out. 150 sold, 100 on Amazon, eBay paid out 130 -> profit 50, eBay cost 20, net profit 30
+  l = S.buildLine(order({ sheet_amazon_price: 100, order_earning: 130 }));
+  assert.deepStrictEqual([l.amazon_price, l.ebay_price, l.profit, l.order_earning, l.ebay_cost, l.net_profit], [100, 150, 50, 130, 20, 30]);
+  assert.strictEqual(l.profit - l.net_profit, l.ebay_cost, 'PROFIT - NET PROFIT is EBAY COST, as before');
   assert.strictEqual(l.title, 'CarPlan All Seasons Windscreen Wash'); assert.strictEqual(l.ebay_order_id, '11-12345-67890'); assert.strictEqual(l.currency, 'GBP'); assert.strictEqual(l.store, 'Trendy UK');
-  // a loss, a net profit above the profit (the eBay cost is then below zero: shown as it is), a net profit of 0
-  l = S.buildLine(order({ sale_price: 80, buy_price: 100, net_profit: -25 })); assert.strictEqual(l.profit, -20); assert.strictEqual(l.ebay_cost, 5);
-  l = S.buildLine(order({ net_profit: 60 })); assert.strictEqual(l.ebay_cost, -10);
-  l = S.buildLine(order({ net_profit: 0 })); assert.strictEqual(l.ebay_cost, 50, 'a typed 0 is a number, not "empty"');
+  // a loss, an earning above the price (eBay cost below zero: shown as it is), typed zeros are numbers not "empty"
+  l = S.buildLine(order({ sale_price: 80, sheet_amazon_price: 100, order_earning: 70 })); assert.deepStrictEqual([l.profit, l.ebay_cost, l.net_profit], [-20, 10, -30]);
+  l = S.buildLine(order({ sale_price: 30, sheet_amazon_price: 10, order_earning: 35 })); assert.deepStrictEqual([l.ebay_cost, l.net_profit], [-5, 25]);
+  l = S.buildLine(order({ sheet_amazon_price: 0, order_earning: 0 })); assert.deepStrictEqual([l.profit, l.ebay_cost, l.net_profit], [150, 150, 0]);
   // floating point traps stay exact
-  l = S.buildLine(order({ sale_price: 0.3, buy_price: 0.1, net_profit: 0.1 })); assert.strictEqual(l.profit, 0.2); assert.strictEqual(l.ebay_cost, 0.1);
-  l = S.buildLine(order({ sale_price: 19.99, buy_price: 12.34, net_profit: 5.55 })); assert.strictEqual(l.profit, 7.65); assert.strictEqual(l.ebay_cost, 2.1);
-  // no Amazon price yet: no profit, and no eBay cost even when a net profit is typed
-  l = S.buildLine(order({ buy_price: null, net_profit: 30 })); assert.strictEqual(l.amazon_price, null); assert.strictEqual(l.profit, null); assert.strictEqual(l.ebay_cost, null); assert.strictEqual(l.net_profit, 30);
-  l = S.buildLine(order({ sale_price: null })); assert.strictEqual(l.ebay_price, null); assert.strictEqual(l.profit, null);
-  // prices are per piece: an order of 2 pieces sold for 300 is 150 each
-  l = S.buildLine(order({ quantity: 2, sale_price: 300, buy_price: 100 })); assert.strictEqual(l.ebay_price, 150); assert.strictEqual(l.quantity, 2); assert.strictEqual(l.profit, 50);
+  l = S.buildLine(order({ sale_price: 0.3, sheet_amazon_price: 0.1, order_earning: 0.2 })); assert.deepStrictEqual([l.profit, l.ebay_cost, l.net_profit], [0.2, 0.1, 0.1]);
+  l = S.buildLine(order({ sale_price: 19.99, sheet_amazon_price: 12.34, order_earning: 18.1 })); assert.deepStrictEqual([l.profit, l.ebay_cost, l.net_profit], [7.65, 1.89, 5.76]);
+  l = S.buildLine(order({ sale_price: null, sheet_amazon_price: 5, order_earning: 4 })); assert.deepStrictEqual([l.ebay_price, l.profit, l.ebay_cost, l.net_profit], [null, null, null, -1], 'no eBay price: no profit and no eBay cost; the net profit does not need it');
+  // every price is for the WHOLE order line: an order of 2 pieces sold for 300 is one line of 300
+  l = S.buildLine(order({ quantity: 2, sale_price: 300, sheet_amazon_price: 200, order_earning: 260 })); assert.deepStrictEqual([l.ebay_price, l.quantity, l.profit, l.ebay_cost, l.net_profit], [300, 2, 100, 40, 60]);
   assert.strictEqual(S.buildLine(order({ quantity: 0 })).quantity, 1); assert.strictEqual(S.buildLine(order({ quantity: 'x' })).quantity, 1);
-  // a cost in another currency that could not be converted is never shown as if it were in the order's currency
-  l = S.buildLine(order({ buy_price: 12, profit_note: 'no exchange rate' })); assert.strictEqual(l.amazon_price, null); assert.strictEqual(l.profit, null); assert.match(l.amazon_note, /exchange rate/);
-  // the seller's own Amazon price is marked
-  assert.strictEqual(S.buildLine(order({ buy_price_manual: true })).amazon_manual, true); assert.strictEqual(S.buildLine(order()).amazon_manual, false);
+  // a net profit typed in the first version of the sheet stays until both figures are typed
+  l = S.buildLine(order({ net_profit_typed: 30 })); assert.deepStrictEqual([l.net_profit, l.net_profit_older, l.profit, l.ebay_cost], [30, true, null, null]);
+  l = S.buildLine(order({ net_profit_typed: 30, sheet_amazon_price: 100 })); assert.deepStrictEqual([l.net_profit, l.net_profit_older], [30, true], 'one figure is not enough to replace it');
+  l = S.buildLine(order({ net_profit_typed: 30, sheet_amazon_price: 100, order_earning: 120 })); assert.deepStrictEqual([l.net_profit, l.net_profit_older], [20, false], 'both typed: the worked-out figure wins');
+  assert.strictEqual(S.resolveNetProfit(130, 100, 5), 30); assert.strictEqual(S.resolveNetProfit(null, 100, 5), 5); assert.strictEqual(S.resolveNetProfit(null, null, null), null); assert.strictEqual(S.resolveNetProfit(0.3, 0.1, null), 0.2);
   // title falls back to eBay's own title, then the SKU
   assert.strictEqual(S.buildLine(order({ listing_title: null, item_title: 'From eBay' })).title, 'From eBay'); assert.strictEqual(S.buildLine(order({ listing_title: null, item_title: null, sku: 'EBAY-1' })).title, 'EBAY-1');
 
   // ---------- totals: per currency, only cells that have a number, exact ----------
   const lines = [
-    S.buildLine(order({ id: 'a', sale_price: 150, buy_price: 100, net_profit: 30 })),
-    S.buildLine(order({ id: 'b', sale_price: 0.3, buy_price: 0.1 })),
-    S.buildLine(order({ id: 'c', currency: 'EUR', sale_price: 50, buy_price: 20, net_profit: 25 })),
-    S.buildLine(order({ id: 'd', buy_price: null, sale_price: 10 })),
+    S.buildLine(order({ id: 'a', sale_price: 150, sheet_amazon_price: 100, order_earning: 130 })),
+    S.buildLine(order({ id: 'b', sale_price: 0.3, sheet_amazon_price: 0.1 })),
+    S.buildLine(order({ id: 'c', currency: 'EUR', sale_price: 50, sheet_amazon_price: 20, order_earning: 45 })),
+    S.buildLine(order({ id: 'd', sale_price: 10 })),
   ];
   const totals = S.totalsOf(lines);
   const gbp = totals.find((t) => t.currency === 'GBP'); const eur = totals.find((t) => t.currency === 'EUR');
   assert.strictEqual(totals.length, 2, 'a pound and a euro are never added together');
-  assert.deepStrictEqual(gbp, { currency: 'GBP', lines: 3, amazon_price: 100.1, ebay_price: 160.3, profit: 50.2, ebay_cost: 20, net_profit: 30 }, 'each column adds only the cells that have a number');
-  assert.deepStrictEqual(eur, { currency: 'EUR', lines: 1, amazon_price: 20, ebay_price: 50, profit: 30, ebay_cost: 5, net_profit: 25 });
-  assert.deepStrictEqual(S.totalsOf([]), []); assert.strictEqual(S.totalsOf([S.buildLine(order({ buy_price: null }))])[0].profit, null, 'nothing to add is empty, not 0');
+  assert.deepStrictEqual(gbp, { currency: 'GBP', lines: 3, amazon_price: 100.1, ebay_price: 160.3, profit: 50.2, order_earning: 130, ebay_cost: 20, net_profit: 30 }, 'each column adds only the cells that have a number');
+  assert.deepStrictEqual(eur, { currency: 'EUR', lines: 1, amazon_price: 20, ebay_price: 50, profit: 30, order_earning: 45, ebay_cost: 5, net_profit: 25 });
+  assert.deepStrictEqual(S.totalsOf([]), []); assert.strictEqual(S.totalsOf([S.buildLine(order())])[0].profit, null, 'nothing to add is empty, not 0');
 
   // ---------- who is paid ----------
   const now = new Date('2026-09-27T00:00:00Z');
@@ -76,20 +84,20 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
 
   // ---------- CSV: every column, plain numbers, text kept as text, safe for Excel ----------
   const csvLines = [
-    S.buildLine(order({ net_profit: 30, listing_title: 'Wash, "Summer" edition' })),
-    S.buildLine(order({ id: 'b', listing_title: '=HYPERLINK("http://x")', ebay_order_id: '22-1-2', sale_price: 80, buy_price: 100, currency: 'EUR', ebay_account_label: 'Berlin' })),
+    S.buildLine(order({ sheet_amazon_price: 100, order_earning: 130, listing_title: 'Wash, "Summer" edition' })),
+    S.buildLine(order({ id: 'b', listing_title: '=HYPERLINK("http://x")', ebay_order_id: '22-1-2', sale_price: 80, sheet_amazon_price: 100, currency: 'EUR', ebay_account_label: 'Berlin' })),
   ];
   const csv = S.csvHeader() + csvLines.map(S.csvLine).join('') + S.csvTotals(csvLines);
-  assert.ok(csv.startsWith('﻿"Title","Order ID","Amazon price","eBay price","Profit","eBay cost","Net profit","Currency","Quantity","Order date","Store","eBay item number","Amazon ASIN"\r\n'), 'a byte order mark so € £ and other letters open right in Excel');
+  assert.ok(csv.startsWith('﻿"Title","Order ID","Amazon price","eBay price","Profit","Order earning","eBay cost","Net profit","Currency","Quantity","Order date","Store","eBay item number","Amazon ASIN"\r\n'), 'a byte order mark so € £ and other letters open right in Excel; the earning, eBay cost and net profit are all there');
   const rows = csv.replace('﻿', '').split('\r\n').filter(Boolean);
   assert.strictEqual(rows.length, 1 + 2 + 2, 'header, two lines, one total row per currency');
-  assert.strictEqual(rows[1], '"Wash, ""Summer"" edition","11-12345-67890",100.00,150.00,50.00,20.00,30.00,"GBP",1,2026-09-20,"Trendy UK","=""110001234567""","B0ABC12345"', 'quotes doubled, numbers plain (no sign), item number kept as text');
+  assert.strictEqual(rows[1], '"Wash, ""Summer"" edition","11-12345-67890",100.00,150.00,50.00,130.00,20.00,30.00,"GBP",1,2026-09-20,"Trendy UK","=""110001234567""","B0ABC12345"', 'quotes doubled, numbers plain (no sign), item number kept as text');
   assert.ok(rows[2].startsWith(`"'=HYPERLINK(""http://x"")"`), 'a title that looks like a formula is made harmless');
-  assert.ok(rows[2].includes(',-20.00,,,"EUR",'), 'a loss is a plain negative number; empty net profit and eBay cost are empty');
-  assert.strictEqual(rows[3], '"TOTAL (1 line)","",100.00,150.00,50.00,20.00,30.00,"GBP",,,"","",""');
+  assert.ok(rows[2].includes(',100.00,80.00,-20.00,,,,"EUR",'), 'a loss is a plain negative number; the earning, eBay cost and net profit that are not typed are empty');
+  assert.strictEqual(rows[3], '"TOTAL (1 line)","",100.00,150.00,50.00,130.00,20.00,30.00,"GBP",,,"","",""');
   assert.ok(rows[4].startsWith('"TOTAL (1 line)"') && rows[4].includes('"EUR"'));
   // every row has the same number of columns as the header (naive split is safe here: no commas inside the sample titles of rows 3 and 4)
-  assert.strictEqual(rows[3].split(',').length, 13); assert.strictEqual(rows[4].split(',').length, 13);
+  assert.strictEqual(rows[3].split(',').length, 14); assert.strictEqual(rows[4].split(',').length, 14);
   assert.strictEqual(S.csvLine(S.buildLine(order({ legacy_item_id: '', asin: '' }))).includes('"",""'), true);
 
   // ---------- the routes (real code, fake data): the limit is enforced by the server ----------
@@ -103,10 +111,9 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
     '../models/ordersModel': {
       countNetProfitLines: async (u, f) => { calls.push({ count: f }); return total; },
       listNetProfitLines: async (u, f, o) => { calls.push({ list: o }); return Array.from({ length: Math.min(o.limit, Math.max(0, total - o.offset)) }, (_, i) => S.buildLine(order({ id: 'x' + (o.offset + i), ebay_order_id: '1-' + (o.offset + i) }))); },
-      getNetProfitLine: async () => S.buildLine(order({ net_profit: 30 })),
+      getNetProfitLine: async () => S.buildLine(order({ sheet_amazon_price: 100, order_earning: 130 })),
       netProfitSummary: async (u, f) => { calls.push({ summary: f }); return { currencies: [{ currency: 'GBP', net_profit: 30, orders: 1 }], orders: 1, ordersTotal: 4 }; },
-      setNetProfit: async (u, id, v) => { saved.push(['net', id, v]); return true; },
-      setBuyPrice: async (u, id, v) => { saved.push(['amazon', id, v]); if (v !== null && Number(v) <= 0) throw new Error('Enter the cost of one item as a number above 0.'); return {}; },
+      setSheetInputs: async (u, id, inputs) => { saved.push([id, inputs]); return true; },
     },
   };
   const orig = Module._load;
@@ -145,16 +152,21 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   assert.deepStrictEqual([res.statusCode, res.body.success, res.body.orders, res.body.ordersTotal, res.body.currencies[0].net_profit], [200, true, 1, 4, 30]);
   const sf = calls.find((c) => c.summary).summary; assert.deepStrictEqual([sf.q, sf.includeCancelled, sf.accountId], ['', false, null]); assert.ok(sf.from instanceof Date);
 
-  // saving the two typed cells
-  res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: { netProfit: '30', amazonPrice: 100 } });
-  assert.strictEqual(res.statusCode, 200); assert.strictEqual(res.body.line.net_profit, 30); assert.deepStrictEqual(saved, [['amazon', 'a'.repeat(24), 100], ['net', 'a'.repeat(24), 30]]);
-  saved.length = 0; res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: { netProfit: '' } }); assert.deepStrictEqual(saved, [['net', 'a'.repeat(24), null]], 'empty clears it');
-  saved.length = 0; res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: { amazonPrice: '' } }); assert.deepStrictEqual(saved, [['amazon', 'a'.repeat(24), null]], 'an empty Amazon price goes back to the listing price');
-  saved.length = 0; res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: { netProfit: 'abc' } }); assert.strictEqual(res.statusCode, 400); assert.strictEqual(saved.length, 0);
-  res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: { netProfit: 1e12 } }); assert.strictEqual(res.statusCode, 400);
-  res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: { amazonPrice: -5 } }); assert.strictEqual(res.statusCode, 400);
-  res = await call(handler('patch', '/:id'), { params: { id: 'a'.repeat(24) }, body: {} }); assert.strictEqual(res.statusCode, 400);
-  res = await call(handler('patch', '/:id'), { params: { id: 'bad' }, body: { netProfit: 1 } }); assert.strictEqual(res.statusCode, 404);
+  // saving the two typed cells: the Amazon price and the order earning; the answer is the line as the sheet now shows it
+  const id = 'a'.repeat(24);
+  res = await call(handler('patch', '/:id'), { params: { id }, body: { amazonPrice: '100', orderEarning: 130 } });
+  assert.strictEqual(res.statusCode, 200); assert.deepStrictEqual([res.body.line.net_profit, res.body.line.ebay_cost, res.body.line.profit], [30, 20, 50]); assert.deepStrictEqual(saved, [[id, { amazonPrice: 100, orderEarning: 130 }]]);
+  saved.length = 0; await call(handler('patch', '/:id'), { params: { id }, body: { orderEarning: '' } }); assert.deepStrictEqual(saved, [[id, { orderEarning: null }]], 'empty clears it, and only that one is touched');
+  saved.length = 0; await call(handler('patch', '/:id'), { params: { id }, body: { amazonPrice: null } }); assert.deepStrictEqual(saved, [[id, { amazonPrice: null }]]);
+  saved.length = 0; await call(handler('patch', '/:id'), { params: { id }, body: { amazonPrice: 0 } }); assert.deepStrictEqual(saved, [[id, { amazonPrice: 0 }]], 'an Amazon price of 0 is allowed');
+  saved.length = 0; await call(handler('patch', '/:id'), { params: { id }, body: { orderEarning: -4.5 } }); assert.deepStrictEqual(saved, [[id, { orderEarning: -4.5 }]], 'an earning can be below zero');
+  saved.length = 0; await call(handler('patch', '/:id'), { params: { id }, body: { netProfit: '30' } }); assert.deepStrictEqual(saved, [[id, { netProfit: 30 }]], 'a client of the first version of the sheet still works');
+  saved.length = 0;
+  for (const [body, message] of [[{ amazonPrice: 'abc' }, /Amazon price as a number/], [{ orderEarning: 'abc' }, /order earning as a number/], [{ netProfit: 'abc' }, /net profit as a number/], [{ amazonPrice: -5 }, /0 or more/], [{ orderEarning: 1e12 }, /too large/], [{ amazonPrice: 1e12 }, /0 or more/], [{ netProfit: 1e12 }, /too large/], [{}, /Nothing to save/]]) {
+    res = await call(handler('patch', '/:id'), { params: { id }, body }); assert.strictEqual(res.statusCode, 400, JSON.stringify(body)); assert.match(res.body.error, message);
+  }
+  assert.strictEqual(saved.length, 0, 'a refused figure saves nothing');
+  res = await call(handler('patch', '/:id'), { params: { id: 'bad' }, body: { orderEarning: 1 } }); assert.strictEqual(res.statusCode, 404);
 
   console.log('net profit tests passed');
   process.exit(0);

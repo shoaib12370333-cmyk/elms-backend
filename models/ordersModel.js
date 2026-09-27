@@ -115,7 +115,7 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
  * Listing) so the frontend can show Buy Price and calculate Profit without
  * an extra API call.
  */
-const { buildLine: buildNetProfitLine } = require('../services/netProfitService');
+const { buildLine: buildNetProfitLine, resolveNetProfit } = require('../services/netProfitService');
 // What an order needs from its listing (title, picture, cost), that listing's import (the Amazon link and price) and its store; the rest stays in the database.
 const LISTING_FOR_ORDER = { path: 'listingId', select: 'title mainImage amazonPrice sku currency importId ebayListingId ebayAccountId', populate: { path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' } };
 const ACCOUNT_FOR_ORDER = { path: 'ebayAccountId', select: 'displayName storeName ebayUserId storeNumber' };
@@ -362,7 +362,10 @@ function serialize(doc) {
     est_delivery_min: obj.estDeliveryMin || null,
     est_delivery_max: obj.estDeliveryMax || null,
     seller_note: obj.sellerNote || '',
-    net_profit: obj.netProfit ?? null,
+    sheet_amazon_price: obj.sheetAmazonPrice ?? null, // Net Profit sheet: typed by the seller
+    order_earning: obj.orderEarning ?? null, // Net Profit sheet: typed by the seller
+    net_profit_typed: obj.netProfit ?? null, // typed in the first version of the sheet
+    net_profit: resolveNetProfit(obj.orderEarning, obj.sheetAmazonPrice, obj.netProfit), // order earning - Amazon price when both are typed, else the older typed figure
     order_status: deriveOrderStatus(obj),
     created_at: obj.createdAt,
     updated_at: obj.updatedAt,
@@ -450,16 +453,24 @@ async function netProfitQuery(userId, { accountId, from, to, q, includeCancelled
 }
 
 /**
- * What was typed as net profit, per currency, over the same orders the sheet has (light: one database sum, no lines are read).
- * `orders` = how many orders have a net profit typed; `ordersTotal` = all the orders the filters give.
+ * The net profit of the orders, per currency, over the same orders the sheet has (light: one database sum, no lines are read). An order's net
+ * profit is ORDER EARNING - AMAZON PRICE when the seller typed both, else the figure the first version of the sheet had them type.
+ * `orders` = how many orders have a net profit; `ordersTotal` = all the orders the filters give.
  */
 async function netProfitSummary(userId, filters = {}) {
   const base = await netProfitQuery(userId, filters);
   const cast = (id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(String(id)));
-  const match = { ...base, userId: cast(userId), netProfit: { $ne: null } };
+  const match = { ...base, userId: cast(userId) };
   if (match.ebayAccountId) match.ebayAccountId = cast(match.ebayAccountId);
+  const typed = (field) => ({ $ne: [{ $ifNull: [field, null] }, null] });
+  const net = { $cond: [{ $and: [typed('$orderEarning'), typed('$sheetAmazonPrice')] }, { $subtract: ['$orderEarning', '$sheetAmazonPrice'] }, { $ifNull: ['$netProfit', null] }] };
   const [rows, ordersTotal] = await Promise.all([
-    Order.aggregate([{ $match: match }, { $group: { _id: '$currency', sum: { $sum: { $multiply: ['$netProfit', 100] } }, count: { $sum: 1 } } }]),
+    Order.aggregate([
+      { $match: match },
+      { $addFields: { _net: net } },
+      { $match: { _net: { $ne: null } } },
+      { $group: { _id: '$currency', sum: { $sum: { $round: [{ $multiply: ['$_net', 100] }, 0] } }, count: { $sum: 1 } } },
+    ]),
     Order.countDocuments(base),
   ]);
   const currencies = rows.map((r) => ({ currency: r._id ? String(r._id).toUpperCase() : null, net_profit: Math.round(r.sum) / 100, orders: r.count })).sort((a, b) => b.orders - a.orders);
@@ -480,7 +491,6 @@ async function listNetProfitLines(userId, filters, { offset = 0, limit = 1000 } 
     .limit(limit)
     .lean();
   await attachMissingListings(userId, docs);
-  if (needsRates(docs)) await warmRates();
   return docs.map((doc) => buildNetProfitLine(enrichOrder(serialize(doc), doc)));
 }
 
@@ -488,15 +498,22 @@ async function getNetProfitLine(userId, id) {
   const doc = await Order.findOne({ _id: id, userId }).populate(LISTING_FOR_ORDER).populate(ACCOUNT_FOR_ORDER).lean();
   if (!doc) return null;
   await attachMissingListings(userId, [doc]);
-  if (needsRates([doc])) await warmRates();
   return buildNetProfitLine(enrichOrder(serialize(doc), doc));
 }
 
-/** Saves the net profit the seller typed (null clears it). Returns false when the order is not theirs. */
-async function setNetProfit(userId, id, value) {
-  const v = value === null || value === undefined ? null : Number(Number(value).toFixed(2));
-  const doc = await Order.findOneAndUpdate({ _id: id, userId }, { netProfit: v }, { new: true });
+/**
+ * Saves the figures the seller typed on the sheet: the Amazon price and the order earning of an order (and, for an older client, the net
+ * profit). A key that is not given is left alone; null / '' clears it. Returns false when the order is not theirs.
+ */
+async function setSheetInputs(userId, id, { amazonPrice, orderEarning, netProfit } = {}) {
+  const num = (v) => (v === null || v === undefined || v === '' ? null : Number(Number(v).toFixed(2)));
+  const set = {};
+  if (amazonPrice !== undefined) set.sheetAmazonPrice = num(amazonPrice);
+  if (orderEarning !== undefined) set.orderEarning = num(orderEarning);
+  if (netProfit !== undefined) set.netProfit = num(netProfit);
+  if (!Object.keys(set).length) return false;
+  const doc = await Order.findOneAndUpdate({ _id: id, userId }, { $set: set }, { new: true });
   return !!doc;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setNetProfit, netProfitSummary, ordersSummary, _summaryCache: summaryCache };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, _summaryCache: summaryCache };
