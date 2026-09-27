@@ -17,6 +17,7 @@ async function connectDB() {
   await migrateOrderIndex();
   await migrateProductCacheTtl();
   await migrateUserExtensionKeyIndex();
+  await migrateSourcePlatformDefault();
   await require('./services/signupBonusGuard').backfillEmailKeys().then((n) => n && console.log(`Filled emailKey on ${n} user(s).`)).catch((err) => console.warn('emailKey backfill skipped:', err.message));
 }
 
@@ -103,6 +104,26 @@ async function migrateProductCacheTtl() {
     await ProductCache.syncIndexes();
   } catch (err) {
     console.warn('Product cache TTL migration skipped:', err.message);
+  }
+}
+
+/**
+ * Listings and Imports used to have only Amazon products, so there was nothing to tell sources apart. sourcePlatform (Listing.js,
+ * Import.js) makes every row say which supplier it came from - required from here on, so nothing can be silently ambiguous
+ * between Amazon and CJdropshipping. Existing rows predate the field and are missing it outright (Mongoose does not apply a
+ * schema default to a document already in the database), so this backfills them to 'amazon', the only source that ever existed
+ * before CJ was added. Idempotent: a row already carrying the field is left alone ($exists: false matches only the old ones).
+ */
+async function migrateSourcePlatformDefault() {
+  try {
+    const Listing = require('./models/schemas/Listing');
+    const Import = require('./models/schemas/Import');
+    const listings = await Listing.collection.updateMany({ sourcePlatform: { $exists: false } }, { $set: { sourcePlatform: 'amazon' } });
+    if (listings.modifiedCount) console.log(`Backfilled sourcePlatform=amazon on ${listings.modifiedCount} listing(s).`);
+    const imports = await Import.collection.updateMany({ sourcePlatform: { $exists: false } }, { $set: { sourcePlatform: 'amazon' } });
+    if (imports.modifiedCount) console.log(`Backfilled sourcePlatform=amazon on ${imports.modifiedCount} import(s).`);
+  } catch (err) {
+    console.warn('sourcePlatform migration skipped:', err.message);
   }
 }
 

@@ -44,6 +44,11 @@ const ACTION_COSTS = {
   AI_REPLY: 1, // AI drafts (or sends) one reply to a buyer message
   AI_DESCRIPTION: 1, // AI-written eBay description (Claude)
   IMAGE_EXTRACTOR: 0, // pulling a product's images - FREE (images are already included in every product fetch)
+
+  // CJdropshipping (services/cjAdapter.js) - a second, separate product source next to Amazon. Never shares a key, a call or a
+  // credit charge with the Amazon actions above.
+  CJ_IMPORT: 1, // importing one CJ product/variant as a draft - website Import page and "Find products on CJ"
+  CJ_STOCK_MONITORING: 1, // one CJ stock + price check for a published CJ listing (jobs/stockMonitor.js)
 };
 
 /**
@@ -80,6 +85,8 @@ const ACTION_COST_METADATA = [
   { key: 'AI_REPLY', label: 'AI message reply', usesCanopy: false, usesAi: true, description: 'One AI-written reply to a buyer message (draft or auto-send).' },
   { key: 'AI_DESCRIPTION', label: 'AI description', usesCanopy: false, usesAi: true, description: 'One AI-written eBay listing description in the listing editor.' },
   { key: 'IMAGE_EXTRACTOR', label: 'Image Extractor', usesCanopy: false, description: 'Pulling a product’s images - free, they’re already included in every product fetch.' },
+  { key: 'CJ_IMPORT', label: 'CJdropshipping import', usesCanopy: false, usesCj: true, description: 'Importing one product/variant from CJdropshipping as a draft (Import page and "Find products on CJ"). Separate from the Amazon import price.' },
+  { key: 'CJ_STOCK_MONITORING', label: 'CJ stock monitoring (daily)', usesCanopy: false, usesCj: true, description: 'Automatic daily stock + price check for a published CJ listing, against the CJ API. Separate from Amazon stock monitoring.' },
 ];
 
 module.exports = { ACTION_COSTS, ACTION_COST_METADATA };

@@ -396,6 +396,58 @@ async function setOrderSyncSettings(userId, { orderSyncMode, orderSyncIntervalMi
 }
 
 /**
+ * Stores a seller's own CJdropshipping API key and the token pair CJ issued for it (services/cjAdapter.js connect), all
+ * encrypted at rest - never in plain text, and never sent back to the client (see serialize() below: only isCjConnected).
+ */
+async function setCjCredentials(userId, apiKey, tokens) {
+  const user = await User.findByIdAndUpdate(userId, {
+    cj: {
+      apiKeyEncrypted: encrypt(apiKey),
+      accessTokenEncrypted: encrypt(tokens.accessToken),
+      refreshTokenEncrypted: encrypt(tokens.refreshToken),
+      accessTokenExpiresAt: tokens.accessTokenExpiryDate ? new Date(tokens.accessTokenExpiryDate) : null,
+      refreshTokenExpiresAt: tokens.refreshTokenExpiryDate ? new Date(tokens.refreshTokenExpiryDate) : null,
+      openId: tokens.openId ? String(tokens.openId) : null,
+      connectedAt: new Date(),
+    },
+  }, { new: true }).select('cj').lean();
+  return user ? !!user.cj : false;
+}
+
+/** Saves a refreshed access/refresh token pair (services/cjAdapter.js ensureToken) - keeps the same stored API key and openId/connectedAt. */
+async function setCjTokens(userId, tokens) {
+  await User.findByIdAndUpdate(userId, {
+    'cj.accessTokenEncrypted': encrypt(tokens.accessToken),
+    'cj.refreshTokenEncrypted': encrypt(tokens.refreshToken),
+    'cj.accessTokenExpiresAt': tokens.accessTokenExpiryDate ? new Date(tokens.accessTokenExpiryDate) : null,
+    'cj.refreshTokenExpiresAt': tokens.refreshTokenExpiryDate ? new Date(tokens.refreshTokenExpiryDate) : null,
+  });
+}
+
+/** The decrypted CJ credentials for internal use only (services/cjAdapter.js) - never sent to the client as-is. null when CJ is not connected. */
+async function getCjCredentials(userId) {
+  const user = await User.findById(userId).select('cj').lean();
+  if (!user?.cj?.accessTokenEncrypted) return null;
+  return {
+    apiKey: decrypt(user.cj.apiKeyEncrypted),
+    accessToken: decrypt(user.cj.accessTokenEncrypted),
+    refreshToken: decrypt(user.cj.refreshTokenEncrypted),
+    accessTokenExpiresAt: user.cj.accessTokenExpiresAt || null,
+    refreshTokenExpiresAt: user.cj.refreshTokenExpiresAt || null,
+  };
+}
+
+async function clearCjCredentials(userId) {
+  await User.findByIdAndUpdate(userId, { cj: null });
+}
+
+/** Client-safe: whether this account has a CJdropshipping connection, with no token material. Used by Settings and the Import page. */
+async function isCjConnected(userId) {
+  const user = await User.findById(userId).select('cj.accessTokenEncrypted cj.connectedAt').lean();
+  return { connected: !!user?.cj?.accessTokenEncrypted, connectedAt: user?.cj?.connectedAt || null };
+}
+
+/**
  * Admin-only: returns every user (for the Admin Panel user list).
  */
 async function listAllUsers() {
@@ -512,6 +564,8 @@ function serialize(doc) {
     suspendedPermanent: !!obj.suspendedPermanent,
     // the welcome popup: only for an account that was given welcome credits and whose owner has not closed it yet
     welcomePopup: obj.welcomeCredits > 0 && !obj.welcomePopupSeenAt ? { credits: obj.welcomeCredits } : null,
+    // Whether CJdropshipping is connected - never the key or a token, see getCjCredentials (internal use only).
+    cjConnected: !!(obj.cj && obj.cj.accessTokenEncrypted),
     createdAt: obj.createdAt,
   };
 }
@@ -538,6 +592,11 @@ module.exports = {
   setAutoOrderSettings,
   getPricingRule,
   setPricingRule,
+  setCjCredentials,
+  setCjTokens,
+  getCjCredentials,
+  clearCjCredentials,
+  isCjConnected,
   getOrCreateExtensionKey,
   regenerateExtensionKey,
   getUserByExtensionKey,

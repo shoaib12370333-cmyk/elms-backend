@@ -12,10 +12,34 @@ async function createImport(userId, product, suggestedPrice, amazonUrl, ebayAcco
   const doc = await Import.create({
     userId,
     ebayAccountId: ebayAccountId || null,
+    sourcePlatform: 'amazon',
     asin: product.asin || null,
     title: product.title || null,
     amazonUrl: amazonUrl || null,
     amazonPrice: product.price ?? null,
+    currency: product.currency || 'USD',
+    mainImage: (product.images && product.images[0]) || null,
+    product,
+    suggestedPrice: suggestedPrice ?? null,
+  });
+
+  return serialize(doc);
+}
+
+/**
+ * Saves a fetched CJdropshipping product+variant as an import record (services/cjImportService.js). Never shares a field with
+ * createImport above: asin stays null, amazonUrl stays null, and the CJ ids live in their own columns (models/schemas/Import.js).
+ * @param {object} product - normalized product object (services/cjImportService.js normalizeCjProduct), with cjProductId/cjVariantId set
+ */
+async function createCjImport(userId, product, suggestedPrice, ebayAccountId = null) {
+  const doc = await Import.create({
+    userId,
+    ebayAccountId: ebayAccountId || null,
+    sourcePlatform: 'cj',
+    cjProductId: product.cjProductId,
+    cjVariantId: product.cjVariantId,
+    title: product.title || null,
+    amazonPrice: product.price ?? null, // the CJ variant's own price (before CJ shipping); the shared "source price" field
     currency: product.currency || 'USD',
     mainImage: (product.images && product.images[0]) || null,
     product,
@@ -100,6 +124,9 @@ function serialize(doc) {
   return {
     id: obj._id.toString(),
     userId: obj.userId ? obj.userId.toString() : null,
+    source_platform: obj.sourcePlatform || 'amazon',
+    cj_product_id: obj.cjProductId || null,
+    cj_variant_id: obj.cjVariantId || null,
     asin: obj.asin,
     title: obj.title,
     amazon_url: obj.amazonUrl,
@@ -112,4 +139,4 @@ function serialize(doc) {
   };
 }
 
-module.exports = { createImport, getImportById, listImports, updateImportImages, updateImportProduct, updateImportPrice };
+module.exports = { createImport, createCjImport, getImportById, listImports, updateImportImages, updateImportProduct, updateImportPrice };
