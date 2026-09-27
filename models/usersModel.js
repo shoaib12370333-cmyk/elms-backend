@@ -448,6 +448,59 @@ async function isCjConnected(userId) {
 }
 
 /**
+ * Stores the access/refresh token pair AliExpress issued after the seller completed the OAuth consent screen
+ * (routes/aliexpressConnect.js callback), all encrypted at rest - never in plain text, never sent back to the client.
+ */
+async function setAliexpressCredentials(userId, tokens) {
+  const user = await User.findByIdAndUpdate(userId, {
+    aliexpress: {
+      accessTokenEncrypted: encrypt(tokens.accessToken),
+      refreshTokenEncrypted: encrypt(tokens.refreshToken),
+      accessTokenExpiresAt: tokens.accessTokenExpiresAt || null,
+      refreshTokenExpiresAt: tokens.refreshTokenExpiresAt || null,
+      sellerId: tokens.sellerId ? String(tokens.sellerId) : null,
+      account: tokens.account ? String(tokens.account) : null,
+      connectedAt: new Date(),
+    },
+  }, { new: true }).select('aliexpress').lean();
+  return user ? !!user.aliexpress : false;
+}
+
+/** Saves a refreshed access/refresh token pair (services/aliexpressAuthService.js ensureToken) - keeps the same seller id/account/connectedAt. */
+async function setAliexpressTokens(userId, tokens) {
+  await User.findByIdAndUpdate(userId, {
+    'aliexpress.accessTokenEncrypted': encrypt(tokens.accessToken),
+    'aliexpress.refreshTokenEncrypted': encrypt(tokens.refreshToken),
+    'aliexpress.accessTokenExpiresAt': tokens.accessTokenExpiresAt || null,
+    'aliexpress.refreshTokenExpiresAt': tokens.refreshTokenExpiresAt || null,
+  });
+}
+
+/** The decrypted AliExpress credentials for internal use only (services/aliexpressAuthService.js) - never sent to the client as-is. null when not connected. */
+async function getAliexpressCredentials(userId) {
+  const user = await User.findById(userId).select('aliexpress').lean();
+  if (!user?.aliexpress?.accessTokenEncrypted) return null;
+  return {
+    accessToken: decrypt(user.aliexpress.accessTokenEncrypted),
+    refreshToken: decrypt(user.aliexpress.refreshTokenEncrypted),
+    accessTokenExpiresAt: user.aliexpress.accessTokenExpiresAt || null,
+    refreshTokenExpiresAt: user.aliexpress.refreshTokenExpiresAt || null,
+    sellerId: user.aliexpress.sellerId || null,
+    account: user.aliexpress.account || null,
+  };
+}
+
+async function clearAliexpressCredentials(userId) {
+  await User.findByIdAndUpdate(userId, { aliexpress: null });
+}
+
+/** Client-safe: whether this account has an AliExpress connection, with no token material. Used by Settings and the Import page. */
+async function isAliexpressConnected(userId) {
+  const user = await User.findById(userId).select('aliexpress.accessTokenEncrypted aliexpress.connectedAt aliexpress.account').lean();
+  return { connected: !!user?.aliexpress?.accessTokenEncrypted, connectedAt: user?.aliexpress?.connectedAt || null, account: user?.aliexpress?.account || null };
+}
+
+/**
  * Admin-only: returns every user (for the Admin Panel user list).
  */
 async function listAllUsers() {
@@ -566,6 +619,8 @@ function serialize(doc) {
     welcomePopup: obj.welcomeCredits > 0 && !obj.welcomePopupSeenAt ? { credits: obj.welcomeCredits } : null,
     // Whether CJdropshipping is connected - never the key or a token, see getCjCredentials (internal use only).
     cjConnected: !!(obj.cj && obj.cj.accessTokenEncrypted),
+    // Whether AliExpress is connected - never a token, see getAliexpressCredentials (internal use only).
+    aliexpressConnected: !!(obj.aliexpress && obj.aliexpress.accessTokenEncrypted),
     createdAt: obj.createdAt,
   };
 }
@@ -597,6 +652,11 @@ module.exports = {
   getCjCredentials,
   clearCjCredentials,
   isCjConnected,
+  setAliexpressCredentials,
+  setAliexpressTokens,
+  getAliexpressCredentials,
+  clearAliexpressCredentials,
+  isAliexpressConnected,
   getOrCreateExtensionKey,
   regenerateExtensionKey,
   getUserByExtensionKey,

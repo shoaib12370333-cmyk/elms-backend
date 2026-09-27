@@ -50,6 +50,33 @@ function verifyEbayConnectState(token) {
   }
 }
 
+/** AliExpress's authorize URL has no "state" parameter (see services/aliexpressAuthService.js) - this token is appended to
+ * redirect_uri itself instead, so the callback still knows which ELMS user is mid-connect. */
+function issueAliexpressConnectState(userId) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is not set in the .env file.');
+  return jwt.sign({ userId, purpose: 'aliexpress-connect' }, secret, { expiresIn: '15m' });
+}
+
+function verifyAliexpressConnectState(token) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is not set in the .env file.');
+  if (!token) {
+    const err = new Error('No AliExpress connection state was provided.');
+    err.statusCode = 401;
+    throw err;
+  }
+  try {
+    const payload = jwt.verify(token, secret);
+    if (payload.purpose !== 'aliexpress-connect' || !payload.userId) throw new Error('Invalid state');
+    return { userId: payload.userId };
+  } catch (err) {
+    const wrapped = new Error('AliExpress connection session is invalid or expired. Please start the connection again.');
+    wrapped.statusCode = 401;
+    throw wrapped;
+  }
+}
+
 function verifySessionToken(token) {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
@@ -80,4 +107,4 @@ function verifySessionPayload(token) {
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-module.exports = { SESSION_TTL_MS, verifySessionPayload, issueSessionToken, verifySessionToken, issueEbayConnectState, verifyEbayConnectState };
+module.exports = { SESSION_TTL_MS, verifySessionPayload, issueSessionToken, verifySessionToken, issueEbayConnectState, verifyEbayConnectState, issueAliexpressConnectState, verifyAliexpressConnectState };

@@ -50,6 +50,30 @@ async function createCjImport(userId, product, suggestedPrice, ebayAccountId = n
 }
 
 /**
+ * Saves a fetched AliExpress product+sku as an import record (services/aliexpressImportService.js). Never shares a field
+ * with createImport/createCjImport above: asin/amazonUrl/cjProductId/cjVariantId stay null, and the AliExpress ids live in
+ * their own columns (models/schemas/Import.js).
+ * @param {object} product - normalized product object (services/aliexpressImportService.js normalizeAliexpressProduct), with aliexpressProductId/aliexpressSkuId set
+ */
+async function createAliexpressImport(userId, product, suggestedPrice, ebayAccountId = null) {
+  const doc = await Import.create({
+    userId,
+    ebayAccountId: ebayAccountId || null,
+    sourcePlatform: 'aliexpress',
+    aliexpressProductId: product.aliexpressProductId,
+    aliexpressSkuId: product.aliexpressSkuId,
+    title: product.title || null,
+    amazonPrice: product.price ?? null, // the AliExpress sku's own price - the shared "source price" field
+    currency: product.currency || 'USD',
+    mainImage: (product.images && product.images[0]) || null,
+    product,
+    suggestedPrice: suggestedPrice ?? null,
+  });
+
+  return serialize(doc);
+}
+
+/**
  * Gets an import by ID, but only if it belongs to the given user.
  */
 async function getImportById(userId, id) {
@@ -127,6 +151,8 @@ function serialize(doc) {
     source_platform: obj.sourcePlatform || 'amazon',
     cj_product_id: obj.cjProductId || null,
     cj_variant_id: obj.cjVariantId || null,
+    aliexpress_product_id: obj.aliexpressProductId || null,
+    aliexpress_sku_id: obj.aliexpressSkuId || null,
     asin: obj.asin,
     title: obj.title,
     amazon_url: obj.amazonUrl,
@@ -139,4 +165,4 @@ function serialize(doc) {
   };
 }
 
-module.exports = { createImport, createCjImport, getImportById, listImports, updateImportImages, updateImportProduct, updateImportPrice };
+module.exports = { createImport, createCjImport, createAliexpressImport, getImportById, listImports, updateImportImages, updateImportProduct, updateImportPrice };

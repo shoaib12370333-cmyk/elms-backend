@@ -175,6 +175,10 @@ app.use('/api/imports', importsRoute);
 // CJdropshipping - a second, separate product source next to Amazon (services/cjAdapter.js)
 app.use('/api/cj', require('./routes/cj'));
 
+// AliExpress - a third, separate product source next to Amazon and CJ (services/aliexpressAdapter.js)
+app.use('/api/aliexpress-connect', require('./routes/aliexpressConnect'));
+app.use('/api/aliexpress', require('./routes/aliexpress'));
+
 // Orders
 app.use('/api/orders', ordersRoute);
 app.use('/api/net-profit', netProfitRoute);

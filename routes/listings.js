@@ -179,7 +179,7 @@ router.get('/publish-status', requireAuth, async (req, res) => {
 
 const LIST_STATUSES = new Set(['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended']);
 const LIST_SORTS = new Set(['newest', 'price', 'priceLow', 'profit', 'profitLow', 'views', 'watchers', 'sold']);
-const LIST_SOURCES = new Set(['amazon', 'cj']);
+const LIST_SOURCES = new Set(['amazon', 'cj', 'aliexpress']);
 
 /**
  * What a list request asks for, cleaned: statuses (only real ones), store, source (Amazon/CJ), search text, sort, "only VeRO
