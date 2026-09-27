@@ -68,7 +68,8 @@ const orderSchema = new mongoose.Schema(
     estDeliveryMin: { type: Date, default: null },
     estDeliveryMax: { type: Date, default: null },
     sellerNote: { type: String, default: '' },       // private note, only stored in ELMS
-    orderedAt: { type: Date, default: null },        // the date the seller says they bought it on Amazon ("Mark as ordered"); null = not marked
+    orderedAt: { type: Date, default: null },        // when the seller marked it as ordered ("Mark as ordered"); null = not marked
+    deliveryDate: { type: Date, default: null },     // the DELIVERY date the seller gave in "Mark as ordered": when the parcel from the supplier arrives (noon UTC); null = not given
     ebayNoteAt: { type: Date, default: null },       // when "ELMS: ordered ..." was written in the eBay note of this order (null = it is not there)
     ebayNoteError: { type: String, default: null },  // why the eBay note could not be written / removed the last time (null = no problem)
     netProfit: { type: Number, default: null },      // an older version of the Net Profit sheet had the seller type the net profit; kept, and shown until the two figures below are typed

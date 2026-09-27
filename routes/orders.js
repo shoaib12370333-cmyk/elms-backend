@@ -171,18 +171,24 @@ function orderDateOf(value) {
 const moneyOrEmpty = (v) => v === null || v === '' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)));
 
 /**
- * POST /api/orders/:id/ordered   { ordered: boolean, date?: 'YYYY-MM-DD', buyingPrice?: number, orderEarning?: number }
- * "Mark as ordered" (and Undo) with what the seller fills in: the date they bought it, and (when given) the buying price and the order earning, which go into
- * the Net Profit sheet by themselves (eBay cost and net profit are worked out from them). "ELMS: ordered <date>" is saved in the order's private note in
- * ELMS; writing it on eBay too is the separate POST /:id/ebay-note (only when the seller switched that on). Answers with the order (with its new note,
- * date and net profit). An order that is already shipped is not turned back.
+ * POST /api/orders/:id/ordered   { ordered: boolean, deliveryDate?: 'YYYY-MM-DD' | null, buyingPrice?: number, orderEarning?: number }
+ * "Mark as ordered" (and Undo) with what the seller fills in: the DELIVERY date (when the parcel from the supplier arrives; empty / null clears it, not given keeps
+ * the one there) and (when given) the buying price and the order earning, which go into the Net Profit sheet by themselves (eBay cost and net profit are worked out
+ * from them). "ELMS: ordered, delivery <date>" is saved in the order's private note in ELMS; writing it on eBay too is the separate POST /:id/ebay-note (only when
+ * the seller switched that on). Answers with the order (with its new note, delivery date and net profit). An order that is already shipped is not turned back.
  */
 router.post('/:id/ordered', requireAuth, async (req, res) => {
   const body = req.body || {};
   if (typeof body.ordered !== 'boolean') return res.status(400).json({ success: false, error: 'ordered must be true or false.' });
-  const date = body.ordered ? (body.date === undefined ? new Date() : orderDateOf(body.date)) : undefined;
-  if (body.ordered && !date) return res.status(400).json({ success: false, error: 'Choose the date you ordered it.' });
-  if (date && date.getTime() > Date.now() + 36 * 3600 * 1000) return res.status(400).json({ success: false, error: 'The date cannot be in the future.' });
+  // the delivery date: empty / null = none; a parcel can arrive in the future, but not years away (or before ELMS existed)
+  let deliveryDate;
+  if (body.ordered && body.deliveryDate !== undefined) {
+    if (body.deliveryDate === null || body.deliveryDate === '') deliveryDate = null;
+    else {
+      deliveryDate = orderDateOf(body.deliveryDate);
+      if (!deliveryDate || deliveryDate.getTime() < Date.UTC(2020, 0, 1) || deliveryDate.getTime() > Date.now() + 400 * 86400000) return res.status(400).json({ success: false, error: 'Choose a valid delivery date.' });
+    }
+  }
   if (body.buyingPrice !== undefined && !moneyOrEmpty(body.buyingPrice)) return res.status(400).json({ success: false, error: 'Enter the buying price as a number.' });
   if (body.orderEarning !== undefined && !moneyOrEmpty(body.orderEarning)) return res.status(400).json({ success: false, error: 'Enter the order earning as a number.' });
   const buying = body.buyingPrice === undefined || body.buyingPrice === null || body.buyingPrice === '' ? body.buyingPrice : Number(body.buyingPrice);
@@ -190,7 +196,7 @@ router.post('/:id/ordered', requireAuth, async (req, res) => {
   if (typeof buying === 'number' && (buying < 0 || buying > 1e9)) return res.status(400).json({ success: false, error: 'Enter the buying price as a number, 0 or more.' });
   if (typeof earning === 'number' && Math.abs(earning) > 1e9) return res.status(400).json({ success: false, error: 'That order earning is too large.' });
   try {
-    const out = await markOrdered(req.userId, req.params.id, { ordered: body.ordered, date, buyingPrice: buying, orderEarning: earning });
+    const out = await markOrdered(req.userId, req.params.id, { ordered: body.ordered, deliveryDate, buyingPrice: buying, orderEarning: earning });
     if (out.error === 'not_found') return res.status(404).json({ success: false, error: 'Order not found.' });
     if (out.error === 'shipped') return res.status(409).json({ success: false, error: 'This order is already shipped, so it cannot be marked as not ordered / ordered any more.' });
     res.json({ success: true, order: out.order });
@@ -201,7 +207,7 @@ router.post('/:id/ordered', requireAuth, async (req, res) => {
 });
 
 /**
- * POST /api/orders/:id/ebay-note   { ordered: boolean, date?: 'YYYY-MM-DD' }
+ * POST /api/orders/:id/ebay-note   { ordered: boolean, deliveryDate?: 'YYYY-MM-DD' }
  * After "Mark as ordered" (or Undo) in ELMS: writes (or takes out) "ELMS: ordered <date>" in the private note of the eBay order, keeping the seller's own
  * text (services/ebayOrderNoteService.js). Only when the seller switched it on. Answers { result: { status, message }, order } and never fails the mark itself:
  * status is written | removed | unchanged | skipped | failed, and the reason is kept on the order for the order window.
@@ -218,8 +224,8 @@ router.post('/:id/ebay-note', requireAuth, async (req, res) => {
     else {
       const account = await getEbayAccountById(req.userId, order.ebay_account_id).catch(() => null);
       const refreshToken = account ? await getEbayAccountRefreshToken(req.userId, order.ebay_account_id) : null;
-      const noteDate = orderDateOf(req.body.date) || undefined; // the date the seller chose in "Mark as ordered": the same one is in the ELMS note
-      result = await require('../services/ebayOrderNoteService').syncOrderNote(refreshToken, order.marketplace_id || (account && account.marketplaceId) || 'EBAY_US', { orderId: order.ebay_order_id, itemId: order.legacy_item_id, ordered: req.body.ordered, ...(noteDate ? { now: noteDate } : {}) });
+      const noteDate = orderDateOf(req.body.deliveryDate); // the delivery date the seller gave in "Mark as ordered": the same one is in the ELMS note
+      result = await require('../services/ebayOrderNoteService').syncOrderNote(refreshToken, order.marketplace_id || (account && account.marketplaceId) || 'EBAY_US', { orderId: order.ebay_order_id, itemId: order.legacy_item_id, ordered: req.body.ordered, deliveryDate: noteDate });
     }
     const ok = ['written', 'removed', 'unchanged'].includes(result.status);
     // the mark is in the eBay note after "written" or when it was already there; it is out after "removed" or when it was not there

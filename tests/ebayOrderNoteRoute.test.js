@@ -72,7 +72,7 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
   // written: the store's token and eBay site, eBay's order and item numbers
   res = await call('post', '/:id/ebay-note', { params: { id: 'o1' }, body: { ordered: true } });
   assert.strictEqual(res.body.success, true); assert.strictEqual(res.body.result.status, 'written');
-  assert.deepStrictEqual(syncCalls[0], ['rt-1', 'EBAY_GB', { orderId: '11-12345-67890', itemId: '110001', ordered: true }]);
+  assert.deepStrictEqual(syncCalls[0], ['rt-1', 'EBAY_GB', { orderId: '11-12345-67890', itemId: '110001', ordered: true, deliveryDate: null }]);
   assert.deepStrictEqual(states[0], ['o1', { written: true, error: null }], 'the mark is in the eBay note; no problem');
   assert.ok(res.body.order.ebay_note_at && res.body.order.ebay_note_error === null);
   // undone
@@ -97,33 +97,34 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
   reset(); token = null; syncResult = { status: 'skipped', message: 'The eBay store is not connected.' };
   await call('post', '/:id/ebay-note', { params: { id: 'o1' }, body: { ordered: true } }); assert.strictEqual(syncCalls[0][0], null);
 
-  // ---------- the date the seller chose goes to the eBay note too ----------
+  // ---------- the delivery date the seller gave goes to the eBay note too ----------
   reset();
-  await call('post', '/:id/ebay-note', { params: { id: 'o1' }, body: { ordered: true, date: '2026-09-20' } });
-  assert.strictEqual(syncCalls[0][2].now.toISOString(), '2026-09-20T12:00:00.000Z', 'noon UTC: no time zone can move it to another day');
-  reset(); await call('post', '/:id/ebay-note', { params: { id: 'o1' }, body: { ordered: true, date: 'nonsense' } });
-  assert.ok(!('now' in syncCalls[0][2]), 'not a date: today is used');
+  await call('post', '/:id/ebay-note', { params: { id: 'o1' }, body: { ordered: true, deliveryDate: '2026-09-30' } });
+  assert.strictEqual(syncCalls[0][2].deliveryDate.toISOString(), '2026-09-30T12:00:00.000Z', 'noon UTC: no time zone can move it to another day');
+  reset(); await call('post', '/:id/ebay-note', { params: { id: 'o1' }, body: { ordered: true, deliveryDate: 'nonsense' } });
+  assert.strictEqual(syncCalls[0][2].deliveryDate, null, 'not a date: no date in the note');
 
-  // ---------- Mark as ordered with the date, the buying price and the order earning ----------
+  // ---------- Mark as ordered with the delivery date, the buying price and the order earning ----------
   const ordered = (body, id = 'o1') => call('post', '/:id/ordered', { params: { id }, body });
   res = await ordered({}); assert.strictEqual(res.statusCode, 400); assert.strictEqual(marks.length, 0);
-  res = await ordered({ ordered: true, date: 'not a date' }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /Choose the date/);
-  res = await ordered({ ordered: true, date: '2026-02-31' }); assert.strictEqual(res.statusCode, 400, 'a day that does not exist');
-  res = await ordered({ ordered: true, date: '2999-01-01' }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /future/);
-  res = await ordered({ ordered: true, date: '2026-09-20', buyingPrice: 'abc' }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /buying price as a number/);
-  res = await ordered({ ordered: true, date: '2026-09-20', buyingPrice: -1 }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /0 or more/);
-  res = await ordered({ ordered: true, date: '2026-09-20', orderEarning: 'x' }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /order earning as a number/);
-  res = await ordered({ ordered: true, date: '2026-09-20', orderEarning: 1e12 }); assert.strictEqual(res.statusCode, 400);
+  res = await ordered({ ordered: true, deliveryDate: 'not a date' }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /valid delivery date/);
+  res = await ordered({ ordered: true, deliveryDate: '2026-02-31' }); assert.strictEqual(res.statusCode, 400, 'a day that does not exist');
+  res = await ordered({ ordered: true, deliveryDate: '2999-01-01' }); assert.strictEqual(res.statusCode, 400, 'years away');
+  res = await ordered({ ordered: true, deliveryDate: '2019-06-01' }); assert.strictEqual(res.statusCode, 400, 'before ELMS existed');
+  res = await ordered({ ordered: true, buyingPrice: 'abc' }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /buying price as a number/);
+  res = await ordered({ ordered: true, buyingPrice: -1 }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /0 or more/);
+  res = await ordered({ ordered: true, orderEarning: 'x' }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /order earning as a number/);
+  res = await ordered({ ordered: true, orderEarning: 1e12 }); assert.strictEqual(res.statusCode, 400);
   assert.strictEqual(marks.length, 0, 'a refused request saves nothing');
-  res = await ordered({ ordered: true, date: '2026-09-20', buyingPrice: '10.5', orderEarning: 25 });
-  assert.strictEqual(res.statusCode, 200); assert.strictEqual(res.body.order.fulfillment_status, 'ordered_from_amazon');
-  assert.strictEqual(marks[0][0], 'o1'); assert.strictEqual(marks[0][1].ordered, true); assert.strictEqual(marks[0][1].date.toISOString(), '2026-09-20T12:00:00.000Z'); assert.strictEqual(marks[0][1].buyingPrice, 10.5); assert.strictEqual(marks[0][1].orderEarning, 25);
-  marks.length = 0; await ordered({ ordered: true, date: '2026-09-20' }); assert.ok(marks[0][1].buyingPrice === undefined && marks[0][1].orderEarning === undefined, 'not given: the sheet figures are left alone');
-  marks.length = 0; await ordered({ ordered: true, date: '2026-09-20', buyingPrice: '', orderEarning: null }); assert.ok(marks[0][1].buyingPrice === '' && marks[0][1].orderEarning === null, 'empty: clears them');
-  marks.length = 0; await ordered({ ordered: true }); assert.ok(marks[0][1].date instanceof Date && Math.abs(marks[0][1].date - Date.now()) < 5000, 'no date given: today');
-  marks.length = 0; res = await ordered({ ordered: false }); assert.strictEqual(res.statusCode, 200); assert.strictEqual(marks[0][1].ordered, false); assert.strictEqual(marks[0][1].date, undefined, 'Undo needs no date');
-  res = await ordered({ ordered: true, date: '2026-09-20' }, 'nope'); assert.strictEqual(res.statusCode, 404);
-  markResult = () => ({ error: 'shipped' }); res = await ordered({ ordered: true, date: '2026-09-20' }); assert.strictEqual(res.statusCode, 409); assert.match(res.body.error, /already shipped/);
+  const inFuture = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
+  res = await ordered({ ordered: true, deliveryDate: inFuture, buyingPrice: '10.5', orderEarning: 25 });
+  assert.strictEqual(res.statusCode, 200, 'a delivery date can be in the future'); assert.strictEqual(res.body.order.fulfillment_status, 'ordered_from_amazon');
+  assert.strictEqual(marks[0][0], 'o1'); assert.strictEqual(marks[0][1].ordered, true); assert.strictEqual(marks[0][1].deliveryDate.toISOString(), inFuture + 'T12:00:00.000Z'); assert.strictEqual(marks[0][1].buyingPrice, 10.5); assert.strictEqual(marks[0][1].orderEarning, 25);
+  marks.length = 0; await ordered({ ordered: true }); assert.ok(marks[0][1].deliveryDate === undefined && marks[0][1].buyingPrice === undefined && marks[0][1].orderEarning === undefined, 'not given: the delivery date and the sheet figures are left alone');
+  marks.length = 0; await ordered({ ordered: true, deliveryDate: '', buyingPrice: '', orderEarning: null }); assert.ok(marks[0][1].deliveryDate === null && marks[0][1].buyingPrice === '' && marks[0][1].orderEarning === null, 'empty: clears them');
+  marks.length = 0; res = await ordered({ ordered: false, deliveryDate: inFuture }); assert.strictEqual(res.statusCode, 200); assert.strictEqual(marks[0][1].ordered, false); assert.strictEqual(marks[0][1].deliveryDate, undefined, 'Undo needs no date');
+  res = await ordered({ ordered: true }, 'nope'); assert.strictEqual(res.statusCode, 404);
+  markResult = () => ({ error: 'shipped' }); res = await ordered({ ordered: true }); assert.strictEqual(res.statusCode, 409); assert.match(res.body.error, /already shipped/);
 
   Module._load = origLoad;
   console.log('ebay order note route tests passed');
