@@ -521,12 +521,13 @@ function pageOptions({ page, limit } = {}) {
   return { page: p, limit: l };
 }
 
-/** The database filter of the list: the seller's listings, in these statuses, of this store, whose title / SKU / eBay item number / note holds the search text. */
-function pageQuery(userId, { statuses = [], accountId = null, q = '' } = {}) {
+/** The database filter of the list: the seller's listings, in these statuses, of this store and source (Amazon/CJ), whose title / SKU / eBay item number / note holds the search text. */
+function pageQuery(userId, { statuses = [], accountId = null, q = '', source = null } = {}) {
   const query = { userId };
   const list = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
   if (list.length) query.status = { $in: list };
   if (accountId) query.ebayAccountId = accountId;
+  if (source === 'amazon' || source === 'cj') query.sourcePlatform = source;
   const text = String(q || '').trim().slice(0, 100);
   if (text) {
     const re = new RegExp(escapeRegExp(text), 'i');
@@ -640,10 +641,10 @@ async function readPageRows(userId, ids, { withVero = false } = {}) {
  * @param {object} opts { statuses, accountId, q (search text), sort (newest|price|priceLow|profit|profitLow|views|watchers|sold), vero (only listings with a VeRO word), page, limit }
  * @returns {Promise<{ listings: object[], total: number, page: number, limit: number, pages: number }>}
  */
-async function listListingsPage(userId, { statuses = [], accountId = null, q = '', sort = 'newest', vero = false, page, limit } = {}) {
+async function listListingsPage(userId, { statuses = [], accountId = null, q = '', sort = 'newest', vero = false, source = null, page, limit } = {}) {
   const { page: p, limit: l } = pageOptions({ page, limit });
   await claimUnassignedIfNeeded(userId, accountId);
-  const query = pageQuery(userId, { statuses, accountId, q });
+  const query = pageQuery(userId, { statuses, accountId, q, source });
   let veroTerms = null;
   if (vero) {
     veroTerms = await scanVero(userId, query);
@@ -684,8 +685,8 @@ async function listListingsPage(userId, { statuses = [], accountId = null, q = '
 }
 
 /** Every listing id of a filter (for "Select all N"), at most 20,000. */
-async function listListingIds(userId, { statuses = [], accountId = null, q = '', vero = false } = {}) {
-  const query = pageQuery(userId, { statuses, accountId, q });
+async function listListingIds(userId, { statuses = [], accountId = null, q = '', vero = false, source = null } = {}) {
+  const query = pageQuery(userId, { statuses, accountId, q, source });
   if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
   const docs = await Listing.find(query).select('_id').sort({ createdAt: -1, _id: -1 }).limit(20000).lean();
   return docs.map((d) => String(d._id));
@@ -746,8 +747,8 @@ async function getListingFull(userId, id) {
 }
 
 /** Calls `fn(rows)` with the listings of a filter, a thousand at a time (for the CSV file), newest first: never all of them in memory at once. */
-async function eachListingChunk(userId, { statuses = [], accountId = null, q = '', vero = false } = {}, fn) {
-  const query = pageQuery(userId, { statuses, accountId, q });
+async function eachListingChunk(userId, { statuses = [], accountId = null, q = '', vero = false, source = null } = {}, fn) {
+  const query = pageQuery(userId, { statuses, accountId, q, source });
   if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
   let before = null;
   for (;;) {

@@ -137,6 +137,19 @@ const add = (over = {}) => { n += 1; const d = { _id: hex(n), userId: USER, impo
   assert.strictEqual((await M.listListingsPage(USER, {})).total, 121, 'no status: all of the seller\'s listings (the other seller\'s is never in it)');
   add({ ebayAccountId: ACC2, title: 'Other store item' }); assert.strictEqual((await M.listListingsPage(USER, { statuses: ['published'], accountId: ACC2 })).total, 1, 'one store');
 
+  // ---------- the source filter (Amazon vs CJdropshipping) ----------
+  reset();
+  add({ title: 'Amazon one', sourcePlatform: 'amazon' });
+  add({ title: 'Amazon two', sourcePlatform: 'amazon' });
+  add({ title: 'CJ one', sourcePlatform: 'cj', cjProductId: 'PID1', cjVariantId: 'VID1' });
+  out = await M.listListingsPage(USER, { statuses: ['published'], source: 'amazon' });
+  assert.deepStrictEqual([out.total, out.listings.map((r) => r.title).sort()], [2, ['Amazon one', 'Amazon two']], 'source=amazon: only the Amazon listings');
+  out = await M.listListingsPage(USER, { statuses: ['published'], source: 'cj' });
+  assert.deepStrictEqual([out.total, out.listings[0].title], [1, 'CJ one'], 'source=cj: only the CJ listing');
+  out = await M.listListingsPage(USER, { statuses: ['published'] });
+  assert.strictEqual(out.total, 3, 'no source filter: every source');
+  assert.strictEqual((await M.listListingIds(USER, { statuses: ['published'], source: 'cj' })).length, 1, 'listListingIds respects the source filter too');
+
   // ---------- sorting ----------
   reset();
   const A = add({ title: 'A', sellPrice: 50, amazonPrice: 10, views: 5, watchers: 9, createdAt: new Date(2026, 1, 1) });

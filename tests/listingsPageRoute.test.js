@@ -42,9 +42,11 @@ const ACC = '0123456789abcdef01234567';
   // ---------- a page ----------
   let res = await call('get', '/', { query: {} });
   assert.deepStrictEqual(res.body, { success: true, listings: [{ id: 'l1' }], total: 1, page: 1, limit: 50, pages: 1 });
-  assert.deepStrictEqual(calls[0][1], { statuses: [], accountId: null, q: '', sort: 'newest', vero: false, page: 1, limit: 50 }, 'page 1, 50 a page, newest first');
-  calls.length = 0; await call('get', '/', { query: { status: 'published, bogus ,ended', accountId: ACC, q: '  kettle  ', sort: 'profit', vero: '1', page: '3', limit: '12' } });
-  assert.deepStrictEqual(calls[0][1], { statuses: ['published', 'ended'], accountId: ACC, q: 'kettle', sort: 'profit', vero: true, page: 3, limit: 12 }, 'only real statuses; trimmed search');
+  assert.deepStrictEqual(calls[0][1], { statuses: [], accountId: null, source: null, q: '', sort: 'newest', vero: false, page: 1, limit: 50 }, 'page 1, 50 a page, newest first, no source filter');
+  calls.length = 0; await call('get', '/', { query: { status: 'published, bogus ,ended', accountId: ACC, q: '  kettle  ', sort: 'profit', vero: '1', page: '3', limit: '12', source: 'cj' } });
+  assert.deepStrictEqual(calls[0][1], { statuses: ['published', 'ended'], accountId: ACC, source: 'cj', q: 'kettle', sort: 'profit', vero: true, page: 3, limit: 12 }, 'only real statuses; trimmed search; a real source');
+  calls.length = 0; await call('get', '/', { query: { source: 'ebay' } });
+  assert.strictEqual(calls[0][1].source, null, 'an unrecognized source is ignored (every source), never "nothing"');
   calls.length = 0; await call('get', '/', { query: { sort: 'drop table', page: '-5', limit: '100000', q: 'x'.repeat(500) } });
   assert.deepStrictEqual([calls[0][1].sort, calls[0][1].page, calls[0][1].limit, calls[0][1].q.length], ['newest', 1, 200, 100], 'an unknown sort is "newest"; page and limit are made safe');
   // a status or a store that cannot exist: an empty list, the database is not asked
@@ -58,7 +60,7 @@ const ACC = '0123456789abcdef01234567';
   calls.length = 0; res = await call('get', '/summary', { query: { accountId: ACC } });
   assert.deepStrictEqual(res.body, { success: true, counts: { all: 2 }, totals: { views: 3 } }); assert.deepStrictEqual(calls[0][1], { accountId: ACC });
   res = await call('get', '/summary', { query: { accountId: 'x' } }); assert.strictEqual(res.body.counts.all, 0); assert.strictEqual(res.body.totals.average_margin_percent, null, 'a store that cannot exist: zeros');
-  calls.length = 0; res = await call('get', '/ids', { query: { status: 'published', q: 'a', vero: 'true' } }); assert.deepStrictEqual(res.body, { success: true, ids: ['a', 'b'] }); assert.deepStrictEqual(calls[0][1], { statuses: ['published'], accountId: null, q: 'a', vero: true });
+  calls.length = 0; res = await call('get', '/ids', { query: { status: 'published', q: 'a', vero: 'true', source: 'amazon' } }); assert.deepStrictEqual(res.body, { success: true, ids: ['a', 'b'] }); assert.deepStrictEqual(calls[0][1], { statuses: ['published'], accountId: null, source: 'amazon', q: 'a', vero: true });
   res = await call('get', '/ids', { query: { status: 'bogus' } }); assert.deepStrictEqual(res.body.ids, []);
   res = await call('post', '/rows', { body: { ids: [] } }); assert.strictEqual(res.statusCode, 400);
   res = await call('post', '/rows', { body: { ids: ['a', 'b'] } }); assert.deepStrictEqual(res.body.listings, [{ id: 'a' }, { id: 'b' }]);
