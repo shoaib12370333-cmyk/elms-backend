@@ -179,19 +179,23 @@ router.get('/publish-status', requireAuth, async (req, res) => {
 
 const LIST_STATUSES = new Set(['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended']);
 const LIST_SORTS = new Set(['newest', 'price', 'priceLow', 'profit', 'profitLow', 'views', 'watchers', 'sold']);
+const LIST_SOURCES = new Set(['amazon', 'cj']);
 
 /**
- * What a list request asks for, cleaned: statuses (only real ones), store, search text, sort, "only VeRO words". `nothing` is true when the request names a
- * status or a store that cannot exist (the answer is then an empty list, never everything).
+ * What a list request asks for, cleaned: statuses (only real ones), store, source (Amazon/CJ), search text, sort, "only VeRO
+ * words". `nothing` is true when the request names a status or a store that cannot exist (the answer is then an empty list,
+ * never everything); an unrecognized source is simply ignored (every source), like an unrecognized sort falls back to newest.
  */
 function listFilters(query) {
   const asked = String(query.status || '').split(',').map((s) => s.trim()).filter(Boolean);
   const statuses = asked.filter((s) => LIST_STATUSES.has(s));
   const account = String(query.accountId || '');
   const accountOk = !account || /^[a-f0-9]{24}$/i.test(account);
+  const source = String(query.source || '');
   return {
     statuses,
     accountId: accountOk && account ? account : null,
+    source: LIST_SOURCES.has(source) ? source : null,
     q: String(query.q || '').trim().slice(0, 100),
     sort: LIST_SORTS.has(String(query.sort)) ? String(query.sort) : 'newest',
     vero: query.vero === '1' || query.vero === 'true',
@@ -210,7 +214,7 @@ router.get('/', requireAuth, async (req, res) => {
     const f = listFilters(req.query);
     const { page, limit } = pageOptions({ page: req.query.page, limit: req.query.limit });
     if (f.nothing) return res.json({ success: true, listings: [], total: 0, page, limit, pages: 1 });
-    const out = await listListingsPage(req.userId, { statuses: f.statuses, accountId: f.accountId, q: f.q, sort: f.sort, vero: f.vero, page, limit });
+    const out = await listListingsPage(req.userId, { statuses: f.statuses, accountId: f.accountId, source: f.source, q: f.q, sort: f.sort, vero: f.vero, page, limit });
     res.json({ success: true, ...out });
   } catch (err) {
     console.error('listings list error:', err.message);
@@ -239,7 +243,7 @@ router.get('/ids', requireAuth, async (req, res) => {
   try {
     const f = listFilters(req.query);
     if (f.nothing) return res.json({ success: true, ids: [] });
-    res.json({ success: true, ids: await listListingIds(req.userId, { statuses: f.statuses, accountId: f.accountId, q: f.q, vero: f.vero }) });
+    res.json({ success: true, ids: await listListingIds(req.userId, { statuses: f.statuses, accountId: f.accountId, source: f.source, q: f.q, vero: f.vero }) });
   } catch (err) {
     console.error('listings ids error:', err.message);
     res.status(500).json({ success: false, error: 'Could not select the listings.' });
@@ -271,7 +275,7 @@ router.get('/export', requireAuth, async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="live-listings.csv"');
     res.write('\uFEFF' + ['Title', 'SKU', 'Price', 'Qty', 'Category ID', 'Status'].map(csvCell).join(',') + '\r\n');
     if (!f.nothing) {
-      await eachListingChunk(req.userId, { statuses: f.statuses, accountId: f.accountId, q: f.q, vero: f.vero }, (rows) => {
+      await eachListingChunk(req.userId, { statuses: f.statuses, accountId: f.accountId, source: f.source, q: f.q, vero: f.vero }, (rows) => {
         res.write(rows.map((r) => [r.title, r.sku, r.sell_price, r.quantity, r.category_id, r.status].map(csvCell).join(',')).join('\r\n') + '\r\n');
       });
     }

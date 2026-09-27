@@ -20,6 +20,7 @@ async function createListing(userId, { importId, ebayAccountId, marketplaceId, s
   const doc = await Listing.create({
     userId,
     importId: importId || null,
+    sourcePlatform: 'amazon',
     ebayAccountId: ebayAccountId || null,
     marketplaceId: marketplaceId || null,
     sku: normalizedSku,
@@ -77,6 +78,7 @@ async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku
   const update = {
       userId,
       importId: importId || null,
+      sourcePlatform: 'amazon', // explicit, not left to the schema's upsert default - see models/schemas/Listing.js
       sku: normalizedSku,
       ...(sellerEdited ? {} : {
         title: title || null,
@@ -105,6 +107,63 @@ async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku
 
   const doc = await Listing.findOneAndUpdate(
     existing ? { _id: existing._id } : { userId, sku: normalizedSku, ebayAccountId: accountKey },
+    update,
+    { new: true, upsert: true }
+  );
+  return serialize(doc);
+}
+
+/**
+ * The CJdropshipping equivalent of upsertDraft above (services/cjImportService.js). Deliberately a separate function, not a
+ * branch inside upsertDraft: it is found by cjProductId/cjVariantId (never by sku - findCjListingInStore), uses cjSkuFor
+ * instead of requireAsinSku, and sets sourcePlatform/cjProductId/cjVariantId/cjShippingCost, which upsertDraft never touches.
+ */
+async function upsertCjDraft(userId, { importId, ebayAccountId, marketplaceId, cjProductId, cjVariantId, variantSku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule, cjShippingCost }) {
+  const { cjSkuFor } = require('../services/skuService');
+  const normalizedSku = cjSkuFor(variantSku, 'CJ draft');
+  const accountKey = ebayAccountId || null;
+  const existing = (await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: accountKey }))
+    || (accountKey ? await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: null }) : null);
+
+  if (existing && existing.status !== 'draft') return serialize(existing);
+
+  const sellerEdited = !!existing?.draftCustomized;
+  const normalizedAmazonPrice = normalizeAmazonPrice(amazonPrice);
+  const update = {
+    userId,
+    importId: importId || null,
+    sourcePlatform: 'cj',
+    cjProductId,
+    cjVariantId,
+    sku: normalizedSku,
+    ...(sellerEdited ? {} : {
+      title: title || null,
+      mainImage: mainImage || null,
+      sellPrice: sellPrice ?? null,
+      pricingRule: pricingRule && typeof pricingRule === 'object' ? pricingRule : null,
+      description: typeof description === 'string' ? description : '',
+      bulletPoints: Array.isArray(bulletPoints) ? bulletPoints.map((v) => String(v ?? '').trim()).filter(Boolean) : [],
+      specifications: Array.isArray(specifications) ? specifications : [],
+      ebayAspects: ebayAspects && typeof ebayAspects === 'object' ? ebayAspects : {},
+      markupPercent: Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0,
+      currency: currency || 'USD',
+      quantity: quantity ?? 1,
+      categoryId: categoryId || null,
+      amazonPrice: normalizedAmazonPrice,
+      cjShippingCost: Number.isFinite(Number(cjShippingCost)) ? Number(cjShippingCost) : null,
+      marginAmount: Number.isFinite(Number(marginAmount)) ? Number(marginAmount) : (Number.isFinite(Number(sellPrice)) && normalizedAmazonPrice !== null ? Number((Number(sellPrice) - normalizedAmazonPrice).toFixed(2)) : null),
+    }),
+    status: 'draft',
+  };
+  if (sellerEdited && normalizedAmazonPrice !== null) update.amazonPrice = normalizedAmazonPrice;
+  if (ebayAccountId !== undefined && !existing?.ebayAccountId) update.ebayAccountId = ebayAccountId || null;
+  if (marketplaceId !== undefined && !existing?.marketplaceId) update.marketplaceId = marketplaceId || null;
+  if (!existing || !Array.isArray(existing.images) || existing.images.length === 0) {
+    update.images = Array.isArray(images) ? images.slice(0, 24) : [];
+  }
+
+  const doc = await Listing.findOneAndUpdate(
+    existing ? { _id: existing._id } : { userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: accountKey },
     update,
     { new: true, upsert: true }
   );
@@ -231,6 +290,19 @@ async function findListingInStore(userId, sku, ebayAccountId) {
   const accountKey = ebayAccountId || null;
   const doc = (await Listing.findOne({ userId, sku: normalized, ebayAccountId: accountKey }))
     || (accountKey ? await Listing.findOne({ userId, sku: normalized, ebayAccountId: null }) : null);
+  return doc ? serialize(doc) : null;
+}
+
+/**
+ * The CJdropshipping equivalent of findListingInStore above: "has this CJ product+variant already been imported into this
+ * store". Deliberately its own lookup (by cjProductId/cjVariantId, never by sku or asin) - the spec's "duplicate checks are
+ * per source" rule, so a CJ import is never blocked (or wrongly allowed) by an Amazon listing's sku, or the reverse.
+ */
+async function findCjListingInStore(userId, cjProductId, cjVariantId, ebayAccountId) {
+  if (!cjProductId || !cjVariantId) return null;
+  const accountKey = ebayAccountId || null;
+  const doc = (await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: accountKey }))
+    || (accountKey ? await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: null }) : null);
   return doc ? serialize(doc) : null;
 }
 
@@ -427,7 +499,7 @@ async function listListings(userId, status, accountId = null) {
 // what the editor needs (description, pictures, item specifics ...) is read for the ONE listing that is opened (getListingFull).
 const PAGE_DEFAULT = 50;
 const PAGE_MAX = 200;
-const PAGE_SELECT = 'sku title mainImage sellPrice amazonPrice status ebayAccountId marketplaceId currency quantity ebayListingId ebayOfferId categoryId errorMessage note markupPercent pricingRule views watchers statsSyncedAt createdAt updatedAt importId amazonInStock stockMonitoring priceMonitoring';
+const PAGE_SELECT = 'sku title mainImage sellPrice amazonPrice status ebayAccountId marketplaceId currency quantity ebayListingId ebayOfferId categoryId errorMessage note markupPercent pricingRule views watchers statsSyncedAt createdAt updatedAt importId amazonInStock stockMonitoring priceMonitoring sourcePlatform cjProductId cjVariantId cjShippingCost';
 const VERO_TEXT_FIELDS = 'description bulletPoints specifications ebayAspects'; // read for the rows of one page only, to flag VeRO words; never sent
 const IMPORT_FOR_PAGE = 'asin amazonUrl amazonPrice product.price';
 const KEYS_NOT_IN_A_ROW = ['description', 'bullet_points', 'specifications', 'ebay_aspects', 'images', 'images_customized', 'ebay_image_urls', 'publish_response', 'publish_error_details', 'tags', 'draft_customized'];
@@ -449,12 +521,13 @@ function pageOptions({ page, limit } = {}) {
   return { page: p, limit: l };
 }
 
-/** The database filter of the list: the seller's listings, in these statuses, of this store, whose title / SKU / eBay item number / note holds the search text. */
-function pageQuery(userId, { statuses = [], accountId = null, q = '' } = {}) {
+/** The database filter of the list: the seller's listings, in these statuses, of this store and source (Amazon/CJ), whose title / SKU / eBay item number / note holds the search text. */
+function pageQuery(userId, { statuses = [], accountId = null, q = '', source = null } = {}) {
   const query = { userId };
   const list = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
   if (list.length) query.status = { $in: list };
   if (accountId) query.ebayAccountId = accountId;
+  if (source === 'amazon' || source === 'cj') query.sourcePlatform = source;
   const text = String(q || '').trim().slice(0, 100);
   if (text) {
     const re = new RegExp(escapeRegExp(text), 'i');
@@ -463,21 +536,26 @@ function pageQuery(userId, { statuses = [], accountId = null, q = '' } = {}) {
   return query;
 }
 
-/** The profit the card shows (after eBay's fees when the listing was priced by the Margin rule): the same rule as the page's listingProfit. null when there is no price or cost. */
-function listingProfitAmount(sellPrice, amazon, rule) {
+/**
+ * The profit the card shows (after eBay's fees when the listing was priced by the Margin rule): the same rule as the page's
+ * listingProfit. null when there is no price or cost. `extraCost` is CJ's own shipping cost (Listing.cjShippingCost) added to
+ * the source cost for a CJ listing; it is always 0 for an Amazon listing, so Amazon profit is worked out exactly as before.
+ */
+function listingProfitAmount(sellPrice, amazon, rule, extraCost = 0) {
   const sell = numOrNull(sellPrice);
   const cost = numOrNull(amazon);
   if (sell === null || cost === null) return null;
+  const extra = numOrNull(extraCost) || 0;
   if (rule && typeof rule === 'object' && numOrNull(rule.feePercent) !== null) {
-    const costTotal = cost + (numOrNull(rule.shipping) || 0);
+    const costTotal = cost + extra + (numOrNull(rule.shipping) || 0);
     return sell - costTotal - (sell * numOrNull(rule.feePercent) / 100 + (numOrNull(rule.feeFixed) || 0));
   }
-  return sell - cost;
+  return sell - cost - extra;
 }
 
 /** A light read of every listing of a filter: only what sorting, the summary and the "select all" need, with the Amazon price the list shows (the import's when the listing has none). */
 async function lightRows(query, extraSelect = '') {
-  const docs = await Listing.find(query).select('sellPrice amazonPrice pricingRule importId status views watchers statsSyncedAt createdAt ' + extraSelect).lean();
+  const docs = await Listing.find(query).select('sellPrice amazonPrice cjShippingCost pricingRule importId status views watchers statsSyncedAt createdAt ' + extraSelect).lean();
   const needImport = docs.filter((d) => normalizeAmazonPrice(d.amazonPrice) === null && d.importId).map((d) => d.importId);
   const imports = new Map();
   if (needImport.length) {
@@ -563,10 +641,10 @@ async function readPageRows(userId, ids, { withVero = false } = {}) {
  * @param {object} opts { statuses, accountId, q (search text), sort (newest|price|priceLow|profit|profitLow|views|watchers|sold), vero (only listings with a VeRO word), page, limit }
  * @returns {Promise<{ listings: object[], total: number, page: number, limit: number, pages: number }>}
  */
-async function listListingsPage(userId, { statuses = [], accountId = null, q = '', sort = 'newest', vero = false, page, limit } = {}) {
+async function listListingsPage(userId, { statuses = [], accountId = null, q = '', sort = 'newest', vero = false, source = null, page, limit } = {}) {
   const { page: p, limit: l } = pageOptions({ page, limit });
   await claimUnassignedIfNeeded(userId, accountId);
-  const query = pageQuery(userId, { statuses, accountId, q });
+  const query = pageQuery(userId, { statuses, accountId, q, source });
   let veroTerms = null;
   if (vero) {
     veroTerms = await scanVero(userId, query);
@@ -586,7 +664,7 @@ async function listListingsPage(userId, { statuses = [], accountId = null, q = '
       const sold = await getSoldByListing(userId);
       key = (r) => sold.get(r.id) || 0;
     } else {
-      key = (r) => listingProfitAmount(r.doc.sellPrice, r.amazon, r.doc.pricingRule);
+      key = (r) => listingProfitAmount(r.doc.sellPrice, r.amazon, r.doc.pricingRule, r.doc.cjShippingCost);
     }
     const up = sort === 'profitLow';
     const scored = rows.map((r) => ({ id: r.id, score: key(r), created: r.doc.createdAt ? new Date(r.doc.createdAt).getTime() : 0 }));
@@ -607,8 +685,8 @@ async function listListingsPage(userId, { statuses = [], accountId = null, q = '
 }
 
 /** Every listing id of a filter (for "Select all N"), at most 20,000. */
-async function listListingIds(userId, { statuses = [], accountId = null, q = '', vero = false } = {}) {
-  const query = pageQuery(userId, { statuses, accountId, q });
+async function listListingIds(userId, { statuses = [], accountId = null, q = '', vero = false, source = null } = {}) {
+  const query = pageQuery(userId, { statuses, accountId, q, source });
   if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
   const docs = await Listing.find(query).select('_id').sort({ createdAt: -1, _id: -1 }).limit(20000).lean();
   return docs.map((d) => String(d._id));
@@ -669,8 +747,8 @@ async function getListingFull(userId, id) {
 }
 
 /** Calls `fn(rows)` with the listings of a filter, a thousand at a time (for the CSV file), newest first: never all of them in memory at once. */
-async function eachListingChunk(userId, { statuses = [], accountId = null, q = '', vero = false } = {}, fn) {
-  const query = pageQuery(userId, { statuses, accountId, q });
+async function eachListingChunk(userId, { statuses = [], accountId = null, q = '', vero = false, source = null } = {}, fn) {
+  const query = pageQuery(userId, { statuses, accountId, q, source });
   if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
   let before = null;
   for (;;) {
@@ -734,6 +812,10 @@ async function updateListing(userId, id, fields) {
   if (fields.marginAmount !== undefined) {
     const margin = Number(fields.marginAmount);
     if (Number.isFinite(margin)) update.marginAmount = Number(margin.toFixed(2));
+  }
+  if (fields.cjShippingCost !== undefined) {
+    const shipping = Number(fields.cjShippingCost);
+    update.cjShippingCost = Number.isFinite(shipping) ? Number(shipping.toFixed(2)) : null;
   }
   if (fields.repricingEnabled !== undefined) update.repricingEnabled = fields.repricingEnabled !== false;
   if (fields.lastRepricedAt !== undefined) update.lastRepricedAt = fields.lastRepricedAt || null;
@@ -951,6 +1033,10 @@ function serialize(doc) {
     ebay_account_id: idString(obj.ebayAccountId),
   marketplace_id: obj.marketplaceId || null,
     sku: obj.sku,
+    source_platform: obj.sourcePlatform || 'amazon',
+    cj_product_id: obj.cjProductId || null,
+    cj_variant_id: obj.cjVariantId || null,
+    cj_shipping_cost: Number.isFinite(Number(obj.cjShippingCost)) ? Number(obj.cjShippingCost) : null,
     title: obj.title,
     main_image: obj.mainImage,
     images: Array.isArray(obj.images) ? obj.images : [],
@@ -1137,6 +1223,7 @@ async function recoverStalePublishingListings(maxAgeMinutes = 30) {
 module.exports = {
   createListing,
   upsertDraft,
+  upsertCjDraft,
   getListingById,
   getListingsForDelete,
   deleteListingsMany,
@@ -1155,6 +1242,7 @@ module.exports = {
   listListingsBySku,
   listListingsBySkus,
   findListingInStore,
+  findCjListingInStore,
   listListings,
   listListingsPage,
   listListingIds,

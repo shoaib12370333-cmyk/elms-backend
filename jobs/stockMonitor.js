@@ -10,6 +10,8 @@ const { updateImportPrice } = require('../models/importsModel');
 const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const { acquireLock } = require('../services/jobLockService');
 const { ACTION_COSTS } = require('../config/actionCosts');
+const cjAdapter = require('../services/cjAdapter');
+const { destCountryFor } = require('../services/cjImportService');
 const {
   spendCredit,
   refundCredit,
@@ -46,6 +48,15 @@ async function runStockCheckForUser(user) {
   for (const listing of publishedListings) {
     // Both monitors switched off for this product in the listing editor: skip it (and save the credit).
     if (listing.stock_monitoring === false && listing.price_monitoring === false) continue;
+
+    // CJdropshipping listings never touch Canopy/checkAvailabilityByAsin (Amazon-only): they go through their own function,
+    // which uses only services/cjAdapter.js and its own credit key (ACTION_COSTS.CJ_STOCK_MONITORING).
+    if (listing.source_platform === 'cj') {
+      const keepGoing = await checkCjListing(user, listing);
+      if (!keepGoing) break;
+      continue;
+    }
+
     if (!listing.asin) {
       console.warn(`[stock-monitor] Listing ${listing.id} (SKU ${listing.sku}) has no ASIN, skipping.`);
       continue;
@@ -284,6 +295,190 @@ async function syncPriceIfChanged(user, listing, availability) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------
+// CJdropshipping stock + price monitor. Its own functions, its own credit key (ACTION_COSTS.CJ_STOCK_MONITORING, never
+// STOCK_MONITORING/PRICE_MONITORING) - only services/cjAdapter.js is called here, never Canopy/Easyparser.
+// ---------------------------------------------------------------------------------------------------------------------------
+
+/** Every warehouse's stock added up - "is this variant sellable at all", not just in the buyer's own country. */
+function cjTotalInventory(variant) {
+  return (variant.inventories || []).reduce((sum, i) => sum + (Number(i.totalInventory) || 0), 0);
+}
+
+/** The warehouse country CJ should ship this variant from: whichever holds the most stock (falls back to CN, CJ's usual origin, when nothing is reported). Used as the freight quote's startCountryCode. */
+function cjPrimaryWarehouse(variant) {
+  const rows = variant.inventories || [];
+  if (!rows.length) return 'CN';
+  return rows.reduce((best, r) => (Number(r.totalInventory) > Number(best.totalInventory) ? r : best), rows[0]).countryCode || 'CN';
+}
+
+/**
+ * Checks one CJ-sourced published listing: ends it on eBay when CJ is out of stock everywhere, otherwise keeps the eBay
+ * quantity in sync with CJ's real number and, when the CJ price (or a stale/missing shipping quote) has moved, reprices it -
+ * the CJ counterpart of the Amazon in-stock/price branch above, using only services/cjAdapter.js.
+ * @returns {Promise<boolean>} false when the user is out of credits (the caller stops checking this user's remaining listings)
+ */
+async function checkCjListing(user, listing) {
+  if (!listing.cj_product_id || !listing.cj_variant_id) {
+    console.warn(`[cj-stock-monitor] Listing ${listing.id} (SKU ${listing.sku}) has no CJ ids, skipping.`);
+    return true;
+  }
+
+  if (!(await spendCredit(user.id, ACTION_COSTS.CJ_STOCK_MONITORING))) {
+    console.warn(`[cj-stock-monitor] ${user.email} ran out of credits mid-check; remaining listings will be checked next time they're due.`);
+    return false;
+  }
+
+  try {
+    let detail;
+    try {
+      detail = await cjAdapter.getProductDetail(user.id, { pid: listing.cj_product_id });
+    } catch (err) {
+      await refundCredit(user.id, ACTION_COSTS.CJ_STOCK_MONITORING).catch((e) => console.error(`[credits] REFUND FAILED for user ${user.id}: ${e.message}`));
+      throw err;
+    }
+    const variant = detail.variants.find((v) => v.vid === listing.cj_variant_id);
+    if (!variant) {
+      console.warn(`[cj-stock-monitor] ${listing.sku}: CJ no longer lists this variant.`);
+      return true;
+    }
+
+    const inventory = cjTotalInventory(variant);
+
+    if (inventory <= 0 && listing.stock_monitoring !== false) {
+      console.log(`[cj-stock-monitor] ${listing.sku} is out of stock on CJdropshipping. Ending eBay listing...`);
+      if (!listing.ebay_offer_id) {
+        await markEnded(user.id, listing.id, 'Ended: out of stock on CJdropshipping');
+        return true;
+      }
+      const refreshToken = listing.ebay_account_id ? await getEbayAccountRefreshToken(user.id, listing.ebay_account_id) : null;
+      if (!refreshToken) {
+        console.warn(`[cj-stock-monitor] Could not find the eBay account for listing ${listing.sku}; leaving it published so withdrawal can be retried.`);
+        return true;
+      }
+      try {
+        await withdrawListing(refreshToken, listing.ebay_offer_id);
+      } catch (withdrawErr) {
+        console.error(`[cj-stock-monitor] Could not withdraw eBay listing ${listing.sku}; leaving it published for retry: ${withdrawErr.message}`);
+        return true;
+      }
+      await updateListing(user.id, listing.id, { amazonInStock: false, lastStockSyncedAt: new Date(), lastStockCheckedAt: new Date(), markDraftCustomized: false });
+      await markEnded(user.id, listing.id, 'Ended: out of stock on CJdropshipping');
+      console.log(`[cj-stock-monitor] Listing ${listing.sku} ended on eBay and locally.`);
+      return true;
+    }
+
+    if (listing.stock_monitoring !== false) await syncCjStockQuantity(user, listing, inventory);
+    if (listing.price_monitoring !== false) await syncCjPriceIfChanged(user, listing, variant);
+    return true;
+  } catch (err) {
+    console.error(`[cj-stock-monitor] Could not check stock for ${listing.sku}: ${err.message}`);
+    return true;
+  }
+}
+
+/** Keeps eBay's quantity equal to CJ's real inventory (unlike Amazon, CJ gives an exact number, not just in/out of stock) - capped at 999 defensively, so a warehouse count in the tens of thousands never gets sent to eBay as-is. */
+async function syncCjStockQuantity(user, listing, inventory) {
+  if (!listing.ebay_offer_id) return;
+  const safeQuantity = Math.min(inventory, 999);
+  if (listing.amazon_in_stock === true && Number(listing.quantity) === safeQuantity) {
+    await updateListing(user.id, listing.id, { lastStockCheckedAt: new Date(), markDraftCustomized: false });
+    return;
+  }
+  const refreshToken = listing.ebay_account_id ? await getEbayAccountRefreshToken(user.id, listing.ebay_account_id) : null;
+  if (!refreshToken) {
+    console.warn(`[cj-stock-monitor] Could not find the eBay account for listing ${listing.sku}; quantity sync will retry next run.`);
+    return;
+  }
+  try {
+    await updateOfferQuantity(refreshToken, listing.ebay_offer_id, safeQuantity);
+    await updateListing(user.id, listing.id, { quantity: safeQuantity, amazonInStock: true, lastStockSyncedAt: new Date(), lastStockCheckedAt: new Date(), markDraftCustomized: false });
+    console.log(`[cj-stock-monitor] ${listing.sku}: CJ has ${inventory} in stock; eBay quantity synchronized to ${safeQuantity}.`);
+  } catch (err) {
+    console.error(`[cj-stock-monitor] Could not sync eBay quantity for ${listing.sku}: ${err.message}`);
+  }
+}
+
+/**
+ * Keeps a CJ-sourced listing's eBay price (and its saved CJ shipping cost) in sync, the CJ counterpart of syncPriceIfChanged
+ * above: the same "keep the seller's exact cash margin, or reprice by their saved rule" logic (services/repricingService.js),
+ * but the source cost also includes CJ's own shipping quote (Listing.cjShippingCost - models/listingsModel.js
+ * listingProfitAmount), requoted here so it never goes stale.
+ */
+async function syncCjPriceIfChanged(user, listing, variant) {
+  const newSourcePrice = Number(variant.variantSellPrice);
+  if (!Number.isFinite(newSourcePrice) || newSourcePrice <= 0) return;
+
+  const destCountry = destCountryFor(listing.marketplace_id);
+  const freight = await cjAdapter.calcFreight(user.id, { vid: variant.vid, quantity: 1, startCountryCode: cjPrimaryWarehouse(variant), endCountryCode: destCountry }).catch(() => null);
+  const newShippingCost = freight ? freight.cost : listing.cj_shipping_cost;
+
+  const oldSourcePrice = Number(listing.amazon_price);
+  const oldShippingCost = Number(listing.cj_shipping_cost) || 0;
+  const hasBaseline = Number.isFinite(oldSourcePrice) && oldSourcePrice > 0;
+  const unchanged = hasBaseline && Math.abs(newSourcePrice - oldSourcePrice) < 0.01 && Math.abs((Number(newShippingCost) || 0) - oldShippingCost) < 0.01;
+  const margin = getSavedMargin(listing);
+
+  try {
+    if (!hasBaseline) {
+      const baselineUpdate = { amazonPrice: newSourcePrice, cjShippingCost: newShippingCost, lastStockCheckedAt: new Date() };
+      if (margin == null && Number.isFinite(Number(listing.sell_price))) {
+        baselineUpdate.marginAmount = Number((Number(listing.sell_price) - newSourcePrice - (Number(newShippingCost) || 0)).toFixed(2));
+      }
+      await updateListing(user.id, listing.id, { ...baselineUpdate, markDraftCustomized: false });
+      console.log(`[cj-price-monitor] ${listing.sku}: established CJ price baseline at ${newSourcePrice} (shipping ${newShippingCost ?? 'unknown'}).`);
+      return;
+    }
+
+    if (unchanged) {
+      await updateListing(user.id, listing.id, { lastStockCheckedAt: new Date(), markDraftCustomized: false });
+      return;
+    }
+
+    if (listing.repricing_enabled === false || !listing.ebay_offer_id || listing.sell_price == null) {
+      await updateListing(user.id, listing.id, { amazonPrice: newSourcePrice, cjShippingCost: newShippingCost, lastStockCheckedAt: new Date(), markDraftCustomized: false });
+      return;
+    }
+
+    const effectiveMargin = margin != null ? margin : Number((Number(listing.sell_price) - oldSourcePrice - oldShippingCost).toFixed(2));
+    // The listing's own margin already accounts for the old shipping cost, so the new "source price" repriceFor sees is the
+    // CJ price plus its own shipping - the same total cost basis listingProfitAmount uses.
+    const repriced = repriceFor(listing, newSourcePrice + (Number(newShippingCost) || 0), effectiveMargin);
+    if (repriced == null) {
+      console.error(`[cj-price-monitor] ${listing.sku}: calculated eBay price is invalid; baseline retained for retry.`);
+      return;
+    }
+
+    const refreshToken = listing.ebay_account_id ? await getEbayAccountRefreshToken(user.id, listing.ebay_account_id) : null;
+    if (!refreshToken) {
+      console.warn(`[cj-price-monitor] Could not find the eBay account for listing ${listing.sku} (user ${user.id}); price baseline retained for retry.`);
+      return;
+    }
+
+    const storeCurrency = getMarketplaceConfig(listing.marketplace_id)?.currency || null;
+    // Every CJ price is quoted in USD (CJ docs), unlike Amazon where the draft's own currency already matches the source site.
+    let offerPrice = repriced.sellPrice;
+    if (storeCurrency && storeCurrency !== 'USD') {
+      offerPrice = (await convertAmount(repriced.sellPrice, 'USD', storeCurrency)).amount;
+    }
+
+    await updateOfferPrice(refreshToken, listing.ebay_offer_id, offerPrice);
+    await updateListing(user.id, listing.id, {
+      sellPrice: repriced.sellPrice,
+      amazonPrice: newSourcePrice,
+      cjShippingCost: newShippingCost,
+      marginAmount: repriced.marginAmount,
+      ...(repriced.rule ? { pricingRule: repriced.rule } : {}),
+      lastRepricedAt: new Date(),
+      lastStockCheckedAt: new Date(),
+      markDraftCustomized: false,
+    });
+    console.log(`[cj-price-monitor] ${listing.sku}: CJ ${oldSourcePrice} -> ${newSourcePrice} (shipping ${oldShippingCost} -> ${newShippingCost ?? 'unknown'}), eBay ${listing.sell_price} -> ${repriced.sellPrice}.`);
+  } catch (err) {
+    console.error(`[cj-price-monitor] Could not update eBay price for ${listing.sku}: ${err.message}`);
+  }
+}
+
 /**
  * Runs stock checks for every user whose configured interval has elapsed
  * since their last check (set per-user in the Admin Panel, in days). A user
@@ -343,4 +538,4 @@ function startStockMonitor() {
   console.log('[stock-monitor] Daily stock monitor scheduled.');
 }
 
-module.exports = { startStockMonitor, runStockCheck, runStockCheckForUser, supplierCountryOf };
+module.exports = { startStockMonitor, runStockCheck, runStockCheckForUser, supplierCountryOf, checkCjListing, cjTotalInventory, cjPrimaryWarehouse };

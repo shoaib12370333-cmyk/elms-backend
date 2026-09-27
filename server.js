@@ -172,6 +172,9 @@ app.use('/api/listings', listingsRoute);
 // Import history
 app.use('/api/imports', importsRoute);
 
+// CJdropshipping - a second, separate product source next to Amazon (services/cjAdapter.js)
+app.use('/api/cj', require('./routes/cj'));
+
 // Orders
 app.use('/api/orders', ordersRoute);
 app.use('/api/net-profit', netProfitRoute);

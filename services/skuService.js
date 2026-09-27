@@ -17,4 +17,15 @@ function requireAsinSku(value, context = 'product') {
   return sku;
 }
 
-module.exports = { normalizeAsinSku, requireAsinSku };
+/**
+ * ELMS CJdropshipping SKU policy: eBay SKU is "CJ-" + the CJ variant SKU, uppercased. The prefix is what keeps a CJ listing's
+ * SKU from ever colliding with an Amazon one in the same {userId, ebayAccountId, sku} unique index (models/schemas/Listing.js)
+ * - an Amazon SKU is exactly a 10-character ASIN (requireAsinSku above) and never starts with "CJ-".
+ */
+function cjSkuFor(variantSku, context = 'CJ product') {
+  const clean = String(variantSku || '').trim().toUpperCase();
+  if (!clean) throw new Error(`A CJ variant SKU is required to create an eBay SKU for this ${context}.`);
+  return 'CJ-' + clean;
+}
+
+module.exports = { normalizeAsinSku, requireAsinSku, cjSkuFor };

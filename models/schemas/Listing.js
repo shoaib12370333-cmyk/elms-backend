@@ -3,6 +3,17 @@ const mongoose = require('mongoose');
 const listingSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    // Where this listing's product comes from. Amazon and CJdropshipping listings must never mix fields, APIs or credits - every
+    // job and service that touches a supplier branches on this. Required so a listing can never be silently ambiguous; existing
+    // rows are backfilled to 'amazon' by db.js migrateSourcePlatformDefault (they predate this field).
+    sourcePlatform: { type: String, enum: ['amazon', 'cj'], required: true, default: 'amazon' },
+    // CJdropshipping's own ids for this product/variant. Set only when sourcePlatform is 'cj'; an Amazon listing's asin lives on
+    // its Import (services/skuService requireAsinSku), never here, and these are never set on an Amazon listing.
+    cjProductId: { type: String, default: null },
+    cjVariantId: { type: String, default: null },
+    // The CJ freight (shipping) cost last quoted for this variant (services/cjAdapter calcFreight), in USD - CJ profit includes
+    // it, Amazon profit is untouched by this field (see models/listingsModel.js listingProfitAmount). null for Amazon listings.
+    cjShippingCost: { type: Number, default: null },
     // Which of the user's (possibly several) connected eBay accounts this
     // listing belongs to / was published through. Null for drafts created
     // before an account was chosen.
@@ -95,8 +106,9 @@ const listingSchema = new mongoose.Schema(
   { timestamps: true } // adds createdAt and updatedAt
 );
 
-// SKU is the Amazon ASIN only and is unique per ELMS user; the same ASIN can be offered on multiple eBay marketplaces.
-// sellers may otherwise generate the same SKU from the same ASIN.
+// SKU is the Amazon ASIN for an Amazon listing, or "CJ-" + the CJ variant SKU for a CJ one (services/skuService), and is unique
+// per ELMS user + store; the same ASIN/CJ variant can be offered on multiple eBay marketplaces. The "CJ-" prefix (an ASIN is
+// never 3 letters + a dash) means the two sources can never collide in this one index even though they share the field.
 listingSchema.index({ userId: 1, ebayAccountId: 1, sku: 1 }, { unique: true });
 listingSchema.index({ userId: 1, status: 1, updatedAt: -1 });
 listingSchema.index({ userId: 1, ebayAccountId: 1, status: 1, updatedAt: -1 }); // one store's list (Live listings, Drafts)
@@ -104,5 +116,8 @@ listingSchema.index({ userId: 1, status: 1, createdAt: -1 }); // "Newest first" 
 listingSchema.index({ userId: 1, ebayAccountId: 1, status: 1, createdAt: -1 });
 listingSchema.index({ userId: 1, ebayListingId: 1 }); // a message thread finds its listing by eBay item id
 listingSchema.index({ status: 1, publishStartedAt: 1 }); // the publish queue looks for listings that are "publishing" across all users
+// The CJ duplicate check (findCjListingInStore): "has this CJ product+variant already been imported into this store". Sparse
+// so Amazon listings (cjProductId/cjVariantId both null) never crowd this index.
+listingSchema.index({ userId: 1, ebayAccountId: 1, cjProductId: 1, cjVariantId: 1 }, { sparse: true });
 
 module.exports = mongoose.model('Listing', listingSchema);

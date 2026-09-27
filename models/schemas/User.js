@@ -72,6 +72,22 @@ const userSchema = new mongoose.Schema(
     // "Mark as ordered" in Orders also writes "ELMS: ordered <date>" in the private note of the eBay order (services/ebayOrderNoteService.js). Off until the seller switches it on.
     ebayOrderNote: { type: Boolean, default: false },
 
+    // CJdropshipping connection (services/cjAdapter.js, models/usersModel.js getCjCredentials/setCjCredentials). The seller's own
+    // API key and the access/refresh tokens CJ issues for it are encrypted at rest (services/cryptoService) and never sent to
+    // the client - only whether a connection exists (isCjConnected) is. null = not connected.
+    cj: {
+      type: {
+        apiKeyEncrypted: { type: String, default: null },
+        accessTokenEncrypted: { type: String, default: null },
+        refreshTokenEncrypted: { type: String, default: null },
+        accessTokenExpiresAt: { type: Date, default: null },
+        refreshTokenExpiresAt: { type: Date, default: null },
+        openId: { type: String, default: null },
+        connectedAt: { type: Date, default: null },
+      },
+      default: null,
+    },
+
     // How often (in days) this user's published listings should be checked
     // for Amazon stock. Set manually by an admin per user. The stock check
     // job only runs for a user once this many days have passed since their
