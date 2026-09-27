@@ -15,7 +15,7 @@ async function nextStoreNumber(userId) {
  */
 async function getAccountLimitStatus(userId) {
   const [count, user] = await Promise.all([
-    EbayAccount.countDocuments({ userId }),
+    EbayAccount.countDocuments({ userId, disconnectedAt: null }),
     User.findById(userId),
   ]);
   return { connected: count, max: user?.maxEbayAccounts ?? 1 };
@@ -54,12 +54,20 @@ async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, mar
   const refreshTokenEncrypted = encrypt(refreshToken);
 
   if (existing) {
+    const wasDisconnected = !!existing.disconnectedAt;
     existing.refreshTokenEncrypted = refreshTokenEncrypted;
     existing.refreshTokenExpiresAt = expiresAt || null;
     existing.marketplaceId = marketplaceId || existing.marketplaceId || 'EBAY_US';
     if (storeName !== null) existing.storeName = storeName;
     if (identityCheckedAt) existing.identityCheckedAt = identityCheckedAt;
     if (!existing.storeNumber) existing.storeNumber = await nextStoreNumber(userId);
+    // Reconnecting a previously-disconnected store un-hides everything ELMS still has for it (listings, drafts, orders,
+    // messages - never deleted by disconnect any more, see removeEbayAccount) and makes it the active store again.
+    if (wasDisconnected) {
+      existing.disconnectedAt = null;
+      existing.isActive = true;
+      await EbayAccount.updateMany({ userId, _id: { $ne: existing._id } }, { isActive: false });
+    }
     await existing.save();
     return serialize(existing);
   }
@@ -84,8 +92,9 @@ async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, mar
 }
 
 /**
- * Returns all of a user's connected eBay accounts (for the sidebar
- * dropdown, Settings page, etc).
+ * Returns all of a user's eBay accounts - connected AND disconnected (the Settings page shows both, a disconnected one
+ * with a "Reconnect" option instead of the normal per-store settings; the sidebar dropdown and every other "all stores"
+ * view filters serialize()'s `connected` field itself, this function does not hide anything).
  */
 async function listEbayAccounts(userId) {
   const docs = await EbayAccount.find({ userId }).sort({ createdAt: 1 });
@@ -127,18 +136,19 @@ async function getEbayAccountRefreshToken(userId, accountId) {
  * the first connected account if none is marked active.
  */
 async function getActiveEbayAccount(userId) {
-  let doc = await EbayAccount.findOne({ userId, isActive: true });
+  let doc = await EbayAccount.findOne({ userId, isActive: true, disconnectedAt: null });
   if (!doc) {
-    doc = await EbayAccount.findOne({ userId }).sort({ createdAt: 1 });
+    doc = await EbayAccount.findOne({ userId, disconnectedAt: null }).sort({ createdAt: 1 });
   }
   return doc ? serialize(doc) : null;
 }
 
 /**
- * Sets which of a user's eBay accounts is "active" (unsets any others).
+ * Sets which of a user's eBay accounts is "active" (unsets any others). Only a connected account can be made active -
+ * a disconnected one is hidden until the seller reconnects it (addEbayAccount then makes it active again itself).
  */
 async function setActiveEbayAccount(userId, accountId) {
-  const account = await EbayAccount.findOne({ _id: accountId, userId });
+  const account = await EbayAccount.findOne({ _id: accountId, userId, disconnectedAt: null });
   if (!account) return null;
 
   await EbayAccount.updateMany({ userId }, { isActive: false });
@@ -168,20 +178,47 @@ async function purgeStoreData(userId, accountId) {
 }
 
 /**
- * Disconnects (removes) one of a user's eBay accounts and deletes the data ELMS kept for it.
+ * Disconnects one of a user's eBay accounts. This is now non-destructive: the account row and everything ELMS kept for
+ * it (listings, drafts, orders, messages, imports, notifications) stay exactly as they are - only disconnectedAt is set,
+ * which hides them from the combined "all stores" views (models/listingsModel.js, models/ordersModel.js, ...) until the
+ * seller connects the SAME eBay account again (addEbayAccount matches by ebayUserId and un-hides everything at once).
+ * The live listings on eBay itself were never touched by disconnecting, before or after this change.
  */
 async function removeEbayAccount(userId, accountId) {
+  // Checked BEFORE the update: findOneAndUpdate({new: true}) would otherwise hand back the row with isActive already
+  // flipped to false, making "was this the active one" impossible to tell from its return value.
+  const before = await EbayAccount.findOne({ _id: accountId, userId, disconnectedAt: null });
+  if (!before) return false;
+  const wasActive = !!before.isActive;
+  await EbayAccount.findOneAndUpdate({ _id: accountId, userId }, { disconnectedAt: new Date(), isActive: false });
+
+  // If the disconnected account was the active one, promote another still-connected account (if any) to active so the
+  // sidebar always has a sensible default.
+  if (wasActive) {
+    const next = await EbayAccount.findOne({ userId, disconnectedAt: null }).sort({ createdAt: 1 });
+    if (next) {
+      next.isActive = true;
+      await next.save();
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Permanently forgets one of a user's eBay accounts and deletes every bit of data ELMS kept for it - listings/drafts,
+ * orders, messages, notifications, imports. This is NOT what the "Disconnect" button does any more (see
+ * removeEbayAccount above); it is a separate, explicit, unrecoverable action for a store the seller will genuinely never
+ * come back to. The live listings on eBay itself are never touched by this either way.
+ */
+async function permanentlyDeleteEbayAccount(userId, accountId) {
   const doc = await EbayAccount.findOneAndDelete({ _id: accountId, userId });
   if (!doc) return false;
 
-  // Everything ELMS stored for this store goes with it (the live eBay listings
-  // themselves are untouched): listings/drafts, orders, messages, notifications, imports.
   await purgeStoreData(userId, doc._id);
 
-  // If the removed account was the active one, promote another connected
-  // account (if any) to active so the sidebar always has a sensible default.
   if (doc.isActive) {
-    const next = await EbayAccount.findOne({ userId }).sort({ createdAt: 1 });
+    const next = await EbayAccount.findOne({ userId, disconnectedAt: null }).sort({ createdAt: 1 });
     if (next) {
       next.isActive = true;
       await next.save();
@@ -241,6 +278,8 @@ function serialize(doc) {
     customPostalCode: obj.customPostalCode,
     customCountryCode: obj.customCountryCode,
     isActive: obj.isActive,
+    connected: !obj.disconnectedAt,
+    disconnectedAt: obj.disconnectedAt || null,
     createdAt: obj.createdAt,
   };
 }
@@ -254,6 +293,7 @@ module.exports = {
   getActiveEbayAccount,
   setActiveEbayAccount,
   removeEbayAccount,
+  permanentlyDeleteEbayAccount,
   updateEbayAccountSettings,
   updateEbayAccountDisplayName,
 };

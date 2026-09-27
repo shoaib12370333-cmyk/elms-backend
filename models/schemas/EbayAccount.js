@@ -51,6 +51,12 @@ const ebayAccountSchema = new mongoose.Schema(
     initialSyncedAt: { type: Date, default: null },
 
     lastConversationSyncAt: { type: Date, default: null },
+
+    // When the seller pressed "Disconnect" - null = connected. Disconnecting no longer deletes anything (models/
+    // ebayAccountsModel.js removeEbayAccount): the account row and everything ELMS kept for it (listings, drafts, orders,
+    // messages) stay exactly as they are, just hidden from the combined "all stores" views while this is set. Connecting
+    // the SAME eBay account again (addEbayAccount matches by ebayUserId) clears this and everything reappears.
+    disconnectedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

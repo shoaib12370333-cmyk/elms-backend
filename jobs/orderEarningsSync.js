@@ -64,7 +64,7 @@ async function syncOneAccount(account) {
 }
 
 async function runOrderEarningsSync() {
-  const accounts = await EbayAccount.find();
+  const accounts = await EbayAccount.find({ disconnectedAt: null });
   let totalUpdated = 0;
   for (const account of accounts) {
     try {

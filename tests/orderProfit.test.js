@@ -19,6 +19,7 @@ const fakes = {
   './schemas/Order': { find: () => chain(orderDocs), findOne: () => chain(orderDocs[0] || null), updateOne: async (f, u) => { updates.push(['one', u.$set]); }, updateMany: async (f, u) => { updates.push(['many', f, u.$set]); return { modifiedCount: 2 }; }, findOneAndUpdate: async (f, u) => ({ ...orderDocs[0], ...u, _id: oid('o1'), userId: oid('u1'), toObject() { return this; } }) },
   './schemas/Listing': { findOne: (f) => chain(f._id === 'l1' ? { _id: 'l1' } : null), find: (f) => { findCalls++; const or = f.$or; return chain(listings.filter((l) => or.some((c) => (c.sku && c.sku.$in.includes(l.sku)) || (c.ebayListingId && c.ebayListingId.$in.includes(l.ebayListingId))))); } },
   './schemas/Import': {},
+  './schemas/EbayAccount': { find: () => ({ select: () => ({ lean: async () => [] }) }) },
 };
 const origLoad = Module._load;
 Module._load = function (request, parent) {

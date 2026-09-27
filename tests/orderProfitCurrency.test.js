@@ -13,6 +13,7 @@ const fakes = {
   './schemas/Order': { find: () => chain(orderDocs), findOne: () => chain(orderDocs[0] || null), updateOne: async () => ({}), updateMany: async () => ({}) },
   './schemas/Listing': { find: () => chain([]), findOne: () => chain(null) },
   './schemas/Import': {},
+  './schemas/EbayAccount': { find: () => ({ select: () => ({ lean: async () => [] }) }) },
   '../services/currencyService': {
     warmRates: async () => { warmCalls++; return true; },
     convertCached: (amount, from, to) => {

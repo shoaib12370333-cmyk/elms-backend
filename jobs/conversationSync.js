@@ -86,7 +86,7 @@ async function syncOneAccountConversations(userId, accountId, refreshToken, last
 }
 
 async function syncConversationsForUser(userId, accountId = null) {
-  const accounts = await EbayAccount.find(accountId ? { userId, _id: accountId } : { userId });
+  const accounts = await EbayAccount.find(accountId ? { userId, _id: accountId, disconnectedAt: null } : { userId, disconnectedAt: null });
   if (!accounts.length) return { accounts: 0, conversations: 0 };
 
   let synced = 0;
@@ -100,7 +100,7 @@ async function syncConversationsForUser(userId, accountId = null) {
 
 async function runConversationSync() {
   await purgeExpiredTrash().catch((err) => console.warn('[conversation-sync] Trash purge failed:', err.message));
-  const accounts = await EbayAccount.find();
+  const accounts = await EbayAccount.find({ disconnectedAt: null });
   if (!accounts.length) {
     console.log('[conversation-sync] No eBay accounts are connected.');
     return;
