@@ -27,15 +27,16 @@ const svc = require('../services/aliexpressAuthService');
   assert.strictEqual(svc.sign('aliexpress.ds.product.get', params, 'my-app-secret'),
     crypto.createHmac('sha256', 'my-app-secret').update(baseNoPrefix, 'utf8').digest('hex').toUpperCase());
 
-  // ---------- authorize URL: client_id/redirect_uri from env, state appended to redirect_uri (no top-level "state" param) ----------
-  const url = svc.buildAuthorizationUrl('STATE_TOKEN');
+  // ---------- authorize URL: client_id/redirect_uri from env - redirect_uri is the bare URL, no query string (AliExpress
+  // matches it exactly against the App Console's registered callback, confirmed against a real app - see routes/aliexpressConnect.js for where the state actually goes instead: a cookie) ----------
+  const url = svc.buildAuthorizationUrl();
   const u = new URL(url);
   assert.strictEqual(u.origin + u.pathname, 'https://api-sg.aliexpress.com/oauth/authorize');
   assert.strictEqual(u.searchParams.get('response_type'), 'code');
   assert.strictEqual(u.searchParams.get('force_auth'), 'true');
   assert.strictEqual(u.searchParams.get('client_id'), '12345678');
   const redirectUri = u.searchParams.get('redirect_uri');
-  assert.strictEqual(redirectUri, 'https://elms-backend.onrender.com/api/aliexpress-connect/callback?state=STATE_TOKEN');
+  assert.strictEqual(redirectUri, 'https://elms-backend.onrender.com/api/aliexpress-connect/callback', 'the bare URL, no query string at all');
 
   // ---------- exchangeCodeForToken: POSTs form-urlencoded to GATEWAY + path with a valid signature, normalizes the response ----------
   axiosFake.__next = (targetUrl, body, config) => {
