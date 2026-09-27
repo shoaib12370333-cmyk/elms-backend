@@ -11,12 +11,12 @@ const axios = require('axios');
  *   3. For a system-tool API (its path starts with "/", e.g. /auth/token/create) prepend that path to the string first.
  *   4. sign = HMAC-SHA256(key: appSecret, message: that string), hex, UPPERCASE.
  *
- * The authorize URL's docs show no "state" parameter, and AliExpress's OAuth (unlike eBay's) gives no other way to carry
- * which ELMS user is mid-connect back to the callback. So the state token is appended to redirect_uri itself as a query
- * string - AliExpress redirects back to whatever redirect_uri was sent, with "code" added on, so the state survives the
- * round trip. This is unverified against a real AliExpress app until the first real "Connect AliExpress" attempt: if
- * AliExpress requires an exact match against the App Console's registered redirect_uri (not just a prefix), the first
- * connect attempt will show a redirect_uri-mismatch error instead of ELMS's own callback page - see PRODUCTION-SETUP.md.
+ * The authorize URL's docs show no "state" parameter, and AliExpress checks redirect_uri for an EXACT match against the App
+ * Console's registered callback URL (confirmed against a real app: appending "?state=..." to it was rejected with "Redirect
+ * uri does not match the callback url of the APP") - so, unlike eBay's OAuth, there is no query string available to carry
+ * which ELMS user is mid-connect back to the callback. redirect_uri here is always the bare, fixed URL; routes/
+ * aliexpressConnect.js carries the state in a short-lived cookie instead (set when /start redirects the browser to this
+ * URL, read back when AliExpress redirects the browser to the callback - both first-party requests to ELMS's own domain).
  */
 
 const GATEWAY = 'https://api-sg.aliexpress.com';
@@ -81,13 +81,13 @@ async function callBusinessApi(method, accessToken, params) {
   return data.result !== undefined ? data.result : data;
 }
 
-/** The URL to send the seller to for the AliExpress consent screen (routes/aliexpressConnect.js /start). */
-function buildAuthorizationUrl(state) {
-  const redirectUri = `${redirectBase()}?state=${encodeURIComponent(state)}`;
+/** The URL to send the seller to for the AliExpress consent screen (routes/aliexpressConnect.js /start). redirect_uri must be
+ * the exact, bare URL registered in the App Console - no query string, AliExpress matches it exactly. */
+function buildAuthorizationUrl() {
   const params = new URLSearchParams({
     response_type: 'code',
     force_auth: 'true',
-    redirect_uri: redirectUri,
+    redirect_uri: redirectBase(),
     client_id: appKey(),
   });
   return `${GATEWAY}/oauth/authorize?${params.toString()}`;
