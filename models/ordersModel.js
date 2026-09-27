@@ -555,4 +555,31 @@ async function setSheetInputs(userId, id, { amazonPrice, orderEarning, netProfit
   return !!doc;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, _summaryCache: summaryCache };
+/**
+ * Every order line still waiting for its eBay-fetched earning (services/ebayFinancesService.js) - fully paid (never a
+ * partial/refunded one, v1 does not net out refunds), and paid at least minAgeMs ago so eBay has had time to settle the
+ * sale into a Finances transaction before the first attempt. Grouped by ebayOrderId by the caller, since eBay's fee data
+ * is per ORDER, not per line item, and one eBay order can be several of these rows (one per SKU).
+ */
+async function listOrdersNeedingEarnings(ebayAccountId, minAgeMs) {
+  const cutoff = new Date(Date.now() - minAgeMs);
+  return Order.find({
+    ebayAccountId,
+    orderEarning: null,
+    ebayPaymentStatus: 'FULLY_PAID',
+    ebayOrderId: { $ne: null },
+    paidAt: { $ne: null, $lt: cutoff },
+  }).select('_id ebayOrderId salePrice').lean();
+}
+
+/** Saves the eBay-fetched earning on several order lines at once (one write per distinct value, via bulkWrite). */
+async function setOrderEarningsBulk(updates) {
+  const ops = updates
+    .filter((u) => u && u.id && Number.isFinite(Number(u.orderEarning)))
+    .map((u) => ({ updateOne: { filter: { _id: u.id, orderEarning: null }, update: { $set: { orderEarning: Number(u.orderEarning.toFixed(2)) } } } }));
+  if (!ops.length) return 0;
+  const result = await Order.bulkWrite(ops);
+  return result.modifiedCount || 0;
+}
+
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, _summaryCache: summaryCache };

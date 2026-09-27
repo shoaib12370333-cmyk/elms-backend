@@ -38,6 +38,7 @@ const { startStockMonitor } = require('./jobs/stockMonitor');
 const { startScheduledPublisher } = require('./jobs/scheduledPublisher');
 const { startImageCleanup } = require('./jobs/imageCleanup');
 const { startOrderSync } = require('./jobs/orderSync');
+const { startOrderEarningsSync } = require('./jobs/orderEarningsSync');
 const { startConversationSync } = require('./jobs/conversationSync');
 const { startStatsSync } = require('./jobs/statsSync');
 const { startAnnouncementSender } = require('./jobs/announcementSender');
@@ -275,6 +276,7 @@ app.listen(PORT, () => {
     startScheduledPublisher();
     startImageCleanup();
     startOrderSync();
+    startOrderEarningsSync();
     startConversationSync();
     startStatsSync();
     startAnnouncementSender();
