@@ -175,6 +175,9 @@ app.use('/api/imports', importsRoute);
 // CJdropshipping - a second, separate product source next to Amazon (services/cjAdapter.js)
 app.use('/api/cj', require('./routes/cj'));
 
+// AliExpress account connection (OAuth "Connect AliExpress" flow) - a third product source, still being built
+app.use('/api/aliexpress-connect', require('./routes/aliexpressConnect'));
+
 // Orders
 app.use('/api/orders', ordersRoute);
 app.use('/api/net-profit', netProfitRoute);

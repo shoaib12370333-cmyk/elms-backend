@@ -88,6 +88,23 @@ const userSchema = new mongoose.Schema(
       default: null,
     },
 
+    // AliExpress connection (services/aliexpressAuthService.js, models/usersModel.js getAliexpressCredentials/setAliexpressCredentials).
+    // Unlike CJ (a pasted API key), this is a real OAuth flow (routes/aliexpressConnect.js): the seller signs in on AliExpress's
+    // own page and grants ELMS's app (ALIEXPRESS_APP_KEY/APP_SECRET) access - the tokens issued for that grant are encrypted at
+    // rest (services/cryptoService) and never sent to the client, only whether a connection exists. null = not connected.
+    aliexpress: {
+      type: {
+        accessTokenEncrypted: { type: String, default: null },
+        refreshTokenEncrypted: { type: String, default: null },
+        accessTokenExpiresAt: { type: Date, default: null },
+        refreshTokenExpiresAt: { type: Date, default: null },
+        sellerId: { type: String, default: null },
+        account: { type: String, default: null },
+        connectedAt: { type: Date, default: null },
+      },
+      default: null,
+    },
+
     // How often (in days) this user's published listings should be checked
     // for Amazon stock. Set manually by an admin per user. The stock check
     // job only runs for a user once this many days have passed since their
