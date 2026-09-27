@@ -119,7 +119,17 @@ async function pollItems(job, saveProductAsDraft, hooks = {}) {
       await trySave(job, item, saveProductAsDraft, hooks);
     }));
     if (hooks.renew) await hooks.renew(); // still working: keep the lease
+    await reportProgress(job, hooks); // the drafts of this chunk are saved: the page's "Importing X of Y" moves now, not at the end of the whole run
   }
+}
+
+/**
+ * Counts what is done and failed so far and writes it to the database (see persistCounts). A run over hundreds of products takes a minute or
+ * more, and the count used to be written only when the run ended: the drafts were already appearing while the page still said "Importing 0 of 200".
+ */
+async function reportProgress(job, hooks = {}) {
+  recount(job);
+  if (hooks.persistCounts) await hooks.persistCounts(job);
 }
 
 /** Attempts to save an item's already-fetched product as a draft, charging a credit. */
@@ -156,10 +166,14 @@ async function trySave(job, item, saveProductAsDraft, hooks = {}) {
 /** Re-attempts saving items that were fetched but skipped earlier for lack of credits. */
 async function retrySavesForCredits(job, saveProductAsDraft, hooks = {}) {
   const waiting = job.items.filter((i) => i.status === 'fetched');
+  let handled = 0;
   for (const item of waiting.slice(0, POLL_BATCH_SIZE)) {
     await trySave(job, item, saveProductAsDraft, hooks);
     if (hooks.renew) await hooks.renew();
+    handled += 1;
+    if (handled % POLL_CONCURRENCY === 0) await reportProgress(job, hooks);
   }
+  if (handled % POLL_CONCURRENCY !== 0) await reportProgress(job, hooks);
 }
 
 /**
@@ -214,6 +228,15 @@ async function persistItem(job, item) {
   }
 }
 
+/** Writes the running done / failed counts of a job straight to the database (never throws: the whole job is saved at the end of the run anyway). A cancelled or finished job is left alone. */
+async function persistCounts(job) {
+  try {
+    await BulkImportJob.updateOne({ _id: job._id, status: { $in: ['queued', 'polling'] } }, { $set: { done: job.done, failed: job.failed } });
+  } catch (err) {
+    console.warn('[bulk-import] could not write the progress of job ' + job._id + ': ' + err.message);
+  }
+}
+
 async function runBulkImportProcessor({ renew } = {}) {
   // saveProductAsDraft lives on routes/fetchProduct.js - required lazily to dodge any
   // circular-require ordering issues between routes and jobs at startup.
@@ -223,7 +246,7 @@ async function runBulkImportProcessor({ renew } = {}) {
   const jobs = await BulkImportJob.find({ status: { $in: ['queued', 'polling'] } }).sort({ lastProcessedAt: 1 }).limit(10);
   for (const job of jobs) {
     try {
-      await processOneJob(job, saveProductAsDraft, { persistItem, isCancelled, renew });
+      await processOneJob(job, saveProductAsDraft, { persistItem, persistCounts, isCancelled, renew });
     } catch (err) {
       console.error('[bulk-import] job ' + job._id + ' failed:', err.message);
     }

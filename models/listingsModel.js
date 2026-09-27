@@ -143,6 +143,25 @@ async function getListingsByIds(userId, ids) {
   return out;
 }
 
+/**
+ * For a bulk delete: what is needed of each listing to decide how it is removed (its title, and the eBay offer if it has one), read in ONE
+ * query as plain objects. An id that is not this user's listing (or not an id at all) is simply not in the answer.
+ */
+async function getListingsForDelete(userId, ids) {
+  const valid = [...new Set((ids || []).map(String))].filter((id) => require('mongoose').isValidObjectId(id));
+  if (!valid.length) return [];
+  const docs = await Listing.find({ _id: { $in: valid }, userId }).select('title ebayOfferId ebayAccountId').lean();
+  return docs.map((d) => ({ id: String(d._id), title: d.title || '', ebay_offer_id: d.ebayOfferId || null, ebay_account_id: d.ebayAccountId ? String(d.ebayAccountId) : null }));
+}
+
+/** Removes many of this user's listings with ONE command (scoped to the user). @returns {Promise<number>} how many were removed */
+async function deleteListingsMany(userId, ids) {
+  const valid = [...new Set((ids || []).map(String))].filter((id) => require('mongoose').isValidObjectId(id));
+  if (!valid.length) return 0;
+  const res = await Listing.deleteMany({ _id: { $in: valid }, userId });
+  return Number((res && res.deletedCount) || 0);
+}
+
 async function getListingById(userId, id) {
   const doc = await Listing.findOne({ _id: id, userId });
   return doc ? serialize(doc) : null;
@@ -825,6 +844,8 @@ module.exports = {
   createListing,
   upsertDraft,
   getListingById,
+  getListingsForDelete,
+  deleteListingsMany,
   getListingsByIds,
   listDraftAmazonLinks,
   claimListingForPublishing,
