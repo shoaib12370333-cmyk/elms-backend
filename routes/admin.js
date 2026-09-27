@@ -663,4 +663,20 @@ router.get('/overview', async (req, res) => {
   });
 });
 
+/**
+ * POST /api/admin/cleanup-images
+ * Runs the orphaned-image cleanup (jobs/imageCleanup.js) right now instead of waiting for its daily 3am schedule -
+ * for reclaiming Render Disk space immediately when it is running low.
+ */
+router.post('/cleanup-images', async (req, res) => {
+  try {
+    const { cleanupOrphanedImages } = require('../services/imageCleanupService');
+    const result = await cleanupOrphanedImages();
+    res.json({ success: true, ...result, freedMb: Number((result.freedBytes / (1024 * 1024)).toFixed(1)) });
+  } catch (err) {
+    console.error('admin cleanup-images error:', err.message);
+    res.status(500).json({ success: false, error: err.message || 'Could not clean up orphaned images.' });
+  }
+});
+
 module.exports = router;
