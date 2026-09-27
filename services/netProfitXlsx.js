@@ -15,13 +15,15 @@ const CURRENCY_SYMBOLS = {
 };
 const currencySymbol = (code) => { const up = String(code || '').toUpperCase(); return CURRENCY_SYMBOLS[up] || up; };
 
-const SHEET_HEADER = ['Title', 'Order ID', 'Buying price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Net profit', 'Currency', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN'];
-const COLUMN_WIDTHS = [40, 16, 13, 12, 12, 14, 12, 12, 10, 10, 12, 18, 16, 14];
+// No separate "Currency" column - every money cell already shows its own sign via moneyFormat below, so a text column
+// repeating "GBP"/"USD" next to it would just say the same thing twice.
+const SHEET_HEADER = ['Title', 'Order ID', 'Buying price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Net profit', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN'];
+const COLUMN_WIDTHS = [40, 16, 13, 12, 12, 14, 12, 12, 10, 12, 18, 16, 14];
 const HEADER_FILL = 'FF0064D2'; // ELMS' own blue (the primary button colour used across the app)
 const GOOD = 'FF15803D'; const BAD = 'FFDC2626'; // the same green/red the app already uses for a positive/negative profit
 const MONEY_COLS = [3, 4, 5, 6, 7, 8]; // 1-based: Buying price, eBay price, Profit, Order earning, eBay cost, Net profit
 const NET_PROFIT_COL = 8;
-const ITEM_NUMBER_COL = 13; // kept as text - an eBay item number (12 digits) turns into 1.1E+11 as a real number
+const ITEM_NUMBER_COL = 12; // kept as text - an eBay item number (12 digits) turns into 1.1E+11 as a real number
 
 /** The money format for one row's own currency: its symbol, 2 decimals, red for a loss - a pound's cells are never formatted like a dollar's. */
 function moneyFormat(currency) {
@@ -53,7 +55,6 @@ function openNetProfitWorkbook(stream) {
       totalLabel || l.title || '',
       totalLabel ? '' : (l.ebay_order_id || ''),
       l.amazon_price, l.ebay_price, l.profit, l.order_earning, l.ebay_cost, l.net_profit,
-      currencySymbol(l.currency),
       totalLabel ? '' : l.quantity,
       totalLabel ? '' : isoDate(l.date),
       totalLabel ? '' : (l.store || ''),
