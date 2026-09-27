@@ -46,12 +46,13 @@ function parseSoldList(xml) {
 function pickLine(lines, { orderId, itemId }) {
   const sameItem = lines.filter((l) => l.itemId === String(itemId));
   if (!sameItem.length) return { reason: 'not_found' };
+  const seen = sameItem.map((l) => l.orderId || '(no order number)');
   const exact = sameItem.filter((l) => l.orderId && l.orderId === String(orderId));
   if (exact.length === 1) return { line: exact[0] };
-  if (exact.length > 1) return { reason: 'ambiguous' };
+  if (exact.length > 1) return { reason: 'ambiguous', seen };
   const noOrder = sameItem.filter((l) => !l.orderId);
   if (noOrder.length === 1 && sameItem.length === 1) return { line: noOrder[0] };
-  return { reason: sameItem.length > 1 ? 'ambiguous' : 'order_mismatch' };
+  return { reason: sameItem.length > 1 ? 'ambiguous' : 'order_mismatch', seen };
 }
 
 async function callTrading(refreshToken, marketplaceId, callName, body) {
@@ -106,36 +107,42 @@ const failed = (err) => ({ status: 'failed', message: err && err.message ? err.m
 const budgetMessage = "eBay's daily allowance for this kind of call is used up. Try again tomorrow.";
 
 /**
- * Adds (ordered = true) or takes away (false) the ELMS mark in the eBay note of an order.
+ * Adds (ordered = true; with the delivery date when there is one) or takes away (false) the ELMS mark in the eBay note of an order.
  * @param {string} refreshToken the store's eBay token
  * @param {string} marketplaceId the store's eBay site
- * @param {{ orderId: string, itemId: string, ordered: boolean, now?: Date }} order eBay's order number and item number
+ * @param {{ orderId: string, itemId: string, ordered: boolean, deliveryDate?: Date|null }} order eBay's order number and item number
  * @returns {Promise<{ status: 'written'|'removed'|'unchanged'|'skipped'|'failed', message?: string, note?: string }>} never throws
  */
-async function syncOrderNote(refreshToken, marketplaceId, { orderId, itemId, ordered, now = new Date() }) {
+async function syncOrderNote(refreshToken, marketplaceId, { orderId, itemId, ordered, deliveryDate = null }) {
   if (!refreshToken) return { status: 'skipped', message: 'The eBay store is not connected.' };
   if (!orderId || !itemId) return { status: 'skipped', message: 'This order has no eBay order number or item number, so its eBay note cannot be found.' };
   try {
     // 1. find the order line and read the note that is on it
     let found = null;
     let reason = 'not_found';
+    let seen = [];
+    let listed = 0; // how many order lines eBay listed in all
     for (let page = 1; page <= MAX_PAGES && !found; page += 1) {
       if (!(await reserve('note', 1))) return { status: 'skipped', message: budgetMessage };
       const { lines, totalPages } = parseSoldList(await callTrading(refreshToken, marketplaceId, 'GetMyeBaySelling', soldListRequest(page)));
+      listed += lines.length;
       const picked = pickLine(lines, { orderId, itemId });
       if (picked.line) found = picked.line;
-      else if (picked.reason !== 'not_found') { reason = picked.reason; break; }
+      else if (picked.reason !== 'not_found') { reason = picked.reason; seen = picked.seen || []; break; }
       if (page >= totalPages) break;
     }
     if (!found) {
+      // The reason says what eBay showed, so it can be read from the order window without looking in any log.
       const why = reason === 'ambiguous' || reason === 'order_mismatch'
-        ? "eBay's list has more than one order for this item, or its order number differs, so the right one could not be told for certain. Nothing was written."
-        : 'eBay does not list this order as awaiting shipment (it may be shipped already), so its note was not changed.';
-      console.warn('[ebay-note] no line for order', orderId, 'item', itemId, reason);
+        ? `eBay lists ${seen.length} line(s) for item ${itemId} with order number(s) ${seen.join(', ')}; this order is ${orderId}. The right one could not be told for certain, so nothing was written.`
+        : listed
+          ? `eBay's list of orders awaiting shipment (${listed} line${listed === 1 ? '' : 's'}) has no line for item ${itemId}: the order may be shipped already, so its note was not changed.`
+          : "eBay's list of orders awaiting shipment came back empty: the order may be shipped already (or eBay did not show it), so its note was not changed.";
+      console.warn('[ebay-note] no line for order', orderId, 'item', itemId, reason, seen, 'listed:', listed);
       return { status: 'skipped', message: why };
     }
     // 2. what to write
-    const plan = planNote(found.note, ordered, now);
+    const plan = planNote(found.note, ordered, deliveryDate);
     if (plan.action === 'none') return { status: 'unchanged', message: plan.reason, note: found.note };
     // 3. write it (the whole note: the seller's own text is in it)
     if (!(await reserve('note', 1))) return { status: 'skipped', message: budgetMessage };

@@ -313,20 +313,23 @@ async function setBuyPrice(userId, id, price) {
 }
 
 /**
- * "Mark as ordered" (or Undo) with what the seller fills in: the date, and (when given) the buying price and the order earning of the Net Profit
- * sheet. The mark "ELMS: ordered <date>" goes into the order's private note in ELMS after the seller's own text (and comes out on Undo). A key that
- * is not given is left alone. An order that is already shipped is not turned back. @returns {Promise<{ order?: object, error?: 'not_found'|'shipped' }>}
+ * "Mark as ordered" (or Undo) with what the seller fills in: the DELIVERY date (when the parcel arrives; null clears it, not given keeps the one there), and
+ * (when given) the buying price and the order earning of the Net Profit sheet. The mark "ELMS: ordered, delivery <date>" goes into the order's private note in
+ * ELMS after the seller's own text (a new delivery date replaces the old one; Undo takes it out). A key that is not given is left alone. An order that is already
+ * shipped is not turned back. @returns {Promise<{ order?: object, error?: 'not_found'|'shipped' }>}
  */
-async function markOrdered(userId, id, { ordered, date, buyingPrice, orderEarning } = {}) {
-  const current = await Order.findOne({ _id: id, userId }).select('fulfillmentStatus sellerNote').lean();
+async function markOrdered(userId, id, { ordered, date, deliveryDate, buyingPrice, orderEarning } = {}) {
+  const current = await Order.findOne({ _id: id, userId }).select('fulfillmentStatus sellerNote orderedAt deliveryDate').lean();
   if (!current) return { error: 'not_found' };
   if (['shipped', 'delivered'].includes(current.fulfillmentStatus)) return { error: 'shipped' };
-  const when = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+  const validDate = (d) => d instanceof Date && !Number.isNaN(d.getTime());
   const num = (v) => (v === null || v === '' ? null : Number(Number(v).toFixed(2)));
+  const delivery = !ordered ? null : deliveryDate === undefined ? (current.deliveryDate || null) : validDate(deliveryDate) ? deliveryDate : null;
   const set = {
     fulfillmentStatus: ordered ? 'ordered_from_amazon' : 'pending',
-    orderedAt: ordered ? when : null,
-    sellerNote: applyMark(current.sellerNote, ordered, when, 2000),
+    orderedAt: ordered ? (validDate(date) ? date : current.orderedAt || new Date()) : null,
+    deliveryDate: delivery,
+    sellerNote: applyMark(current.sellerNote, ordered, delivery, 2000),
   };
   if (buyingPrice !== undefined) set.sheetAmazonPrice = num(buyingPrice);
   if (orderEarning !== undefined) set.orderEarning = num(orderEarning);
@@ -395,6 +398,7 @@ function serialize(doc) {
     est_delivery_max: obj.estDeliveryMax || null,
     seller_note: obj.sellerNote || '',
     ordered_at: obj.orderedAt || null,
+    delivery_date: obj.deliveryDate || null,
     ebay_note_at: obj.ebayNoteAt || null,
     ebay_note_error: obj.ebayNoteError || null,
     sheet_amazon_price: obj.sheetAmazonPrice ?? null, // Net Profit sheet: typed by the seller

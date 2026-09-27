@@ -24,19 +24,23 @@ const soldList = (rows, totalPages = 1) => `<?xml version="1.0"?><GetMyeBaySelli
 const ok = '<?xml version="1.0"?><SetUserNotesResponse><Ack>Success</Ack></SetUserNotesResponse>';
 const failure = (msg, code = 21916) => `<?xml version="1.0"?><Response><Ack>Failure</Ack><Errors><ErrorCode>${code}</ErrorCode><ShortMessage>short</ShortMessage><LongMessage>${msg}</LongMessage></Errors></Response>`;
 const reset = () => { calls.length = 0; reserved.length = 0; reserveOk = true; exhausted = 0; };
-const order = { orderId: '11-12345-67890', itemId: '110001', ordered: true, now: NOW };
+const order = { orderId: '11-12345-67890', itemId: '110001', ordered: true, deliveryDate: NOW };
 
 (async () => {
   // ---------- what to write ----------
-  assert.deepStrictEqual(N.planNote('', true, NOW), { action: 'AddOrUpdate', text: 'ELMS: ordered 27 Sep 2026' });
-  assert.deepStrictEqual(N.planNote('call buyer', true, NOW), { action: 'AddOrUpdate', text: 'call buyer | ELMS: ordered 27 Sep 2026' }, "the seller's own text is kept");
-  assert.strictEqual(N.planNote('x | ELMS: ordered 1 Jan 2026', true, NOW).action, 'none', 'already there: not added twice');
+  assert.deepStrictEqual(N.planNote('', true, NOW), { action: 'AddOrUpdate', text: 'ELMS: ordered, delivery 27 Sep 2026' });
+  assert.deepStrictEqual(N.planNote('call buyer', true, NOW), { action: 'AddOrUpdate', text: 'call buyer | ELMS: ordered, delivery 27 Sep 2026' }, "the seller's own text is kept");
+  assert.strictEqual(N.planNote('x | ELMS: ordered, delivery 27 Sep 2026', true, NOW).action, 'none', 'already there: not added twice');
+  assert.deepStrictEqual(N.planNote('x | ELMS: ordered 1 Jan 2026', true, NOW), { action: 'AddOrUpdate', text: 'x | ELMS: ordered, delivery 27 Sep 2026' }, 'a mark of the first version is replaced');
+  assert.strictEqual(N.planNote('x | ELMS: ordered, delivery 20 Sep 2026', true, NOW).text, 'x | ELMS: ordered, delivery 27 Sep 2026', 'a new delivery date replaces the old one');
+  assert.strictEqual(N.planNote('call buyer', true, null).text, 'call buyer | ELMS: ordered', 'no delivery date: just "ordered"');
+  assert.strictEqual(N.planNote('', true).text, 'ELMS: ordered');
   assert.strictEqual(N.planNote('a'.repeat(235), true, NOW).text, 'a'.repeat(235) + ' | ELMS: ordered', 'the short mark when the dated one does not fit (255 characters at most)');
   assert.strictEqual(N.planNote('a'.repeat(250), true, NOW).action, 'none'); assert.match(N.planNote('a'.repeat(250), true, NOW).reason, /no room left/);
   assert.ok(N.planNote('a'.repeat(200), true, NOW).text.length <= N.MAX_NOTE);
-  assert.deepStrictEqual(N.planNote('call buyer | ELMS: ordered 27 Sep 2026', false), { action: 'AddOrUpdate', text: 'call buyer' }, 'Undo takes out only the mark');
-  assert.deepStrictEqual(N.planNote('ELMS: ordered 27 Sep 2026', false), { action: 'Delete' }, 'nothing else left: the note is deleted');
-  assert.strictEqual(N.planNote('ELMS: ordered 27 Sep 2026 | call buyer', false).text, 'call buyer');
+  assert.deepStrictEqual(N.planNote('call buyer | ELMS: ordered, delivery 27 Sep 2026', false), { action: 'AddOrUpdate', text: 'call buyer' }, 'Undo takes out only the mark');
+  assert.deepStrictEqual(N.planNote('ELMS: ordered, delivery 27 Sep 2026', false), { action: 'Delete' }, 'nothing else left: the note is deleted');
+  assert.strictEqual(N.planNote('ELMS: ordered, delivery 27 Sep 2026 | call buyer', false).text, 'call buyer');
   assert.strictEqual(N.planNote('a | ELMS: ordered 1 Jan 2026 | b', false).text, 'a | b');
   assert.strictEqual(N.planNote('ELMS: ordered', false).action, 'Delete', 'the short mark too');
   assert.strictEqual(N.planNote('call buyer', false).action, 'none'); assert.strictEqual(N.planNote('', false).action, 'none');
@@ -57,27 +61,27 @@ const order = { orderId: '11-12345-67890', itemId: '110001', ordered: true, now:
   reset();
   script = (c, n) => (c.name === 'GetMyeBaySelling' ? soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'call buyer' }]) : ok);
   let r = await N.syncOrderNote('rt', 'EBAY_GB', order);
-  assert.deepStrictEqual([r.status, r.note], ['written', 'call buyer | ELMS: ordered 27 Sep 2026']);
+  assert.deepStrictEqual([r.status, r.note], ['written', 'call buyer | ELMS: ordered, delivery 27 Sep 2026']);
   assert.deepStrictEqual(calls.map((c) => c.name), ['GetMyeBaySelling', 'SetUserNotes'], 'read first, then write');
   assert.strictEqual(calls[0].url.endsWith('/ws/api.dll'), true); assert.strictEqual(calls[0].headers['X-EBAY-API-IAF-TOKEN'], 'iaf-token'); assert.strictEqual(calls[0].headers['X-EBAY-API-SITEID'], '3', 'the store\'s eBay site');
   assert.ok(calls[0].body.includes('<OrderStatusFilter>AwaitingShipment</OrderStatusFilter>') && calls[0].body.includes('<PageNumber>1</PageNumber>'));
-  assert.ok(calls[1].body.includes('<Action>AddOrUpdate</Action>') && calls[1].body.includes('<ItemID>110001</ItemID>') && calls[1].body.includes('<TransactionID>555</TransactionID>') && calls[1].body.includes('<NoteText>call buyer | ELMS: ordered 27 Sep 2026</NoteText>'));
+  assert.ok(calls[1].body.includes('<Action>AddOrUpdate</Action>') && calls[1].body.includes('<ItemID>110001</ItemID>') && calls[1].body.includes('<TransactionID>555</TransactionID>') && calls[1].body.includes('<NoteText>call buyer | ELMS: ordered, delivery 27 Sep 2026</NoteText>'));
   assert.deepStrictEqual(reserved, [['note', 1], ['note', 1]], 'both calls are taken from eBay\'s daily allowance');
   // special characters in the seller's note are kept, and written back safely
   reset(); script = (c) => (c.name === 'GetMyeBaySelling' ? soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'A &amp; B &lt;x&gt;' }]) : ok);
   await N.syncOrderNote('rt', 'EBAY_US', order);
-  assert.ok(calls[1].body.includes('<NoteText>A &amp; B &lt;x&gt; | ELMS: ordered 27 Sep 2026</NoteText>'), 'read as A & B <x>, written escaped again: not doubled, not lost');
+  assert.ok(calls[1].body.includes('<NoteText>A &amp; B &lt;x&gt; | ELMS: ordered, delivery 27 Sep 2026</NoteText>'), 'read as A & B <x>, written escaped again: not doubled, not lost');
   // no note yet
   reset(); script = (c) => (c.name === 'GetMyeBaySelling' ? soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555' }]) : ok);
-  assert.strictEqual((await N.syncOrderNote('rt', 'EBAY_US', order)).note, 'ELMS: ordered 27 Sep 2026');
+  assert.strictEqual((await N.syncOrderNote('rt', 'EBAY_US', order)).note, 'ELMS: ordered, delivery 27 Sep 2026');
   // already there: nothing is written
-  reset(); script = () => soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'ELMS: ordered 20 Sep 2026' }]);
+  reset(); script = () => soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'ELMS: ordered, delivery 27 Sep 2026' }]);
   r = await N.syncOrderNote('rt', 'EBAY_US', order); assert.strictEqual(r.status, 'unchanged'); assert.deepStrictEqual(calls.map((c) => c.name), ['GetMyeBaySelling']);
 
   // ---------- undo ----------
-  reset(); script = (c) => (c.name === 'GetMyeBaySelling' ? soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'call buyer | ELMS: ordered 27 Sep 2026' }]) : ok);
+  reset(); script = (c) => (c.name === 'GetMyeBaySelling' ? soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'call buyer | ELMS: ordered, delivery 27 Sep 2026' }]) : ok);
   r = await N.syncOrderNote('rt', 'EBAY_US', { ...order, ordered: false }); assert.deepStrictEqual([r.status, r.note], ['removed', 'call buyer']); assert.ok(calls[1].body.includes('<NoteText>call buyer</NoteText>'));
-  reset(); script = (c) => (c.name === 'GetMyeBaySelling' ? soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'ELMS: ordered 27 Sep 2026' }]) : ok);
+  reset(); script = (c) => (c.name === 'GetMyeBaySelling' ? soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'ELMS: ordered, delivery 27 Sep 2026' }]) : ok);
   r = await N.syncOrderNote('rt', 'EBAY_US', { ...order, ordered: false }); assert.strictEqual(r.status, 'removed');
   assert.ok(calls[1].body.includes('<Action>Delete</Action>') && !calls[1].body.includes('NoteText'), 'a note with nothing else in it is deleted');
   reset(); script = () => soldList([{ orderId: '11-12345-67890', itemId: '110001', transactionId: '555', note: 'mine' }]);
@@ -88,9 +92,9 @@ const order = { orderId: '11-12345-67890', itemId: '110001', ordered: true, now:
   r = await N.syncOrderNote('rt', 'EBAY_US', order); assert.strictEqual(r.status, 'written');
   assert.deepStrictEqual(calls.map((c) => c.name), ['GetMyeBaySelling', 'GetMyeBaySelling', 'SetUserNotes']); assert.ok(calls[1].body.includes('<PageNumber>2</PageNumber>') && calls[2].body.includes('<TransactionID>777</TransactionID>'));
   reset(); script = () => soldList([{ orderId: '00-0-0', itemId: '5', transactionId: '1' }], 1);
-  r = await N.syncOrderNote('rt', 'EBAY_US', order); assert.strictEqual(r.status, 'skipped'); assert.match(r.message, /does not list this order as awaiting shipment/); assert.strictEqual(calls.length, 1);
+  r = await N.syncOrderNote('rt', 'EBAY_US', order); assert.strictEqual(r.status, 'skipped'); assert.match(r.message, /\(1 line\) has no line for item 110001/); assert.strictEqual(calls.length, 1);
   reset(); script = () => soldList([{ orderId: '31-1-1', itemId: '110001', transactionId: '1' }, { orderId: '32-2-2', itemId: '110001', transactionId: '2' }]);
-  r = await N.syncOrderNote('rt', 'EBAY_US', order); assert.strictEqual(r.status, 'skipped'); assert.match(r.message, /Nothing was written/); assert.deepStrictEqual(calls.map((c) => c.name), ['GetMyeBaySelling'], 'never a guess');
+  r = await N.syncOrderNote('rt', 'EBAY_US', order); assert.strictEqual(r.status, 'skipped'); assert.match(r.message, /31-1-1, 32-2-2; this order is 11-12345-67890.*nothing was written/, 'the reason says which order numbers eBay showed'); assert.deepStrictEqual(calls.map((c) => c.name), ['GetMyeBaySelling'], 'never a guess');
   reset(); script = () => soldList([], 9);
   await N.syncOrderNote('rt', 'EBAY_US', order); assert.strictEqual(calls.length, 3, 'at most 3 pages are read');
 
