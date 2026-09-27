@@ -1,10 +1,13 @@
 // The Net Profit sheet: the money is worked out in whole cents (so the numbers are exact). The seller types BUYING PRICE ("amazon_price" in the data) and ORDER EARNING (both empty
 // until typed); EBAY COST = EBAY PRICE - ORDER EARNING and NET PROFIT = ORDER EARNING - AMAZON PRICE are worked out, PROFIT = EBAY PRICE - AMAZON PRICE;
 // what cannot be worked out yet is empty (never 0), every price is for the whole order line, currencies are never mixed, a free account reaches only
-// its lines, and the CSV has every column.
+// its lines, and the .xlsx export has every column, a bold coloured header, the Net profit column coloured by sign, and a currency sign (not "USD" text).
 const assert = require('assert');
 const Module = require('module');
+const { PassThrough } = require('stream');
+const ExcelJS = require('exceljs');
 const S = require('../services/netProfitService');
+const X = require('../services/netProfitXlsx');
 
 const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Windscreen Wash', ebay_order_id: '11-12345-67890', legacy_item_id: '110001234567', asin: 'B0ABC12345', quantity: 1, sale_price: 150, sheet_amazon_price: null, order_earning: null, net_profit_typed: null, currency: 'GBP', ebay_account_label: 'Trendy UK', ebay_created_at: '2026-09-20T10:00:00Z', order_status: 'shipped', ...over });
 
@@ -82,23 +85,49 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   p = S.paging({ paid: true, freeLines: 1000, offset: 0, limit: 999999, total: 5000 }); assert.strictEqual(p.take, 1000, 'never more than 1000 at a time');
   p = S.paging({ paid: true, freeLines: 1000, offset: -5, limit: 'x', total: 0 }); assert.deepStrictEqual([p.offset, p.take, p.hasMore], [0, 0, false]);
 
-  // ---------- CSV: every column, plain numbers, text kept as text, safe for Excel ----------
-  const csvLines = [
+  // ---------- currency signs: never the plain 3-letter code ----------
+  assert.strictEqual(X.currencySymbol('USD'), '$'); assert.strictEqual(X.currencySymbol('GBP'), '£'); assert.strictEqual(X.currencySymbol('EUR'), '€');
+  assert.strictEqual(X.currencySymbol('xyz'), 'XYZ', 'a currency ELMS has no sign for: its code, not blank');
+  assert.strictEqual(X.currencySymbol(''), '');
+
+  // ---------- the .xlsx workbook: header bold + coloured, Net profit coloured by sign, a currency sign on every money cell, a bold total row ----------
+  async function readBack(build) {
+    const stream = new PassThrough();
+    const chunks = [];
+    stream.on('data', (c) => chunks.push(c));
+    const ended = new Promise((resolve) => stream.on('end', resolve));
+    await build(stream);
+    stream.end();
+    await ended;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.concat(chunks));
+    return wb.worksheets[0];
+  }
+
+  const xlsxLines = [
     S.buildLine(order({ sheet_amazon_price: 100, order_earning: 130, listing_title: 'Wash, "Summer" edition' })),
-    S.buildLine(order({ id: 'b', listing_title: '=HYPERLINK("http://x")', ebay_order_id: '22-1-2', sale_price: 80, sheet_amazon_price: 100, currency: 'EUR', ebay_account_label: 'Berlin' })),
+    S.buildLine(order({ id: 'b', listing_title: '=HYPERLINK("http://x")', ebay_order_id: '22-1-2', sale_price: 80, sheet_amazon_price: 100, order_earning: 70, currency: 'EUR', ebay_account_label: 'Berlin' })), // a loss: net profit -30
   ];
-  const csv = S.csvHeader() + csvLines.map(S.csvLine).join('') + S.csvTotals(csvLines);
-  assert.ok(csv.startsWith('﻿"Title","Order ID","Buying price","eBay price","Profit","Order earning","eBay cost","Net profit","Currency","Quantity","Order date","Store","eBay item number","Amazon ASIN"\r\n'), 'a byte order mark so € £ and other letters open right in Excel; the earning, eBay cost and net profit are all there');
-  const rows = csv.replace('﻿', '').split('\r\n').filter(Boolean);
-  assert.strictEqual(rows.length, 1 + 2 + 2, 'header, two lines, one total row per currency');
-  assert.strictEqual(rows[1], '"Wash, ""Summer"" edition","11-12345-67890",100.00,150.00,50.00,130.00,20.00,30.00,"GBP",1,2026-09-20,"Trendy UK","=""110001234567""","B0ABC12345"', 'quotes doubled, numbers plain (no sign), item number kept as text');
-  assert.ok(rows[2].startsWith(`"'=HYPERLINK(""http://x"")"`), 'a title that looks like a formula is made harmless');
-  assert.ok(rows[2].includes(',100.00,80.00,-20.00,,,,"EUR",'), 'a loss is a plain negative number; the earning, eBay cost and net profit that are not typed are empty');
-  assert.strictEqual(rows[3], '"TOTAL (1 line)","",100.00,150.00,50.00,130.00,20.00,30.00,"GBP",,,"","",""');
-  assert.ok(rows[4].startsWith('"TOTAL (1 line)"') && rows[4].includes('"EUR"'));
-  // every row has the same number of columns as the header (naive split is safe here: no commas inside the sample titles of rows 3 and 4)
-  assert.strictEqual(rows[3].split(',').length, 14); assert.strictEqual(rows[4].split(',').length, 14);
-  assert.strictEqual(S.csvLine(S.buildLine(order({ legacy_item_id: '', asin: '' }))).includes('"",""'), true);
+  const ws = await readBack(async (stream) => {
+    const sheet = X.openNetProfitWorkbook(stream);
+    xlsxLines.forEach((l) => sheet.addLine(l));
+    S.totalsOf(xlsxLines).forEach((t) => sheet.addTotal(t));
+    await sheet.finish();
+  });
+  assert.deepStrictEqual(ws.getRow(1).values.slice(1), ['Title', 'Order ID', 'Buying price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Net profit', 'Currency', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN']);
+  assert.deepStrictEqual(ws.getRow(1).getCell(1).font, { bold: true, color: { argb: 'FFFFFFFF' } }, 'the header is bold, white on the app\'s own blue');
+  assert.deepStrictEqual(ws.getRow(1).getCell(1).fill, { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0064D2' } });
+  assert.strictEqual(ws.getRow(2).getCell(1).value, 'Wash, "Summer" edition', 'a title is never quote-escaped or formula-guarded here - a real spreadsheet cell holds it as text as-is, not as a CSV string');
+  assert.strictEqual(ws.getRow(2).getCell(3).value, 100); assert.strictEqual(ws.getRow(2).getCell(9).value, '£', 'the sign, not "GBP"');
+  assert.strictEqual(ws.getRow(2).getCell(3).numFmt, '"£"#,##0.00;[Red]-"£"#,##0.00');
+  assert.deepStrictEqual(ws.getRow(2).getCell(8).font, { color: { argb: 'FF15803D' } }, 'a positive net profit is green');
+  assert.strictEqual(ws.getRow(3).getCell(1).value, '=HYPERLINK("http://x")', 'kept as plain text - a real spreadsheet cell is never run as a formula just because it looks like one');
+  assert.strictEqual(ws.getRow(3).getCell(8).value, -30); assert.deepStrictEqual(ws.getRow(3).getCell(8).font, { color: { argb: 'FFDC2626' } }, 'a loss is red');
+  assert.strictEqual(ws.getRow(3).getCell(9).value, '€');
+  assert.strictEqual(ws.getRow(3).getCell(13).value, '110001234567', 'the eBay item number is text (kept as a string), not a number that Excel would round or turn into 1.1E+11');
+  assert.strictEqual(ws.getRow(4).getCell(1).value, 'TOTAL (1 line)'); assert.strictEqual(ws.getRow(5).getCell(1).value, 'TOTAL (1 line)');
+  assert.deepStrictEqual(ws.getRow(4).getCell(1).font, { bold: true }, 'the total row is bold');
+  assert.strictEqual(ws.rowCount, 5, 'header, two lines, one total row per currency');
 
   // ---------- the routes (real code, fake data): the limit is enforced by the server ----------
   const calls = [];
@@ -140,12 +169,31 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   calls.length = 0; await call(handler('get', '/'), { query: { q: ' wash ', accountId: 'zzz', from: 'nonsense', to: '2026-09-27T00:00:00Z', includeCancelled: '1' } });
   const f = calls.find((c) => c.count).count; assert.deepStrictEqual([f.q, f.accountId, f.from, f.includeCancelled], ['wash', null, null, true]); assert.ok(f.to instanceof Date);
 
+  // export: a real .xlsx now (openNetProfitWorkbook pipes into the response, so the fake res must be a real writable stream here,
+  // unlike the plain object the other routes' fakes above use).
+  const callExport = async (h, { query = {} } = {}) => {
+    const res = new PassThrough();
+    res.statusCode = 200; res.headers = {}; res.headersSent = false;
+    res.status = (c) => { res.statusCode = c; return res; };
+    res.json = (b) => { res.body = b; res.headersSent = true; return res; };
+    res.setHeader = (k, v) => { res.headers[k] = v; };
+    const chunks = []; res.on('data', (c) => chunks.push(c));
+    const ended = new Promise((resolve) => res.on('finish', resolve));
+    await h({ userId: 'u1', query, body: {}, params: {} }, res);
+    res.end();
+    await ended;
+    res.buffer = Buffer.concat(chunks);
+    return res;
+  };
+  const rowCountOf = async (buf) => { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf); return wb.worksheets[0].rowCount; };
+
   // export: free = the lines it can reach; paid = every line; totals at the end
-  freeLines = 1000; total = 2431; who = 'free'; res = await call(handler('get', '/export'));
-  assert.strictEqual(res.headers['Content-Type'], 'text/csv; charset=utf-8'); assert.match(res.headers['Content-Disposition'], /net-profit-\d{4}-\d{2}-\d{2}\.csv/);
-  assert.strictEqual(res.chunks.join('').split('\r\n').filter(Boolean).length, 1 + 1000 + 1, 'free: header + its 1000 lines + the total');
-  who = 'paid'; res = await call(handler('get', '/export'));
-  assert.strictEqual(res.chunks.join('').split('\r\n').filter(Boolean).length, 1 + 2431 + 1, 'a plan: every line, more than the 1000 of one page');
+  freeLines = 1000; total = 2431; who = 'free'; res = await callExport(handler('get', '/export'));
+  assert.strictEqual(res.headers['Content-Type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  assert.match(res.headers['Content-Disposition'], /net-profit-\d{4}-\d{2}-\d{2}\.xlsx/);
+  assert.strictEqual(await rowCountOf(res.buffer), 1 + 1000 + 1, 'free: header + its 1000 lines + the total');
+  who = 'paid'; res = await callExport(handler('get', '/export'));
+  assert.strictEqual(await rowCountOf(res.buffer), 1 + 2431 + 1, 'a plan: every line, more than the 1000 of one page');
 
   // the dashboard sum: the filters are cleaned (no search, cancelled orders never counted) and the answer is passed on
   calls.length = 0; res = await call(handler('get', '/summary'), { query: { q: 'wash', includeCancelled: '1', accountId: 'zzz', from: '2026-09-01T00:00:00Z' } });

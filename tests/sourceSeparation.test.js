@@ -95,7 +95,7 @@ const cjProduct = { cjProductId: 'PID1', cjVariantId: 'VID1', variantSku: 'CJSKU
   assert.strictEqual(amazonDraft.cjShippingCost, undefined, 'Amazon profit is never touched by CJ shipping');
 
   assert.strictEqual(cjDraft.sourcePlatform, 'cj');
-  assert.strictEqual(cjDraft.sku, 'CJ-CJSKU-BLACK', 'the "CJ-" prefix - can never collide with an Amazon ASIN sku');
+  assert.strictEqual(cjDraft.sku, 'CJ-VID1', 'the sku is "CJ-" + the CJ variant id (never the supplier\'s own variant sku text) - can never collide with an Amazon ASIN sku');
   assert.strictEqual(cjDraft.cjProductId, 'PID1');
   assert.strictEqual(cjDraft.cjVariantId, 'VID1');
   assert.strictEqual(cjDraft.cjShippingCost, 2.5, "the CJ listing's own shipping cost, quoted by cjAdapter.calcFreight");

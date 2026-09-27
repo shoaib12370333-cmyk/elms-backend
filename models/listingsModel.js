@@ -116,11 +116,12 @@ async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku
 /**
  * The CJdropshipping equivalent of upsertDraft above (services/cjImportService.js). Deliberately a separate function, not a
  * branch inside upsertDraft: it is found by cjProductId/cjVariantId (never by sku - findCjListingInStore), uses cjSkuFor
- * instead of requireAsinSku, and sets sourcePlatform/cjProductId/cjVariantId/cjShippingCost, which upsertDraft never touches.
+ * (built from cjVariantId, never the supplier's own variant sku text - see services/skuService.js) instead of requireAsinSku,
+ * and sets sourcePlatform/cjProductId/cjVariantId/cjShippingCost, which upsertDraft never touches.
  */
-async function upsertCjDraft(userId, { importId, ebayAccountId, marketplaceId, cjProductId, cjVariantId, variantSku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule, cjShippingCost }) {
+async function upsertCjDraft(userId, { importId, ebayAccountId, marketplaceId, cjProductId, cjVariantId, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule, cjShippingCost }) {
   const { cjSkuFor } = require('../services/skuService');
-  const normalizedSku = cjSkuFor(variantSku, 'CJ draft');
+  const normalizedSku = cjSkuFor(cjVariantId, 'CJ draft');
   const accountKey = ebayAccountId || null;
   const existing = (await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: accountKey }))
     || (accountKey ? await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: null }) : null);

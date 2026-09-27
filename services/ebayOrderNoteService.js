@@ -138,7 +138,9 @@ async function syncOrderNote(refreshToken, marketplaceId, { orderId, itemId, ord
         : listed
           ? `eBay's list of orders awaiting shipment (${listed} line${listed === 1 ? '' : 's'}) has no line for item ${itemId}: the order may be shipped already, so its note was not changed.`
           : "eBay's list of orders awaiting shipment came back empty: the order may be shipped already (or eBay did not show it), so its note was not changed.";
-      console.warn('[ebay-note] no line for order', orderId, 'item', itemId, reason, seen, 'listed:', listed);
+      // Full detail, not just the summary above - the exact item/order ids eBay listed, so a real failure can be diagnosed from this log
+      // alone, without needing to reproduce it. (These are the seller's own item/order numbers, already visible to them on eBay.)
+      console.warn(`[ebay-note] no line for order ${orderId} item ${itemId}: ${reason}, ${listed} line(s) listed in all, matching item: ${JSON.stringify(seen)}`);
       return { status: 'skipped', message: why };
     }
     // 2. what to write

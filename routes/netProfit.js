@@ -4,7 +4,8 @@ const { requireAuth } = require('../middleware/requireAuth');
 const User = require('../models/schemas/User');
 const { getLimits } = require('../models/settingsModel');
 const { listNetProfitLines, countNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary } = require('../models/ordersModel');
-const { PAGE_SIZE, isPaidUser, paging, csvHeader, csvLine, csvTotals } = require('../services/netProfitService');
+const { PAGE_SIZE, isPaidUser, paging, totalsOf } = require('../services/netProfitService');
+const { openNetProfitWorkbook } = require('../services/netProfitXlsx');
 
 /** What the request asks for: the filters of the sheet (store, dates, search, cancelled orders). */
 function filtersOf(query) {
@@ -61,8 +62,10 @@ router.get('/summary', requireAuth, async (req, res) => {
 
 /**
  * GET /api/net-profit/export?...same filters
- * The sheet as a CSV file for Excel: every column of the sheet plus currency, quantity, date, store, item number and ASIN, and the
- * total rows at the end. Free: the lines a free account can reach; with a running plan: every line the filters give.
+ * The sheet as a real .xlsx file (services/netProfitXlsx.js): every column of the sheet plus currency, quantity, date, store,
+ * item number and ASIN, a bold coloured header row, the Net profit column in green/red by sign, every money cell in its own
+ * currency's sign (never the plain "USD" text), and the total rows at the end. Free: the lines a free account can reach;
+ * with a running plan: every line the filters give. Streamed straight to the response, never held whole in memory.
  */
 router.get('/export', requireAuth, async (req, res) => {
   try {
@@ -70,17 +73,17 @@ router.get('/export', requireAuth, async (req, res) => {
     const access = await accessOf(req.userId);
     const total = await countNetProfitLines(req.userId, filters);
     const cap = access.paid ? total : Math.min(total, access.freeLines);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="net-profit-${new Date().toISOString().slice(0, 10)}.csv"`);
-    res.write(csvHeader());
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="net-profit-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    const sheet = openNetProfitWorkbook(res);
     const all = [];
     for (let offset = 0; offset < cap; offset += PAGE_SIZE) {
       const lines = await listNetProfitLines(req.userId, filters, { offset, limit: Math.min(PAGE_SIZE, cap - offset) });
       if (!lines.length) break;
-      for (const l of lines) { res.write(csvLine(l)); all.push({ currency: l.currency, amazon_price: l.amazon_price, ebay_price: l.ebay_price, profit: l.profit, order_earning: l.order_earning, ebay_cost: l.ebay_cost, net_profit: l.net_profit }); }
+      for (const l of lines) { sheet.addLine(l); all.push({ currency: l.currency, amazon_price: l.amazon_price, ebay_price: l.ebay_price, profit: l.profit, order_earning: l.order_earning, ebay_cost: l.ebay_cost, net_profit: l.net_profit }); }
     }
-    res.write(csvTotals(all));
-    res.end();
+    totalsOf(all).forEach((t) => sheet.addTotal(t));
+    await sheet.finish();
   } catch (err) {
     console.error('net profit export error:', err.message);
     if (!res.headersSent) res.status(500).json({ success: false, error: 'Could not make the file. Please try again.' });

@@ -1,4 +1,4 @@
-const { requireAsinSku } = require('./skuService');
+const { requireAsinSku, finalizeEbaySku } = require('./skuService');
 const { identifierFields } = require('./productIdentifiers');
 const { stripInvisible } = require('./textCleanService');
 const axios = require('axios');
@@ -298,7 +298,11 @@ function buildListingBodies({ product, sellPrice, quantity, categoryId, sku, sel
     throw new Error('An eBay categoryId is required.');
   }
 
-  const finalSku = requireAsinSku(sku || product.asin, 'Amazon product');
+  // A CJ listing's sku (services/skuService.js cjSkuFor, "CJ-" + the CJ variant sku) is already valid and is sent to eBay as
+  // it is (finalizeEbaySku just caps it at eBay's 50-character sku limit, a last-mile safety net) - it used to be forced
+  // through requireAsinSku here, which only accepts a 10-character Amazon ASIN, so every CJ publish failed. When no sku is
+  // given at all (an older caller), the Amazon ASIN is still required, exactly as before.
+  const finalSku = sku ? finalizeEbaySku(sku, 'listing') : requireAsinSku(product.asin, 'Amazon product');
 
   // Pass the image URLs straight to eBay in the inventory item, the way the known-working build did. eBay fetches these URLs itself when
   // the listing publishes. We intentionally do NOT pre-upload via the Media API (create_image_from_url): that extra call is unreliable
