@@ -245,7 +245,7 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null, {
   // since: only what was created or changed after that moment (the Drafts page asks for this every few seconds while a background
   // import runs, so it never reloads the whole queue). It leaves out the two things that are only worth doing for a full list.
   const onlyNew = since instanceof Date && !Number.isNaN(since.getTime());
-  if (!onlyNew) await claimUnassignedListings(userId, accountId);
+  if (!onlyNew) await claimUnassignedIfNeeded(userId, accountId);
   const query = cleanStatuses.length ? { userId, status: { $in: cleanStatuses } } : { userId };
   if (accountId) query.ebayAccountId = accountId;
   if (onlyNew) query.$or = [{ createdAt: { $gte: since } }, { updatedAt: { $gte: since } }];
@@ -356,13 +356,44 @@ async function claimUnassignedListings(userId, accountId) {
   }
 }
 
-/** Units sold per listing, from the synced eBay orders. */
-async function getSoldByListing(userId) {
+/**
+ * Listings saved before drafts were tied to a store are given one (claimUnassignedListings) - but only when there is something to give: one cheap
+ * "is there a listing with no store?" check, and a user with none is not asked again for ten minutes. (It used to read every store-less listing with
+ * its import on EVERY list request.) It is also run when an eBay store is connected (see models/ebayAccountsModel.js).
+ */
+const claimClean = new Map(); // userId -> when they were last found to have no listing without a store
+const CLAIM_CLEAN_MS = 10 * 60 * 1000;
+async function claimUnassignedIfNeeded(userId, accountId) {
+  if (!accountId) return 0;
+  const key = String(userId);
+  const seen = claimClean.get(key);
+  if (seen && Date.now() - seen < CLAIM_CLEAN_MS) return 0;
+  try {
+    const orphan = await Listing.exists({ userId, ebayAccountId: null });
+    if (!orphan) { claimClean.set(key, Date.now()); if (claimClean.size > 5000) claimClean.delete(claimClean.keys().next().value); return 0; }
+  } catch (_) { return 0; }
+  const moved = await claimUnassignedListings(userId, accountId);
+  claimClean.delete(key);
+  return moved;
+}
+/** A new store was connected: the listings without one may now be given a home; the "nothing to claim" memory is forgotten. */
+async function claimAfterStoreConnected(userId, accountId) {
+  claimClean.delete(String(userId));
+  return claimUnassignedListings(userId, accountId);
+}
+
+/** Units sold per listing, from the synced eBay orders. `listingIds` (the rows of one page) limits it to those listings; without it every listing of the user is counted. */
+async function getSoldByListing(userId, listingIds = null) {
   try {
     const Order = require('./schemas/Order');
     const mongoose = require('mongoose');
+    const match = { userId: new mongoose.Types.ObjectId(String(userId)), listingId: { $ne: null } };
+    if (Array.isArray(listingIds)) {
+      if (!listingIds.length) return new Map();
+      match.listingId = { $in: listingIds.filter((id) => mongoose.isValidObjectId(id)).map((id) => new mongoose.Types.ObjectId(String(id))) };
+    }
     const rows = await Order.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(String(userId)), listingId: { $ne: null } } },
+      { $match: match },
       { $group: { _id: '$listingId', sold: { $sum: { $ifNull: ['$quantity', 1] } } } },
     ]);
     return new Map(rows.map((r) => [String(r._id), r.sold]));
@@ -372,7 +403,7 @@ async function getSoldByListing(userId) {
 }
 
 async function listListings(userId, status, accountId = null) {
-  await claimUnassignedListings(userId, accountId);
+  await claimUnassignedIfNeeded(userId, accountId);
   const query = status ? { userId, status } : { userId };
   if (accountId) query.ebayAccountId = accountId;
   const docs = await Listing.find(query).select(LIST_EXCLUDE).populate({ path: 'importId', select: IMPORT_FOR_LIST }).populate({ path: 'ebayAccountId', select: ACCOUNT_FOR_LIST }).sort({ updatedAt: -1 }).lean();
@@ -390,12 +421,275 @@ async function listListings(userId, status, accountId = null) {
   });
 }
 
+// ---------------------------------------------------------------- Live listings: one page at a time
+// The Live listings page used to load EVERY listing with its import (description, bullets, specifications ...) and sort / filter / count them in the
+// browser, which took minutes for a big store. Now the server does the searching, filtering, sorting and paging, and a row carries only what the list shows;
+// what the editor needs (description, pictures, item specifics ...) is read for the ONE listing that is opened (getListingFull).
+const PAGE_DEFAULT = 50;
+const PAGE_MAX = 200;
+const PAGE_SELECT = 'sku title mainImage sellPrice amazonPrice status ebayAccountId marketplaceId currency quantity ebayListingId ebayOfferId categoryId errorMessage note markupPercent pricingRule views watchers statsSyncedAt createdAt updatedAt importId amazonInStock stockMonitoring priceMonitoring';
+const VERO_TEXT_FIELDS = 'description bulletPoints specifications ebayAspects'; // read for the rows of one page only, to flag VeRO words; never sent
+const IMPORT_FOR_PAGE = 'asin amazonUrl amazonPrice product.price';
+const KEYS_NOT_IN_A_ROW = ['description', 'bullet_points', 'specifications', 'ebay_aspects', 'images', 'images_customized', 'ebay_image_urls', 'publish_response', 'publish_error_details', 'tags', 'draft_customized'];
+const SIMPLE_SORTS = {
+  newest: { createdAt: -1, _id: -1 },
+  price: { sellPrice: -1, _id: -1 },
+  priceLow: { sellPrice: 1, _id: 1 },
+  views: { views: -1, _id: -1 },
+  watchers: { watchers: -1, _id: -1 },
+};
+const COMPUTED_SORTS = new Set(['profit', 'profitLow', 'sold']); // these need the Amazon price / the orders: worked out from a light read of every matching listing
+const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const numOrNull = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/** The page and limit of a request, made safe: page 1.., limit 1..200 (default 50). */
+function pageOptions({ page, limit } = {}) {
+  const p = Math.max(1, Math.trunc(Number(page)) || 1);
+  const l = Math.min(PAGE_MAX, Math.max(1, Math.trunc(Number(limit)) || PAGE_DEFAULT));
+  return { page: p, limit: l };
+}
+
+/** The database filter of the list: the seller's listings, in these statuses, of this store, whose title / SKU / eBay item number / note holds the search text. */
+function pageQuery(userId, { statuses = [], accountId = null, q = '' } = {}) {
+  const query = { userId };
+  const list = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
+  if (list.length) query.status = { $in: list };
+  if (accountId) query.ebayAccountId = accountId;
+  const text = String(q || '').trim().slice(0, 100);
+  if (text) {
+    const re = new RegExp(escapeRegExp(text), 'i');
+    query.$or = [{ title: re }, { sku: re }, { ebayListingId: re }, { note: re }];
+  }
+  return query;
+}
+
+/** The profit the card shows (after eBay's fees when the listing was priced by the Margin rule): the same rule as the page's listingProfit. null when there is no price or cost. */
+function listingProfitAmount(sellPrice, amazon, rule) {
+  const sell = numOrNull(sellPrice);
+  const cost = numOrNull(amazon);
+  if (sell === null || cost === null) return null;
+  if (rule && typeof rule === 'object' && numOrNull(rule.feePercent) !== null) {
+    const costTotal = cost + (numOrNull(rule.shipping) || 0);
+    return sell - costTotal - (sell * numOrNull(rule.feePercent) / 100 + (numOrNull(rule.feeFixed) || 0));
+  }
+  return sell - cost;
+}
+
+/** A light read of every listing of a filter: only what sorting, the summary and the "select all" need, with the Amazon price the list shows (the import's when the listing has none). */
+async function lightRows(query, extraSelect = '') {
+  const docs = await Listing.find(query).select('sellPrice amazonPrice pricingRule importId status views watchers statsSyncedAt createdAt ' + extraSelect).lean();
+  const needImport = docs.filter((d) => normalizeAmazonPrice(d.amazonPrice) === null && d.importId).map((d) => d.importId);
+  const imports = new Map();
+  if (needImport.length) {
+    const Import = require('./schemas/Import');
+    const rows = await Import.find({ _id: { $in: needImport } }).select('amazonPrice product.price').lean();
+    rows.forEach((r) => imports.set(String(r._id), r));
+  }
+  return docs.map((d) => {
+    const imp = d.importId ? imports.get(String(d.importId)) : null;
+    const amazon = normalizeAmazonPrice(d.amazonPrice) ?? normalizeAmazonPrice(imp && imp.amazonPrice) ?? normalizeAmazonPrice(imp && imp.product && imp.product.price);
+    return { doc: d, id: String(d._id), amazon };
+  });
+}
+
+// ----- VeRO words: which listings hold one (worked out on the server, kept for two minutes per store view) -----
+const veroCache = new Map(); // key -> { at, terms: Map(id -> terms[]) }
+const VERO_CACHE_MS = 2 * 60 * 1000;
+async function veroMatcherOf(userId) {
+  const { getVeroWordsOf } = require('../services/veroSettingsService');
+  const { createMatcher } = require('../services/veroService');
+  const matcher = createMatcher(await getVeroWordsOf(userId));
+  return matcher.hasWords ? matcher : null;
+}
+/** Every listing of this filter that holds a VeRO word: Map(id -> terms). Empty when the seller has no VeRO words. */
+async function scanVero(userId, query) {
+  const matcher = await veroMatcherOf(userId);
+  if (!matcher) return new Map();
+  const key = String(userId) + '|' + JSON.stringify({ ...query, $or: undefined });
+  const hit = veroCache.get(key);
+  if (hit && Date.now() - hit.at < VERO_CACHE_MS) return hit.terms;
+  const terms = new Map();
+  const base = { ...query };
+  delete base.$or; // a search does not change which listings hold a VeRO word
+  const cursor = Listing.find(base).select('title ' + VERO_TEXT_FIELDS).lean().cursor();
+  for await (const d of cursor) {
+    const found = matcher.scanListing({ title: d.title, description: d.description, bulletPoints: d.bulletPoints, specifications: d.specifications, aspects: d.ebayAspects });
+    if (found.terms.length) terms.set(String(d._id), found.terms);
+  }
+  veroCache.set(key, { at: Date.now(), terms });
+  if (veroCache.size > 200) veroCache.delete(veroCache.keys().next().value);
+  return terms;
+}
+function clearVeroCache(userId) {
+  const prefix = String(userId) + '|';
+  for (const k of [...veroCache.keys()]) if (k.startsWith(prefix)) veroCache.delete(k);
+}
+
+/** One row of the list: the same names the page already uses, without the heavy fields (description, bullets, specifications, item specifics, all pictures ...). */
+function pageRow(doc, { soldByListing, veroTerms }) {
+  const row = serialize(doc);
+  for (const k of KEYS_NOT_IN_A_ROW) delete row[k];
+  row.amazon_url = doc.importId?.amazonUrl || null;
+  row.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);
+  row.asin = doc.importId?.asin || null;
+  row.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+  row.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
+  row.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
+  row.sold_count = soldByListing.get(String(doc._id)) || 0;
+  row.vero_terms = veroTerms;
+  return row;
+}
+
+/** The rows of these listing ids, in this order (one query, populated with the little the list needs). */
+async function readPageRows(userId, ids, { withVero = false } = {}) {
+  if (!ids.length) return [];
+  const matcher = withVero ? await veroMatcherOf(userId) : null; // a seller with no VeRO words: the text of the listings is never even read
+  const select = PAGE_SELECT + (matcher ? ' ' + VERO_TEXT_FIELDS : '');
+  const docs = await Listing.find({ _id: { $in: ids }, userId })
+    .select(select)
+    .populate({ path: 'importId', select: IMPORT_FOR_PAGE })
+    .populate({ path: 'ebayAccountId', select: ACCOUNT_FOR_LIST })
+    .lean();
+  const byId = new Map(docs.map((d) => [String(d._id), d]));
+  const soldByListing = await getSoldByListing(userId, ids.map(String)); // only the listings of this page are counted
+  return ids.map((id) => byId.get(String(id))).filter(Boolean).map((doc) => {
+    const veroTerms = matcher ? matcher.scanListing({ title: doc.title, description: doc.description, bulletPoints: doc.bulletPoints, specifications: doc.specifications, aspects: doc.ebayAspects }).terms : [];
+    return pageRow(doc, { soldByListing, veroTerms });
+  });
+}
+
+/**
+ * One page of listings, searched / filtered / sorted by the database.
+ * @param {object} opts { statuses, accountId, q (search text), sort (newest|price|priceLow|profit|profitLow|views|watchers|sold), vero (only listings with a VeRO word), page, limit }
+ * @returns {Promise<{ listings: object[], total: number, page: number, limit: number, pages: number }>}
+ */
+async function listListingsPage(userId, { statuses = [], accountId = null, q = '', sort = 'newest', vero = false, page, limit } = {}) {
+  const { page: p, limit: l } = pageOptions({ page, limit });
+  await claimUnassignedIfNeeded(userId, accountId);
+  const query = pageQuery(userId, { statuses, accountId, q });
+  let veroTerms = null;
+  if (vero) {
+    veroTerms = await scanVero(userId, query);
+    query._id = { $in: [...veroTerms.keys()] };
+  }
+  const total = await Listing.countDocuments(query);
+  const pages = Math.max(1, Math.ceil(total / l));
+  const empty = { listings: [], total, page: p, limit: l, pages };
+  if (!total || p > pages) return empty;
+
+  let ids;
+  if (COMPUTED_SORTS.has(sort)) {
+    // profit and units sold are not fields of a listing: they are worked out from a light read of every matching listing, then the page is cut out of the sorted ids
+    const rows = await lightRows(query);
+    let key;
+    if (sort === 'sold') {
+      const sold = await getSoldByListing(userId);
+      key = (r) => sold.get(r.id) || 0;
+    } else {
+      key = (r) => listingProfitAmount(r.doc.sellPrice, r.amazon, r.doc.pricingRule);
+    }
+    const up = sort === 'profitLow';
+    const scored = rows.map((r) => ({ id: r.id, score: key(r), created: r.doc.createdAt ? new Date(r.doc.createdAt).getTime() : 0 }));
+    scored.sort((a, b) => {
+      if (a.score === null && b.score === null) return b.created - a.created;
+      if (a.score === null) return 1; // no price or cost: last, either way
+      if (b.score === null) return -1;
+      return (up ? a.score - b.score : b.score - a.score) || b.created - a.created;
+    });
+    ids = scored.slice((p - 1) * l, p * l).map((r) => r.id);
+  } else {
+    const docs = await Listing.find(query).select('_id').sort(SIMPLE_SORTS[sort] || SIMPLE_SORTS.newest).skip((p - 1) * l).limit(l).lean();
+    ids = docs.map((d) => String(d._id));
+  }
+  let listings = await readPageRows(userId, ids, { withVero: !veroTerms });
+  if (veroTerms) listings = listings.map((row) => ({ ...row, vero_terms: veroTerms.get(row.id) || [] }));
+  return { listings, total, page: p, limit: l, pages };
+}
+
+/** Every listing id of a filter (for "Select all N"), at most 20,000. */
+async function listListingIds(userId, { statuses = [], accountId = null, q = '', vero = false } = {}) {
+  const query = pageQuery(userId, { statuses, accountId, q });
+  if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
+  const docs = await Listing.find(query).select('_id').sort({ createdAt: -1, _id: -1 }).limit(20000).lean();
+  return docs.map((d) => String(d._id));
+}
+
+/** The rows of these ids (the Change price window needs the selected listings, wherever they were on the list). At most 5000. */
+async function listRowsByIds(userId, ids) {
+  const clean = [...new Set((Array.isArray(ids) ? ids : []).map(String))].filter((id) => require('mongoose').isValidObjectId(id)).slice(0, 5000);
+  return readPageRows(userId, clean);
+}
+
+/**
+ * What the Live listings page shows above the list, in one answer: how many listings each tab has, and the totals (units sold, views, watchers,
+ * average margin, when views were last synced). Worked out from a light read, not from full listings. `vero` is only worked out when the seller has VeRO words.
+ */
+async function summarizeLiveListings(userId, { accountId = null } = {}) {
+  const live = { userId, status: 'published' };
+  if (accountId) live.ebayAccountId = accountId;
+  const ended = { userId, status: 'ended' };
+  if (accountId) ended.ebayAccountId = accountId;
+  const [rows, endedCount, sold, veroTerms] = await Promise.all([lightRows(live), Listing.countDocuments(ended), getSoldByListing(userId), scanVero(userId, live)]);
+  let views = 0; let watchers = 0; let units = 0; let last = 0;
+  const margins = [];
+  for (const r of rows) {
+    views += numOrNull(r.doc.views) || 0;
+    watchers += numOrNull(r.doc.watchers) || 0;
+    units += sold.get(r.id) || 0;
+    const t = r.doc.statsSyncedAt ? new Date(r.doc.statsSyncedAt).getTime() : 0;
+    if (t > last) last = t;
+    const sell = numOrNull(r.doc.sellPrice);
+    if (r.amazon > 0 && sell > 0) margins.push((sell - r.amazon) / sell);
+  }
+  return {
+    counts: { all: rows.length, active: rows.length, sold: 0, ended: endedCount, issues: 0, vero: veroTerms.size },
+    totals: {
+      units_sold: units, views, watchers,
+      average_margin_percent: margins.length ? Math.round((margins.reduce((a, b) => a + b, 0) / margins.length) * 100) : null,
+      last_synced_at: last ? new Date(last).toISOString() : null,
+    },
+  };
+}
+
+/** One listing with everything the editor needs (description, pictures, item specifics, variants ...): what the list used to carry for every row. */
+async function getListingFull(userId, id) {
+  if (!require('mongoose').isValidObjectId(id)) return null;
+  const doc = await Listing.findOne({ _id: id, userId }).select(LIST_EXCLUDE).populate({ path: 'importId', select: IMPORT_FOR_LIST }).populate({ path: 'ebayAccountId', select: ACCOUNT_FOR_LIST }).lean();
+  if (!doc) return null;
+  const sold = await getSoldByListing(userId, [String(doc._id)]);
+  const row = serialize(doc);
+  row.amazon_url = doc.importId?.amazonUrl || null;
+  row.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);
+  row.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
+  row.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
+  row.asin = doc.importId?.asin || null;
+  row.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+  row.sold_count = sold.get(String(doc._id)) || 0;
+  return withImportFallback(row, doc);
+}
+
+/** Calls `fn(rows)` with the listings of a filter, a thousand at a time (for the CSV file), newest first: never all of them in memory at once. */
+async function eachListingChunk(userId, { statuses = [], accountId = null, q = '', vero = false } = {}, fn) {
+  const query = pageQuery(userId, { statuses, accountId, q });
+  if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
+  let before = null;
+  for (;;) {
+    const find = before ? { ...query, $and: [{ _id: { $lt: before } }] } : query;
+    const docs = await Listing.find(find).select('title sku sellPrice quantity categoryId status').sort({ _id: -1 }).limit(1000).lean();
+    if (!docs.length) break;
+    await fn(docs.map((d) => ({ title: d.title, sku: d.sku, sell_price: d.sellPrice, quantity: d.quantity, category_id: d.categoryId, status: d.status })));
+    before = docs[docs.length - 1]._id;
+    if (docs.length < 1000) break;
+  }
+}
+
 /**
  * Updates any editable fields on a draft listing before it's published.
  * Only fields that are provided (not undefined) are updated. Scoped to the
  * given user so one user can never edit another's listing.
  */
 async function updateListing(userId, id, fields) {
+  clearVeroCache(userId); // the words of this listing may have changed: the next VeRO check reads them again
   // If the price changed but no explicit markup came with it (e.g. the quick inline-card
   // save, which only ever sends sellPrice), keep the stored markup% honest by deriving it
   // from the new price against the listing's Amazon cost - otherwise it silently goes stale
@@ -862,6 +1156,18 @@ module.exports = {
   listListingsBySkus,
   findListingInStore,
   listListings,
+  listListingsPage,
+  listListingIds,
+  listRowsByIds,
+  summarizeLiveListings,
+  getListingFull,
+  eachListingChunk,
+  pageOptions,
+  pageQuery,
+  listingProfitAmount,
+  claimAfterStoreConnected,
+  _resetClaimMemory: () => claimClean.clear(),
+  clearVeroCache,
   listListingsByStatuses,
   countListingsByStatus,
   updateListing,

@@ -77,6 +77,8 @@ async function addEbayAccount(userId, { ebayUserId, refreshToken, expiresAt, mar
     identityCheckedAt,
     storeNumber: await nextStoreNumber(userId),
   });
+  // listings saved before drafts were tied to a store get a home now (once, when a store is connected), not on every list request
+  try { require('./listingsModel').claimAfterStoreConnected(userId, doc._id).catch(() => {}); } catch (_) { /* the list still claims them when it finds some */ }
 
   return serialize(doc);
 }

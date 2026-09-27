@@ -99,6 +99,9 @@ const listingSchema = new mongoose.Schema(
 // sellers may otherwise generate the same SKU from the same ASIN.
 listingSchema.index({ userId: 1, ebayAccountId: 1, sku: 1 }, { unique: true });
 listingSchema.index({ userId: 1, status: 1, updatedAt: -1 });
+listingSchema.index({ userId: 1, ebayAccountId: 1, status: 1, updatedAt: -1 }); // one store's list (Live listings, Drafts)
+listingSchema.index({ userId: 1, status: 1, createdAt: -1 }); // "Newest first" of the Live listings page
+listingSchema.index({ userId: 1, ebayAccountId: 1, status: 1, createdAt: -1 });
 listingSchema.index({ userId: 1, ebayListingId: 1 }); // a message thread finds its listing by eBay item id
 listingSchema.index({ status: 1, publishStartedAt: 1 }); // the publish queue looks for listings that are "publishing" across all users
 

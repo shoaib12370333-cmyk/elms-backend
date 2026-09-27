@@ -3,6 +3,13 @@ const router = express.Router();
 
 const {
   listListings,
+  listListingsPage,
+  listListingIds,
+  listRowsByIds,
+  summarizeLiveListings,
+  getListingFull,
+  eachListingChunk,
+  pageOptions,
   listListingsByStatuses,
   countListingsByStatus,
   getListingById,
@@ -170,45 +177,124 @@ router.get('/publish-status', requireAuth, async (req, res) => {
   }
 });
 
+const LIST_STATUSES = new Set(['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended']);
+const LIST_SORTS = new Set(['newest', 'price', 'priceLow', 'profit', 'profitLow', 'views', 'watchers', 'sold']);
+
 /**
- * GET /api/listings
+ * What a list request asks for, cleaned: statuses (only real ones), store, search text, sort, "only VeRO words". `nothing` is true when the request names a
+ * status or a store that cannot exist (the answer is then an empty list, never everything).
+ */
+function listFilters(query) {
+  const asked = String(query.status || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const statuses = asked.filter((s) => LIST_STATUSES.has(s));
+  const account = String(query.accountId || '');
+  const accountOk = !account || /^[a-f0-9]{24}$/i.test(account);
+  return {
+    statuses,
+    accountId: accountOk && account ? account : null,
+    q: String(query.q || '').trim().slice(0, 100),
+    sort: LIST_SORTS.has(String(query.sort)) ? String(query.sort) : 'newest',
+    vero: query.vero === '1' || query.vero === 'true',
+    nothing: (asked.length > 0 && !statuses.length) || !accountOk,
+  };
+}
+
+/**
+ * GET /api/listings?status=published&accountId=&q=&sort=&vero=1&page=1&limit=50
+ * One PAGE of listings, searched / filtered / sorted by the database (page from 1, limit 1..200, default 50). Answers { listings, total, page, limit, pages }.
+ * A row carries only what the list shows (no description, bullets, specifications, item specifics or all pictures): the editor reads the one listing it
+ * opens with GET /api/listings/:id?full=1. sort: newest | price | priceLow | profit | profitLow | views | watchers | sold. vero=1: only listings with a VeRO word.
  */
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const rawStatus = req.query.status ? String(req.query.status) : '';
-    const statuses = rawStatus.split(',').map((s) => s.trim()).filter(Boolean);
-    const allowed = new Set(['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended']);
-    const cleanStatuses = statuses.filter((s) => allowed.has(s));
-    const listings = cleanStatuses.length > 1
-      ? await listListingsByStatuses(req.userId, cleanStatuses, req.query.accountId || null)
-      : await listListings(req.userId, cleanStatuses[0] || null, req.query.accountId || null);
-
-    res.json({
-      success: true,
-      listings,
-    });
+    const f = listFilters(req.query);
+    const { page, limit } = pageOptions({ page: req.query.page, limit: req.query.limit });
+    if (f.nothing) return res.json({ success: true, listings: [], total: 0, page, limit, pages: 1 });
+    const out = await listListingsPage(req.userId, { statuses: f.statuses, accountId: f.accountId, q: f.q, sort: f.sort, vero: f.vero, page, limit });
+    res.json({ success: true, ...out });
   } catch (err) {
-    console.error(
-      'listings list error:',
-      err.message
-    );
-
-    res.status(500).json({
-      success: false,
-      error: 'Could not load listings.',
-    });
+    console.error('listings list error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not load listings.' });
   }
 });
 
 /**
- * GET /api/listings/:id
+ * GET /api/listings/summary?accountId=
+ * What the Live listings page shows above the list, worked out on the server: how many listings each tab has and the totals (units sold, views,
+ * watchers, average margin, when views were last synced). Must stay above GET /:id.
+ */
+router.get('/summary', requireAuth, async (req, res) => {
+  try {
+    const f = listFilters(req.query);
+    if (f.nothing) return res.json({ success: true, counts: { all: 0, active: 0, sold: 0, ended: 0, issues: 0, vero: 0 }, totals: { units_sold: 0, views: 0, watchers: 0, average_margin_percent: null, last_synced_at: null } });
+    res.json({ success: true, ...(await summarizeLiveListings(req.userId, { accountId: f.accountId })) });
+  } catch (err) {
+    console.error('listings summary error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not load the totals.' });
+  }
+});
+
+/** GET /api/listings/ids?status=&accountId=&q=&vero=1 - every listing id of a view (for "Select all N"), at most 20,000. */
+router.get('/ids', requireAuth, async (req, res) => {
+  try {
+    const f = listFilters(req.query);
+    if (f.nothing) return res.json({ success: true, ids: [] });
+    res.json({ success: true, ids: await listListingIds(req.userId, { statuses: f.statuses, accountId: f.accountId, q: f.q, vero: f.vero }) });
+  } catch (err) {
+    console.error('listings ids error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not select the listings.' });
+  }
+});
+
+/** POST /api/listings/rows   { ids: [...] } - the list rows of these listings, wherever they were on the list (the Change price window). At most 5000. */
+router.post('/rows', requireAuth, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+    res.json({ success: true, listings: await listRowsByIds(req.userId, ids) });
+  } catch (err) {
+    console.error('listings rows error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not load the selected listings.' });
+  }
+});
+
+const csvCell = (v) => {
+  const text = String(v ?? '');
+  return '"' + (/^[=+\-@\t\r]/.test(text) ? "'" + text : text).replace(/"/g, '""') + '"'; // a text that would be read as a formula by Excel is made harmless
+};
+
+/** GET /api/listings/export?status=&accountId=&q=&vero=1 - the listings of a view as a CSV file (title, SKU, price, quantity, category, status), a thousand at a time. */
+router.get('/export', requireAuth, async (req, res) => {
+  try {
+    const f = listFilters(req.query);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="live-listings.csv"');
+    res.write('\uFEFF' + ['Title', 'SKU', 'Price', 'Qty', 'Category ID', 'Status'].map(csvCell).join(',') + '\r\n');
+    if (!f.nothing) {
+      await eachListingChunk(req.userId, { statuses: f.statuses, accountId: f.accountId, q: f.q, vero: f.vero }, (rows) => {
+        res.write(rows.map((r) => [r.title, r.sku, r.sell_price, r.quantity, r.category_id, r.status].map(csvCell).join(',')).join('\r\n') + '\r\n');
+      });
+    }
+    res.end();
+  } catch (err) {
+    console.error('listings export error:', err.message);
+    if (!res.headersSent) res.status(500).json({ success: false, error: 'Could not make the file.' });
+    else res.end();
+  }
+});
+
+/**
+ * GET /api/listings/:id            the listing as saved
+ * GET /api/listings/:id?full=1     the same, with everything the editor needs (description, pictures, item specifics, variants ...): what the list no longer carries
  */
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const listing = await getListingById(
-      req.userId,
-      req.params.id
-    );
+    const listing = req.query.full === '1'
+      ? await getListingFull(req.userId, req.params.id)
+      : await getListingById(
+        req.userId,
+        req.params.id
+      );
 
     if (!listing) {
       return res.status(404).json({
