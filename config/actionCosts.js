@@ -40,6 +40,7 @@ const ACTION_COSTS = {
   LISTING_GRADER: 1, // scoring a listing's title/bullets/images/reviews
   AI_TITLE: 1, // AI-written eBay title (Claude)
   AI_ASPECTS: 1, // AI fills the item specifics of the chosen eBay category
+  AI_CATEGORY: 1, // AI chooses the eBay category from the marketplace's category list (only when eBay's own suggestion is out of calls for the day)
   AI_REPLY: 1, // AI drafts (or sends) one reply to a buyer message
   AI_DESCRIPTION: 1, // AI-written eBay description (Claude)
   IMAGE_EXTRACTOR: 0, // pulling a product's images - FREE (images are already included in every product fetch)
@@ -75,6 +76,7 @@ const ACTION_COST_METADATA = [
   { key: 'LISTING_GRADER', label: 'Listing Grader', usesCanopy: true, description: 'Scoring a listing’s title/bullets/images/reviews.' },
   { key: 'AI_TITLE', label: 'AI title', usesCanopy: false, usesAi: true, description: 'One AI-written eBay title (80 characters max) in the listing editor.' },
   { key: 'AI_ASPECTS', label: 'AI item specifics', usesCanopy: false, usesAi: true, description: 'One AI pass that fills the item specifics of the chosen eBay category.' },
+  { key: 'AI_CATEGORY', label: 'AI category', usesCanopy: false, usesAi: true, description: 'One AI-chosen eBay category from the uploaded category list. Used only when eBay’s own category suggestion is out of calls for the day.' },
   { key: 'AI_REPLY', label: 'AI message reply', usesCanopy: false, usesAi: true, description: 'One AI-written reply to a buyer message (draft or auto-send).' },
   { key: 'AI_DESCRIPTION', label: 'AI description', usesCanopy: false, usesAi: true, description: 'One AI-written eBay listing description in the listing editor.' },
   { key: 'IMAGE_EXTRACTOR', label: 'Image Extractor', usesCanopy: false, description: 'Pulling a product’s images - free, they’re already included in every product fetch.' },
