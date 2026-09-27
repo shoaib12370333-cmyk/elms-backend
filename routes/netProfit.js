@@ -94,7 +94,7 @@ const asNumber = (v) => (v === null || v === '' || v === undefined ? null : Numb
 
 /**
  * PATCH /api/net-profit/:id   { amazonPrice?: number | null, orderEarning?: number | null }
- * The two cells a seller types: AMAZON PRICE (what the order cost on Amazon, 0 or more) and ORDER EARNING (what eBay pays out for it).
+ * The two cells a seller types: BUYING PRICE (what the order cost to buy, 0 or more; the request key is still `amazonPrice`) and ORDER EARNING (what eBay pays out for it).
  * They belong to the sheet only (the cost the Orders page uses for its own profit is not touched). Empty clears one. EBAY COST and NET PROFIT
  * are worked out from them. (`netProfit` is still accepted for a client of the first version of the sheet.) Answers with the line as the sheet now shows it.
  */
@@ -103,11 +103,11 @@ router.patch('/:id', requireAuth, async (req, res) => {
   if (!/^[a-f0-9]{24}$/i.test(id)) return res.status(404).json({ success: false, error: 'Order not found.' });
   const body = req.body || {};
   if (body.amazonPrice === undefined && body.orderEarning === undefined && body.netProfit === undefined) return res.status(400).json({ success: false, error: 'Nothing to save.' });
-  if (body.amazonPrice !== undefined && !isNumberOrEmpty(body.amazonPrice)) return res.status(400).json({ success: false, error: 'Enter the Amazon price as a number.' });
+  if (body.amazonPrice !== undefined && !isNumberOrEmpty(body.amazonPrice)) return res.status(400).json({ success: false, error: 'Enter the buying price as a number.' });
   if (body.orderEarning !== undefined && !isNumberOrEmpty(body.orderEarning)) return res.status(400).json({ success: false, error: 'Enter the order earning as a number.' });
   if (body.netProfit !== undefined && !isNumberOrEmpty(body.netProfit)) return res.status(400).json({ success: false, error: 'Enter the net profit as a number.' });
   const amazon = asNumber(body.amazonPrice);
-  if (amazon !== null && (amazon < 0 || amazon > 1e9)) return res.status(400).json({ success: false, error: 'Enter the Amazon price as a number, 0 or more.' });
+  if (amazon !== null && (amazon < 0 || amazon > 1e9)) return res.status(400).json({ success: false, error: 'Enter the buying price as a number, 0 or more.' });
   const earning = asNumber(body.orderEarning);
   if (earning !== null && Math.abs(earning) > 1e9) return res.status(400).json({ success: false, error: 'That order earning is too large.' });
   const net = asNumber(body.netProfit);

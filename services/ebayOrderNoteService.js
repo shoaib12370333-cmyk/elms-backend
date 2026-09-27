@@ -14,36 +14,13 @@ const { reserve, markExhausted, isLimitFailure } = require('./ebayCallBudget');
  * Every step is best effort and never throws: the ELMS mark does not depend on it.
  */
 
-const MAX_NOTE = 255;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const MARK_RE = /(?:\s*\|\s*)?ELMS: ordered(?: \d{1,2} [A-Za-z]{3} \d{4})?/;
-const MARK_TEST = /ELMS: ordered/;
+const { MAX_NOTE, markFor, planNote } = require('./orderNoteMark');
+
 const MAX_PAGES = 3; // 200 orders awaiting shipment each
 
-const markFor = (now) => `ELMS: ordered ${now.getUTCDate()} ${MONTHS[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
 const escapeXml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 const unescapeXml = (s) => String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (m, n) => String.fromCharCode(Number(n))).replace(/&amp;/g, '&');
 const tag = (xml, name) => { const m = String(xml).match(new RegExp(String.raw`<${name}>([\s\S]*?)</${name}>`)); return m ? unescapeXml(m[1]).trim() : ''; };
-
-/**
- * What to do with a note. Adding puts "ELMS: ordered 27 Sep 2026" after the seller's own text; removing takes only that mark out (and the note is
- * deleted when nothing else is left). @returns {{ action: 'AddOrUpdate'|'Delete'|'none', text?: string, reason?: string }}
- */
-function planNote(existing, ordered, now = new Date()) {
-  const note = String(existing || '').trim();
-  const hasMark = MARK_TEST.test(note);
-  if (ordered) {
-    if (hasMark) return { action: 'none', reason: 'The eBay note already says it.' };
-    for (const mark of [markFor(now), 'ELMS: ordered']) {
-      const next = note ? `${note} | ${mark}` : mark;
-      if (next.length <= MAX_NOTE) return { action: 'AddOrUpdate', text: next };
-    }
-    return { action: 'none', reason: 'The eBay note has no room left (255 characters).' };
-  }
-  if (!hasMark) return { action: 'none', reason: 'The eBay note has no ELMS mark.' };
-  const rest = note.replace(MARK_RE, '').replace(/^\s*\|\s*/, '').replace(/\s*\|\s*$/, '').replace(/\s*\|\s*\|\s*/g, ' | ').trim();
-  return rest ? { action: 'AddOrUpdate', text: rest } : { action: 'Delete' };
-}
 
 /**
  * The order lines and their private notes out of a GetMyeBaySelling SoldList answer. The note is looked for inside each line's own block (wherever eBay

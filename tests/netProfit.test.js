@@ -1,4 +1,4 @@
-// The Net Profit sheet: the money is worked out in whole cents (so the numbers are exact). The seller types AMAZON PRICE and ORDER EARNING (both empty
+// The Net Profit sheet: the money is worked out in whole cents (so the numbers are exact). The seller types BUYING PRICE ("amazon_price" in the data) and ORDER EARNING (both empty
 // until typed); EBAY COST = EBAY PRICE - ORDER EARNING and NET PROFIT = ORDER EARNING - AMAZON PRICE are worked out, PROFIT = EBAY PRICE - AMAZON PRICE;
 // what cannot be worked out yet is empty (never 0), every price is for the whole order line, currencies are never mixed, a free account reaches only
 // its lines, and the CSV has every column.
@@ -88,7 +88,7 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
     S.buildLine(order({ id: 'b', listing_title: '=HYPERLINK("http://x")', ebay_order_id: '22-1-2', sale_price: 80, sheet_amazon_price: 100, currency: 'EUR', ebay_account_label: 'Berlin' })),
   ];
   const csv = S.csvHeader() + csvLines.map(S.csvLine).join('') + S.csvTotals(csvLines);
-  assert.ok(csv.startsWith('﻿"Title","Order ID","Amazon price","eBay price","Profit","Order earning","eBay cost","Net profit","Currency","Quantity","Order date","Store","eBay item number","Amazon ASIN"\r\n'), 'a byte order mark so € £ and other letters open right in Excel; the earning, eBay cost and net profit are all there');
+  assert.ok(csv.startsWith('﻿"Title","Order ID","Buying price","eBay price","Profit","Order earning","eBay cost","Net profit","Currency","Quantity","Order date","Store","eBay item number","Amazon ASIN"\r\n'), 'a byte order mark so € £ and other letters open right in Excel; the earning, eBay cost and net profit are all there');
   const rows = csv.replace('﻿', '').split('\r\n').filter(Boolean);
   assert.strictEqual(rows.length, 1 + 2 + 2, 'header, two lines, one total row per currency');
   assert.strictEqual(rows[1], '"Wash, ""Summer"" edition","11-12345-67890",100.00,150.00,50.00,130.00,20.00,30.00,"GBP",1,2026-09-20,"Trendy UK","=""110001234567""","B0ABC12345"', 'quotes doubled, numbers plain (no sign), item number kept as text');
@@ -162,7 +162,7 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   saved.length = 0; await call(handler('patch', '/:id'), { params: { id }, body: { orderEarning: -4.5 } }); assert.deepStrictEqual(saved, [[id, { orderEarning: -4.5 }]], 'an earning can be below zero');
   saved.length = 0; await call(handler('patch', '/:id'), { params: { id }, body: { netProfit: '30' } }); assert.deepStrictEqual(saved, [[id, { netProfit: 30 }]], 'a client of the first version of the sheet still works');
   saved.length = 0;
-  for (const [body, message] of [[{ amazonPrice: 'abc' }, /Amazon price as a number/], [{ orderEarning: 'abc' }, /order earning as a number/], [{ netProfit: 'abc' }, /net profit as a number/], [{ amazonPrice: -5 }, /0 or more/], [{ orderEarning: 1e12 }, /too large/], [{ amazonPrice: 1e12 }, /0 or more/], [{ netProfit: 1e12 }, /too large/], [{}, /Nothing to save/]]) {
+  for (const [body, message] of [[{ amazonPrice: 'abc' }, /buying price as a number/], [{ orderEarning: 'abc' }, /order earning as a number/], [{ netProfit: 'abc' }, /net profit as a number/], [{ amazonPrice: -5 }, /0 or more/], [{ orderEarning: 1e12 }, /too large/], [{ amazonPrice: 1e12 }, /0 or more/], [{ netProfit: 1e12 }, /too large/], [{}, /Nothing to save/]]) {
     res = await call(handler('patch', '/:id'), { params: { id }, body }); assert.strictEqual(res.statusCode, 400, JSON.stringify(body)); assert.match(res.body.error, message);
   }
   assert.strictEqual(saved.length, 0, 'a refused figure saves nothing');

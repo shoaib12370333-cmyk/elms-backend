@@ -116,6 +116,7 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
  * an extra API call.
  */
 const { buildLine: buildNetProfitLine, resolveNetProfit } = require('../services/netProfitService');
+const { applyMark } = require('../services/orderNoteMark');
 // What an order needs from its listing (title, picture, cost), that listing's import (the Amazon link and price) and its store; the rest stays in the database.
 const LISTING_FOR_ORDER = { path: 'listingId', select: 'title mainImage amazonPrice sku currency importId ebayListingId ebayAccountId', populate: { path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' } };
 const ACCOUNT_FOR_ORDER = { path: 'ebayAccountId', select: 'displayName storeName ebayUserId storeNumber' };
@@ -311,6 +312,28 @@ async function setBuyPrice(userId, id, price) {
   return doc ? serialize(doc) : null;
 }
 
+/**
+ * "Mark as ordered" (or Undo) with what the seller fills in: the date, and (when given) the buying price and the order earning of the Net Profit
+ * sheet. The mark "ELMS: ordered <date>" goes into the order's private note in ELMS after the seller's own text (and comes out on Undo). A key that
+ * is not given is left alone. An order that is already shipped is not turned back. @returns {Promise<{ order?: object, error?: 'not_found'|'shipped' }>}
+ */
+async function markOrdered(userId, id, { ordered, date, buyingPrice, orderEarning } = {}) {
+  const current = await Order.findOne({ _id: id, userId }).select('fulfillmentStatus sellerNote').lean();
+  if (!current) return { error: 'not_found' };
+  if (['shipped', 'delivered'].includes(current.fulfillmentStatus)) return { error: 'shipped' };
+  const when = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+  const num = (v) => (v === null || v === '' ? null : Number(Number(v).toFixed(2)));
+  const set = {
+    fulfillmentStatus: ordered ? 'ordered_from_amazon' : 'pending',
+    orderedAt: ordered ? when : null,
+    sellerNote: applyMark(current.sellerNote, ordered, when, 2000),
+  };
+  if (buyingPrice !== undefined) set.sheetAmazonPrice = num(buyingPrice);
+  if (orderEarning !== undefined) set.orderEarning = num(orderEarning);
+  const doc = await Order.findOneAndUpdate({ _id: id, userId }, { $set: set }, { new: true });
+  return doc ? { order: serialize(doc) } : { error: 'not_found' };
+}
+
 /** What happened to the "ordered" mark in the eBay note of an order: written (true), removed (false), or nothing changed (null); `error` says why it did not work (null = fine). */
 async function setEbayNoteState(userId, id, { written = null, error = null } = {}) {
   const set = { ebayNoteError: error ? String(error).slice(0, 300) : null };
@@ -371,6 +394,7 @@ function serialize(doc) {
     est_delivery_min: obj.estDeliveryMin || null,
     est_delivery_max: obj.estDeliveryMax || null,
     seller_note: obj.sellerNote || '',
+    ordered_at: obj.orderedAt || null,
     ebay_note_at: obj.ebayNoteAt || null,
     ebay_note_error: obj.ebayNoteError || null,
     sheet_amazon_price: obj.sheetAmazonPrice ?? null, // Net Profit sheet: typed by the seller
@@ -527,4 +551,4 @@ async function setSheetInputs(userId, id, { amazonPrice, orderEarning, netProfit
   return !!doc;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, _summaryCache: summaryCache };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, _summaryCache: summaryCache };

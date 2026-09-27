@@ -2,12 +2,12 @@
  * The Net Profit sheet: one line per order, with the money worked out in whole cents (never in floating point), so 0.1 + 0.2 style
  * mistakes cannot creep into a profit.
  *
- *   AMAZON PRICE   what the order cost on Amazon                                  typed by the seller, EMPTY until they type it
+ *   BUYING PRICE   what the order cost the seller to buy (on Amazon)              typed by the seller, EMPTY until they type it
  *   EBAY PRICE     what the order was sold for (the item price of the order line)  from the order
- *   PROFIT         EBAY PRICE - AMAZON PRICE                                        worked out
+ *   PROFIT         EBAY PRICE - BUYING PRICE                                        worked out
  *   ORDER EARNING  what eBay pays out for the order ("Order earnings" in Seller Hub)  typed by the seller
  *   EBAY COST      EBAY PRICE - ORDER EARNING (what eBay kept: fees ...)             worked out
- *   NET PROFIT     ORDER EARNING - AMAZON PRICE                                     worked out
+ *   NET PROFIT     ORDER EARNING - BUYING PRICE                                     worked out
  *
  * Every money column is for the whole order line (an order of 2 pieces has one price, one earning, one Amazon price). What cannot be
  * worked out yet (a figure is not typed) is empty, never 0. A net profit typed in the first version of the sheet is kept and shown
@@ -113,7 +113,7 @@ function paging({ paid, freeLines, offset, limit, total }) {
 }
 
 // ---------------------------------------------------------------- CSV
-const CSV_HEADER = ['Title', 'Order ID', 'Amazon price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Net profit', 'Currency', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN'];
+const CSV_HEADER = ['Title', 'Order ID', 'Buying price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Net profit', 'Currency', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN'];
 const quoted = (s) => '"' + String(s).replace(/"/g, '""') + '"';
 /** Text: quoted, and a text that would be read as a formula by Excel gets a ' in front. */
 const csvText = (s) => quoted(/^[=+\-@\t\r]/.test(String(s == null ? '' : s)) ? "'" + s : (s == null ? '' : s));
