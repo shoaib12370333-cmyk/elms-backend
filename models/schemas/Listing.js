@@ -3,10 +3,10 @@ const mongoose = require('mongoose');
 const listingSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    // Where this listing's product comes from. Amazon and CJdropshipping listings must never mix fields, APIs or credits - every
-    // job and service that touches a supplier branches on this. Required so a listing can never be silently ambiguous; existing
-    // rows are backfilled to 'amazon' by db.js migrateSourcePlatformDefault (they predate this field).
-    sourcePlatform: { type: String, enum: ['amazon', 'cj'], required: true, default: 'amazon' },
+    // Where this listing's product comes from. Amazon, CJdropshipping and AliExpress listings must never mix fields, APIs or
+    // credits - every job and service that touches a supplier branches on this. Required so a listing can never be silently
+    // ambiguous; existing rows are backfilled to 'amazon' by db.js migrateSourcePlatformDefault (they predate this field).
+    sourcePlatform: { type: String, enum: ['amazon', 'cj', 'aliexpress'], required: true, default: 'amazon' },
     // CJdropshipping's own ids for this product/variant. Set only when sourcePlatform is 'cj'; an Amazon listing's asin lives on
     // its Import (services/skuService requireAsinSku), never here, and these are never set on an Amazon listing.
     cjProductId: { type: String, default: null },
@@ -14,6 +14,10 @@ const listingSchema = new mongoose.Schema(
     // The CJ freight (shipping) cost last quoted for this variant (services/cjAdapter calcFreight), in USD - CJ profit includes
     // it, Amazon profit is untouched by this field (see models/listingsModel.js listingProfitAmount). null for Amazon listings.
     cjShippingCost: { type: Number, default: null },
+    // AliExpress's own ids for this product/sku. Set only when sourcePlatform is 'aliexpress' (services/skuService aliSkuFor
+    // builds the eBay sku from aliexpressSkuId, never the supplier's own sku text - same "never" rule CJ follows).
+    aliexpressProductId: { type: String, default: null },
+    aliexpressSkuId: { type: String, default: null },
     // Which of the user's (possibly several) connected eBay accounts this
     // listing belongs to / was published through. Null for drafts created
     // before an account was chosen.
@@ -119,5 +123,7 @@ listingSchema.index({ status: 1, publishStartedAt: 1 }); // the publish queue lo
 // The CJ duplicate check (findCjListingInStore): "has this CJ product+variant already been imported into this store". Sparse
 // so Amazon listings (cjProductId/cjVariantId both null) never crowd this index.
 listingSchema.index({ userId: 1, ebayAccountId: 1, cjProductId: 1, cjVariantId: 1 }, { sparse: true });
+// Same duplicate check for AliExpress (findAliexpressListingInStore), sparse for the same reason.
+listingSchema.index({ userId: 1, ebayAccountId: 1, aliexpressProductId: 1, aliexpressSkuId: 1 }, { sparse: true });
 
 module.exports = mongoose.model('Listing', listingSchema);

@@ -49,4 +49,17 @@ function finalizeEbaySku(value, context = 'product') {
   return sku.slice(0, MAX_EBAY_SKU);
 }
 
-module.exports = { normalizeAsinSku, requireAsinSku, cjSkuFor, finalizeEbaySku, MAX_EBAY_SKU };
+/**
+ * ELMS AliExpress SKU policy: eBay SKU is "AE-" + the AliExpress sku's OWN id (aliexpressSkuId, AliExpress's `sku_id` from
+ * aliexpress.ds.product.get's ae_item_sku_info_dtos) - never the supplier's own sku_code/barcode text, for the same reason as
+ * cjSkuFor above (a supplier's own sku text can be any length/shape, and none of that is ELMS' to send to eBay). The "AE-"
+ * prefix keeps it from ever colliding with an Amazon ASIN (requireAsinSku) or a CJ "CJ-..." sku (cjSkuFor) in the same
+ * {userId, ebayAccountId, sku} unique index.
+ */
+function aliSkuFor(aliexpressSkuId, context = 'AliExpress product') {
+  const clean = String(aliexpressSkuId || '').trim();
+  if (!clean) throw new Error(`An AliExpress sku id is required to create an eBay SKU for this ${context}.`);
+  return ('AE-' + clean).slice(0, MAX_EBAY_SKU);
+}
+
+module.exports = { normalizeAsinSku, requireAsinSku, cjSkuFor, aliSkuFor, finalizeEbaySku, MAX_EBAY_SKU };

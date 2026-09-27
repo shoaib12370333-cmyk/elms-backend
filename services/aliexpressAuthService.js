@@ -36,19 +36,21 @@ function sign(path, params, secret) {
   return crypto.createHmac('sha256', secret).update(message, 'utf8').digest('hex').toUpperCase();
 }
 
-/** A system-tool API (/auth/token/create, /auth/token/refresh) - called at GATEWAY + path directly, form-urlencoded POST. */
-async function callSystemApi(path, params) {
+/** Signs and POSTs (form-urlencoded) to GATEWAY + url, signing against signPath (see sign() above). Shared by system and business calls. */
+async function postSigned(url, signPath, params) {
   const key = appKey();
   const secret = appSecret();
   if (!key || !secret) throw new Error('ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET are not configured.');
 
-  const withSystem = { ...params, app_key: key, timestamp: String(Date.now()), sign_method: 'sha256' };
-  const signature = sign(path, withSystem, secret);
+  const clean = {};
+  Object.entries(params || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') clean[k] = v; });
+  const withSystem = { ...clean, app_key: key, timestamp: String(Date.now()), sign_method: 'sha256' };
+  const signature = sign(signPath, withSystem, secret);
   const body = new URLSearchParams({ ...withSystem, sign: signature });
 
   let res;
   try {
-    res = await axios.post(GATEWAY + path, body.toString(), {
+    res = await axios.post(GATEWAY + url, body.toString(), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
       timeout: 20000, validateStatus: () => true,
     });
@@ -58,9 +60,25 @@ async function callSystemApi(path, params) {
   const data = res.data;
   if (!data || typeof data !== 'object') throw new Error(`AliExpress sent back something unexpected (HTTP ${res.status}).`);
   if (data.code && String(data.code) !== '0') {
-    throw Object.assign(new Error(data.message || `AliExpress error ${data.code}`), { aliCode: data.code });
+    throw Object.assign(new Error(data.rsp_msg || data.message || `AliExpress error ${data.code}`), { aliCode: data.code });
   }
   return data;
+}
+
+/** A system-tool API (/auth/token/create, /auth/token/refresh) - called at GATEWAY + path directly. */
+async function callSystemApi(path, params) {
+  return postSigned(path, path, params);
+}
+
+/**
+ * A business/DS API (e.g. aliexpress.ds.product.get) - called at GATEWAY + "/sync" with the API name in a "method" param and
+ * the seller's access token in a "session" param (the "session" name is standard across Alibaba's IOP/TOP-protocol platforms
+ * for this, matching how the docs' own IopClient demo passes accessToken as a separate argument to client.execute() - this
+ * has NOT been confirmed against a real AliExpress call; see PRODUCTION-SETUP.md).
+ */
+async function callBusinessApi(method, accessToken, params) {
+  const data = await postSigned('/sync', method, { ...params, method, session: accessToken });
+  return data.result !== undefined ? data.result : data;
 }
 
 /** The URL to send the seller to for the AliExpress consent screen (routes/aliexpressConnect.js /start). */
@@ -98,4 +116,4 @@ async function refreshAccessToken(refreshToken) {
   return tokenResult(data);
 }
 
-module.exports = { buildAuthorizationUrl, exchangeCodeForToken, refreshAccessToken, sign, callSystemApi, GATEWAY };
+module.exports = { buildAuthorizationUrl, exchangeCodeForToken, refreshAccessToken, sign, callSystemApi, callBusinessApi, GATEWAY };

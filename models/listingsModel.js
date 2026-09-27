@@ -173,6 +173,62 @@ async function upsertCjDraft(userId, { importId, ebayAccountId, marketplaceId, c
 }
 
 /**
+ * The AliExpress equivalent of upsertCjDraft above (services/aliexpressImportService.js). Found by aliexpressProductId/
+ * aliexpressSkuId (never by sku - findAliexpressListingInStore), uses aliSkuFor (built from the AliExpress sku's own id,
+ * never the supplier's own sku text - see services/skuService.js) instead of requireAsinSku/cjSkuFor.
+ */
+async function upsertAliexpressDraft(userId, { importId, ebayAccountId, marketplaceId, aliexpressProductId, aliexpressSkuId, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule }) {
+  const { aliSkuFor } = require('../services/skuService');
+  const normalizedSku = aliSkuFor(aliexpressSkuId, 'AliExpress draft');
+  const accountKey = ebayAccountId || null;
+  const existing = (await Listing.findOne({ userId, sourcePlatform: 'aliexpress', aliexpressProductId, aliexpressSkuId, ebayAccountId: accountKey }))
+    || (accountKey ? await Listing.findOne({ userId, sourcePlatform: 'aliexpress', aliexpressProductId, aliexpressSkuId, ebayAccountId: null }) : null);
+
+  if (existing && existing.status !== 'draft') return serialize(existing);
+
+  const sellerEdited = !!existing?.draftCustomized;
+  const normalizedAmazonPrice = normalizeAmazonPrice(amazonPrice);
+  const update = {
+    userId,
+    importId: importId || null,
+    sourcePlatform: 'aliexpress',
+    aliexpressProductId,
+    aliexpressSkuId,
+    sku: normalizedSku,
+    ...(sellerEdited ? {} : {
+      title: title || null,
+      mainImage: mainImage || null,
+      sellPrice: sellPrice ?? null,
+      pricingRule: pricingRule && typeof pricingRule === 'object' ? pricingRule : null,
+      description: typeof description === 'string' ? description : '',
+      bulletPoints: Array.isArray(bulletPoints) ? bulletPoints.map((v) => String(v ?? '').trim()).filter(Boolean) : [],
+      specifications: Array.isArray(specifications) ? specifications : [],
+      ebayAspects: ebayAspects && typeof ebayAspects === 'object' ? ebayAspects : {},
+      markupPercent: Number.isFinite(Number(markupPercent)) ? Number(markupPercent) : 0,
+      currency: currency || 'USD',
+      quantity: quantity ?? 1,
+      categoryId: categoryId || null,
+      amazonPrice: normalizedAmazonPrice,
+      marginAmount: Number.isFinite(Number(marginAmount)) ? Number(marginAmount) : (Number.isFinite(Number(sellPrice)) && normalizedAmazonPrice !== null ? Number((Number(sellPrice) - normalizedAmazonPrice).toFixed(2)) : null),
+    }),
+    status: 'draft',
+  };
+  if (sellerEdited && normalizedAmazonPrice !== null) update.amazonPrice = normalizedAmazonPrice;
+  if (ebayAccountId !== undefined && !existing?.ebayAccountId) update.ebayAccountId = ebayAccountId || null;
+  if (marketplaceId !== undefined && !existing?.marketplaceId) update.marketplaceId = marketplaceId || null;
+  if (!existing || !Array.isArray(existing.images) || existing.images.length === 0) {
+    update.images = Array.isArray(images) ? images.slice(0, 24) : [];
+  }
+
+  const doc = await Listing.findOneAndUpdate(
+    existing ? { _id: existing._id } : { userId, sourcePlatform: 'aliexpress', aliexpressProductId, aliexpressSkuId, ebayAccountId: accountKey },
+    update,
+    { new: true, upsert: true }
+  );
+  return serialize(doc);
+}
+
+/**
  * The Amazon links of a user's drafts (the "Ready to publish" list of the Drafts page: drafts and drafts that failed to publish), oldest
  * first, each link once. A draft with no saved link is left out (no link is ever made up).
  * @returns {Promise<string[]>}
@@ -305,6 +361,15 @@ async function findCjListingInStore(userId, cjProductId, cjVariantId, ebayAccoun
   const accountKey = ebayAccountId || null;
   const doc = (await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: accountKey }))
     || (accountKey ? await Listing.findOne({ userId, sourcePlatform: 'cj', cjProductId, cjVariantId, ebayAccountId: null }) : null);
+  return doc ? serialize(doc) : null;
+}
+
+/** The AliExpress equivalent of findCjListingInStore above: "has this AliExpress product+sku already been imported into this store". */
+async function findAliexpressListingInStore(userId, aliexpressProductId, aliexpressSkuId, ebayAccountId) {
+  if (!aliexpressProductId || !aliexpressSkuId) return null;
+  const accountKey = ebayAccountId || null;
+  const doc = (await Listing.findOne({ userId, sourcePlatform: 'aliexpress', aliexpressProductId, aliexpressSkuId, ebayAccountId: accountKey }))
+    || (accountKey ? await Listing.findOne({ userId, sourcePlatform: 'aliexpress', aliexpressProductId, aliexpressSkuId, ebayAccountId: null }) : null);
   return doc ? serialize(doc) : null;
 }
 
@@ -1051,6 +1116,8 @@ function serialize(doc) {
     cj_product_id: obj.cjProductId || null,
     cj_variant_id: obj.cjVariantId || null,
     cj_shipping_cost: Number.isFinite(Number(obj.cjShippingCost)) ? Number(obj.cjShippingCost) : null,
+    aliexpress_product_id: obj.aliexpressProductId || null,
+    aliexpress_sku_id: obj.aliexpressSkuId || null,
     title: obj.title,
     main_image: obj.mainImage,
     images: Array.isArray(obj.images) ? obj.images : [],
@@ -1238,6 +1305,7 @@ module.exports = {
   createListing,
   upsertDraft,
   upsertCjDraft,
+  upsertAliexpressDraft,
   getListingById,
   getListingsForDelete,
   deleteListingsMany,
@@ -1257,6 +1325,7 @@ module.exports = {
   listListingsBySkus,
   findListingInStore,
   findCjListingInStore,
+  findAliexpressListingInStore,
   listListings,
   listListingsPage,
   listListingIds,
