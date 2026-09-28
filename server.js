@@ -189,6 +189,11 @@ app.use('/api/aliexpress', require('./routes/aliexpress'));
 app.use('/api/orders', ordersRoute);
 app.use('/api/net-profit', netProfitRoute);
 
+// Public buyer-facing tracking page (elmstool.com/track/<code>) and 17TRACK's status-push webhook - both public,
+// neither carries a session; see routes/publicTracking.js and routes/track17Webhook.js for why each is safe to expose.
+app.use('/api/track', require('./routes/publicTracking'));
+app.use('/api/track17-webhook', require('./routes/track17Webhook'));
+
 // Manual stock check trigger (for testing the stock monitor)
 app.use('/api/stock-check', stockCheckRoute);
 

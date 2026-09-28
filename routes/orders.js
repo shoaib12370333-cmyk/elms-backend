@@ -7,6 +7,7 @@ const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = r
 const { syncAccountOrders } = require('../services/orderSyncService');
 const { backfillOrderImagesForUser, fillMissingOrderImages } = require('../services/orderImageService');
 const { convertTracking } = require('../services/trackingConversionService');
+const { createOrGetForOrder: createOrGetTrackingLink, getForOrder: getTrackingLinkForOrder } = require('../models/trackingLinksModel');
 const { requireAuth } = require('../middleware/requireAuth');
 const { fetchAndSaveDraft } = require('./fetchProduct');
 const { getEbayAccountById } = require('../models/ebayAccountsModel');
@@ -281,6 +282,16 @@ router.post('/tracking/convert', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/orders/:id/tracking-link
+ * The buyer-facing tracking-page code for an order that already has a tracking number saved (null if none yet -
+ * this never creates one; PUT /:id/tracking does that).
+ */
+router.get('/:id/tracking-link', requireAuth, async (req, res) => {
+  const link = await getTrackingLinkForOrder(req.userId, req.params.id);
+  res.json({ success: true, trackingCode: link?.code || null });
+});
+
 router.put('/:id/tracking', requireAuth, async (req, res) => {
   const { trackingNumber, shippingCarrier, carrier } = req.body;
   const sourceCarrier = shippingCarrier || carrier;
@@ -323,7 +334,18 @@ router.put('/:id/tracking', requireAuth, async (req, res) => {
   }
 
   const updated = await setTracking(req.userId, req.params.id, converted.trackingNumber, converted.shippingCarrierCode);
-  res.json({ success: true, order: updated, trackingConversion: converted, ebayNotified, ebayError });
+
+  // A buyer-facing code for elmstool.com/track/<code> - never the real tracking number or carrier, so it never
+  // says which supplier the order came from. Not fatal: the order is already saved above either way.
+  let trackingCode = null;
+  try {
+    const link = await createOrGetTrackingLink(req.userId, req.params.id, converted.trackingNumber);
+    trackingCode = link.code;
+  } catch (err) {
+    console.warn('Could not create a tracking page code:', err.message);
+  }
+
+  res.json({ success: true, order: updated, trackingConversion: converted, ebayNotified, ebayError, trackingCode });
 });
 
 /**
