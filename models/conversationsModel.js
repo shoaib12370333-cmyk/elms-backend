@@ -1,6 +1,19 @@
 const Conversation = require('./schemas/Conversation');
+const EbayAccount = require('./schemas/EbayAccount');
 const { accountLabel, publicUsername } = require('../services/accountLabel');
 const { messageToText } = require('../services/messageTextService');
+
+/**
+ * A "combined, every store" query (no accountId picked) never shows a disconnected store's conversations - they are
+ * hidden, not deleted (models/ebayAccountsModel.js removeEbayAccount), and reappear once the seller reconnects that
+ * store. A query already scoped to one accountId is untouched, whether that store happens to be connected or not.
+ */
+async function excludeDisconnectedAccounts(query, userId) {
+  if (query.ebayAccountId) return query;
+  const disconnected = await EbayAccount.find({ userId, disconnectedAt: { $ne: null } }).select('_id').lean();
+  if (disconnected.length) query.ebayAccountId = { $nin: disconnected.map((d) => d._id) };
+  return query;
+}
 
 /**
  * Creates or updates one conversation from an eBay sync, matched by the
@@ -55,6 +68,7 @@ async function listConversations(userId, accountId, options = {}) {
     const rx = new RegExp(String(options.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     query.$or = [{ subject: rx }, { otherPartyUsername: rx }, { lastMessageSnippet: rx }];
   }
+  query = await excludeDisconnectedAccounts(query, userId);
   const docs = await Conversation.find(query).populate('ebayAccountId', 'ebayUserId displayName storeName storeNumber').sort({ lastMessageDate: -1 }).lean();
   return docs.map((doc) => {
     const serialized = serialize(doc);
@@ -70,7 +84,8 @@ async function listConversations(userId, accountId, options = {}) {
  * unread - powers the notification bell's badge count.
  */
 async function countUnreadConversations(userId, accountId = null) {
-  return Conversation.countDocuments({ userId, isRead: false, ...(accountId ? { ebayAccountId: accountId } : {}) });
+  const query = await excludeDisconnectedAccounts({ userId, isRead: false, ...(accountId ? { ebayAccountId: accountId } : {}) }, userId);
+  return Conversation.countDocuments(query);
 }
 
 async function getConversationById(userId, id) {

@@ -21,6 +21,7 @@ const fakes = {
   },
   './schemas/Listing': { distinct: async (field, q) => { distinctCalls.push([field, q]); return distinctData[field] || []; }, find: (q) => { const picked = { limit: () => ({ lean: async () => { seen.listingQuery = q; return listings; } }), populate: () => ({ lean: async () => [] }) }; return { select: () => picked, populate: () => ({ lean: async () => [] }) }; } },
   './schemas/Import': {},
+  './schemas/EbayAccount': { find: () => ({ select: () => ({ lean: async () => [] }) }) },
 };
 const orig = Module._load;
 Module._load = function (request, parent) { if (fakes[request] && parent && /ordersModel\.js$/.test(parent.filename)) return fakes[request]; return orig.apply(this, arguments); };

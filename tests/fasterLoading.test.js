@@ -40,6 +40,7 @@ const idOf = (s) => ({ toString: () => s });
   const fakes = {
     './schemas/Listing': { find: (q) => { seen.query = q; const c = { select: (s) => { seen.select = s; return c; }, populate: (p) => { seen.populates.push(p); return c; }, sort: (s) => { seen.sort = s; return c; }, lean: async () => { seen.lean = true; return [plainListing]; } }; return c; } },
     './schemas/Order': { aggregate: async () => [{ _id: 'l1', sold: 3 }] },
+    './schemas/EbayAccount': { find: () => ({ select: () => ({ lean: async () => [] }) }) },
     '../services/skuService': { normalizeAsinSku: (s) => s, requireAsinSku: (s) => s },
   };
   const orig = Module._load;
@@ -73,6 +74,7 @@ const idOf = (s) => ({ toString: () => s });
   const orderFakes = {
     './schemas/Order': { find: (q) => { finds.push(q); const c = { select: (s) => { orderSeen.select = s; return c; }, populate: (p) => { orderSeen.populate = p; return c; }, lean: async () => orders }; return c; } },
     './schemas/Listing': {}, './schemas/Import': {},
+    './schemas/EbayAccount': { find: () => ({ select: () => ({ lean: async () => [] }) }) },
   };
   Module._load = function (request, parent) { if (orderFakes[request] && parent && /ordersModel\.js$/.test(parent.filename)) return orderFakes[request]; return orig.apply(this, arguments); };
   delete require.cache[require.resolve('../models/ordersModel')];

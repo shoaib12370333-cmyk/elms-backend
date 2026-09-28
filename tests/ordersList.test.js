@@ -32,6 +32,7 @@ const fakes = {
   },
   './schemas/Listing': {},
   './schemas/Import': {},
+  './schemas/EbayAccount': { find: () => ({ select: () => ({ lean: async () => [] }) }) },
 };
 
 const origLoad = Module._load;

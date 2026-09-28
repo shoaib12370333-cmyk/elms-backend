@@ -40,7 +40,7 @@ async function runStatsSync() {
 
   const accountIds = await Listing.distinct('ebayAccountId', { status: 'published', ebayListingId: { $ne: null }, ebayAccountId: { $ne: null } });
   if (!accountIds.length) return;
-  let accounts = await EbayAccount.find({ _id: { $in: accountIds } }).lean();
+  let accounts = await EbayAccount.find({ _id: { $in: accountIds }, disconnectedAt: null }).lean();
   const active = await activeUserIds();
   const total = accounts.length;
   if (active) accounts = accounts.filter((a) => active.has(String(a.userId)));

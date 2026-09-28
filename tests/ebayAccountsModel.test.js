@@ -16,7 +16,9 @@ const makeDoc = (o) => {
   return d;
 };
 const matches = (d, q) => Object.entries(q).every(([k, v]) => {
-  if (v && typeof v === 'object' && '$ne' in v) return d[k] !== v.$ne;
+  if (v && typeof v === 'object' && '$ne' in v) return d[k] !== v.$ne && !(v.$ne === null && d[k] === undefined);
+  // Real MongoDB matches {field: null} against a document missing the field entirely, not only one explicitly set to null.
+  if (v === null) return d[k] === null || d[k] === undefined;
   return d[k] === v;
 });
 const query = (list) => {
@@ -106,6 +108,36 @@ Module._load = origLoad;
   assert.strictEqual(docs.find((d) => d.userId === 'u3').storeNumber, null, 'another user is untouched');
   // asking again changes nothing
   assert.deepStrictEqual((await model.listEbayAccounts('u2')).map((x) => x.storeNumber), [8, 9, 7]);
+
+  // ---- disconnect is non-destructive: the row stays (disconnectedAt set instead), never counted against the limit,
+  // never the "active" one any more; reconnecting the SAME ebayUserId clears it and makes it active again ----
+  docs.length = 0; seq = 0;
+  const s1 = makeDoc({ userId: 'u4', ebayUserId: 'seller-a', isActive: true, storeNumber: 1 });
+  const s2 = makeDoc({ userId: 'u4', ebayUserId: 'seller-b', storeNumber: 2 });
+  const removed = await model.removeEbayAccount('u4', s1._id);
+  assert.strictEqual(removed, true);
+  assert.strictEqual(docs.length, 2, 'the row is never deleted');
+  assert.ok(s1.disconnectedAt instanceof Date, 'disconnectedAt is set');
+  assert.strictEqual(s1.isActive, false, 'a disconnected store is never "active"');
+  assert.strictEqual(s2.isActive, true, 'the other store was promoted to active since s1 was the active one');
+
+  const limit = await model.getAccountLimitStatus('u4');
+  assert.strictEqual(limit.connected, 1, 'the disconnected store does not count against the limit');
+
+  const list1 = await model.listEbayAccounts('u4');
+  assert.strictEqual(list1.length, 2, 'Settings still shows both - the disconnected one too');
+  assert.strictEqual(list1.find((x) => x.id === s1._id).connected, false);
+  assert.strictEqual(list1.find((x) => x.id === s2._id).connected, true);
+
+  assert.strictEqual((await model.getActiveEbayAccount('u4')).id, s2._id, 'the disconnected store is never picked as the default active one');
+
+  // reconnecting the SAME eBay account (same ebayUserId) revives it: same row, un-hidden, active again
+  const reconnected = await model.addEbayAccount('u4', { ebayUserId: 'seller-a', refreshToken: 'new-token', marketplaceId: 'EBAY_US' });
+  assert.strictEqual(reconnected.id, s1._id, 'the very same account row - not a new one');
+  assert.strictEqual(s1.disconnectedAt, null);
+  assert.strictEqual(s1.isActive, true);
+  assert.strictEqual(s2.isActive, false, 'only one store is active at a time');
+  assert.strictEqual((await model.getAccountLimitStatus('u4')).connected, 2, 'back to counting against the limit');
 
   console.log('ebay accounts model tests passed');
   process.exit(0);

@@ -2,9 +2,22 @@ const mongoose = require('mongoose');
 const Order = require('./schemas/Order');
 const Listing = require('./schemas/Listing');
 const Import = require('./schemas/Import');
+const EbayAccount = require('./schemas/EbayAccount');
 const { warmRates, convertCached } = require('../services/currencyService');
 const { sourceCurrency } = require('../config/amazonDomains');
 const { accountLabel, publicUsername } = require('../services/accountLabel');
+
+/**
+ * A "combined, every store" query (no accountId picked) never shows a disconnected store's orders - they are hidden, not
+ * deleted (models/ebayAccountsModel.js removeEbayAccount), and reappear once the seller reconnects that store. A query
+ * already scoped to one accountId is untouched, whether that store happens to be connected or not.
+ */
+async function excludeDisconnectedAccounts(query, userId) {
+  if (query.ebayAccountId) return query;
+  const disconnected = await EbayAccount.find({ userId, disconnectedAt: { $ne: null } }).select('_id').lean();
+  if (disconnected.length) query.ebayAccountId = { $nin: disconnected.map((d) => d._id) };
+  return query;
+}
 
 /**
  * Creates or updates one order line item from an eBay sync, matched by
@@ -145,7 +158,7 @@ async function attachMissingListings(userId, docs) {
 }
 
 async function listOrders(userId, accountId) {
-  const query = accountId ? { userId, ebayAccountId: accountId } : { userId };
+  const query = await excludeDisconnectedAccounts(accountId ? { userId, ebayAccountId: accountId } : { userId }, userId);
   const docs = await Order.find(query)
     .populate(LISTING_FOR_ORDER)
     .populate(ACCOUNT_FOR_ORDER)
@@ -424,7 +437,7 @@ async function ordersSummary(userId, accountId = null) {
   const key = String(userId) + '|' + String(accountId || '');
   const hit = summaryCache.get(key);
   if (hit && Date.now() - hit.at < SUMMARY_TTL_MS) return hit.value;
-  const query = accountId ? { userId, ebayAccountId: accountId } : { userId };
+  const query = await excludeDisconnectedAccounts(accountId ? { userId, ebayAccountId: accountId } : { userId }, userId);
   const docs = await Order.find(query)
     .select('userId listingId ebayAccountId sku legacyItemId quantity salePrice currency buyPriceOverride ebayCancelStatus ebayPaymentStatus fulfillmentStatus lineItemStatus ebayOrderFulfillmentStatus')
     .populate(LISTING_FOR_ORDER)
@@ -488,7 +501,7 @@ async function netProfitQuery(userId, { accountId, from, to, q, includeCancelled
   }
   and.push(await elmsOrdersCondition(userId));
   query.$and = and;
-  return query;
+  return excludeDisconnectedAccounts(query, userId);
 }
 
 /**
@@ -500,7 +513,9 @@ async function netProfitSummary(userId, filters = {}) {
   const base = await netProfitQuery(userId, filters);
   const cast = (id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(String(id)));
   const match = { ...base, userId: cast(userId) };
-  if (match.ebayAccountId) match.ebayAccountId = cast(match.ebayAccountId);
+  // ebayAccountId is either one plain id (cast it) or a { $nin: [...] } exclusion of disconnected stores (excludeDisconnectedAccounts -
+  // its ids are already real ObjectId instances straight from Mongo, never re-cast the whole operator object as if it were one id).
+  if (match.ebayAccountId && !match.ebayAccountId.$nin) match.ebayAccountId = cast(match.ebayAccountId);
   const typed = (field) => ({ $ne: [{ $ifNull: [field, null] }, null] });
   const net = { $cond: [{ $and: [typed('$orderEarning'), typed('$sheetAmazonPrice')] }, { $subtract: ['$orderEarning', '$sheetAmazonPrice'] }, { $ifNull: ['$netProfit', null] }] };
   const [rows, ordersTotal] = await Promise.all([

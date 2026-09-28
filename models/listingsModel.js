@@ -1,4 +1,5 @@
 const Listing = require('./schemas/Listing');
+const EbayAccount = require('./schemas/EbayAccount');
 const { normalizeAsinSku, requireAsinSku } = require('../services/skuService');
 const { accountLabel, publicUsername } = require('../services/accountLabel');
 const { isMissingLocalImage } = require('../services/imageStorageService');
@@ -487,8 +488,7 @@ async function claimUnassignedListings(userId, accountId) {
   try {
     const orphans = await Listing.find({ userId, ebayAccountId: null }).populate({ path: 'importId', select: 'amazonUrl' }).lean();
     if (!orphans.length) return 0;
-    const EbayAccount = require('./schemas/EbayAccount');
-    const accounts = await EbayAccount.find({ userId }).sort({ createdAt: 1 }).lean();
+    const accounts = await EbayAccount.find({ userId, disconnectedAt: null }).sort({ createdAt: 1 }).lean();
     if (!accounts.length) return 0;
     const byMarket = new Map();
     for (const a of accounts) if (!byMarket.has(a.marketplaceId || 'EBAY_US')) byMarket.set(a.marketplaceId || 'EBAY_US', a);
@@ -557,6 +557,7 @@ async function listListings(userId, status, accountId = null) {
   await claimUnassignedIfNeeded(userId, accountId);
   const query = status ? { userId, status } : { userId };
   if (accountId) query.ebayAccountId = accountId;
+  await excludeDisconnectedAccounts(query, userId);
   const docs = await Listing.find(query).select(LIST_EXCLUDE).populate({ path: 'importId', select: IMPORT_FOR_LIST }).populate({ path: 'ebayAccountId', select: ACCOUNT_FOR_LIST }).sort({ updatedAt: -1 }).lean();
   const soldByListing = await getSoldByListing(userId);
   return docs.map((doc) => {
@@ -612,6 +613,18 @@ function pageQuery(userId, { statuses = [], accountId = null, q = '', source = n
     const re = new RegExp(escapeRegExp(text), 'i');
     query.$or = [{ title: re }, { sku: re }, { ebayListingId: re }, { note: re }];
   }
+  return query;
+}
+
+/**
+ * A "combined, every store" query (no accountId picked) never shows a disconnected store's listings - they are hidden,
+ * not deleted (models/ebayAccountsModel.js removeEbayAccount), and reappear once the seller reconnects that store. A
+ * query already scoped to one accountId is untouched, whether that store happens to be connected or not.
+ */
+async function excludeDisconnectedAccounts(query, userId) {
+  if (query.ebayAccountId) return query;
+  const disconnected = await EbayAccount.find({ userId, disconnectedAt: { $ne: null } }).select('_id').lean();
+  if (disconnected.length) query.ebayAccountId = { $nin: disconnected.map((d) => d._id) };
   return query;
 }
 
@@ -723,7 +736,7 @@ async function readPageRows(userId, ids, { withVero = false } = {}) {
 async function listListingsPage(userId, { statuses = [], accountId = null, q = '', sort = 'newest', vero = false, source = null, page, limit } = {}) {
   const { page: p, limit: l } = pageOptions({ page, limit });
   await claimUnassignedIfNeeded(userId, accountId);
-  const query = pageQuery(userId, { statuses, accountId, q, source });
+  const query = await excludeDisconnectedAccounts(pageQuery(userId, { statuses, accountId, q, source }), userId);
   let veroTerms = null;
   if (vero) {
     veroTerms = await scanVero(userId, query);
@@ -765,7 +778,7 @@ async function listListingsPage(userId, { statuses = [], accountId = null, q = '
 
 /** Every listing id of a filter (for "Select all N"), at most 20,000. */
 async function listListingIds(userId, { statuses = [], accountId = null, q = '', vero = false, source = null } = {}) {
-  const query = pageQuery(userId, { statuses, accountId, q, source });
+  const query = await excludeDisconnectedAccounts(pageQuery(userId, { statuses, accountId, q, source }), userId);
   if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
   const docs = await Listing.find(query).select('_id').sort({ createdAt: -1, _id: -1 }).limit(20000).lean();
   return docs.map((d) => String(d._id));
@@ -827,7 +840,7 @@ async function getListingFull(userId, id) {
 
 /** Calls `fn(rows)` with the listings of a filter, a thousand at a time (for the CSV file), newest first: never all of them in memory at once. */
 async function eachListingChunk(userId, { statuses = [], accountId = null, q = '', vero = false, source = null } = {}, fn) {
-  const query = pageQuery(userId, { statuses, accountId, q, source });
+  const query = await excludeDisconnectedAccounts(pageQuery(userId, { statuses, accountId, q, source }), userId);
   if (vero) query._id = { $in: [...(await scanVero(userId, query)).keys()] };
   let before = null;
   for (;;) {

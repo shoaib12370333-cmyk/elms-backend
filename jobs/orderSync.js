@@ -59,7 +59,7 @@ async function chargeDailyOrderSyncFeeIfDue(user) {
  * is what normally keeps them current.
  */
 async function runOrderSync() {
-  const accounts = await EbayAccount.find();
+  const accounts = await EbayAccount.find({ disconnectedAt: null });
 
   if (!accounts.length) {
     console.log('[order-sync] No eBay accounts are connected.');
@@ -119,7 +119,7 @@ async function triggerImmediateSyncForNotification(payload) {
     return;
   }
 
-  const account = await EbayAccount.findOne({ ebayUserId: ebayUsername });
+  const account = await EbayAccount.findOne({ ebayUserId: ebayUsername, disconnectedAt: null });
   if (!account) {
     console.warn(`[order-sync] Received a notification for an eBay account we don't have connected: ${ebayUsername}`);
     return;

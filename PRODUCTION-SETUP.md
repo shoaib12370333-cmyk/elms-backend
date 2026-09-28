@@ -5,17 +5,33 @@ This build is configured to use eBay Production when `EBAY_ENV=production` (or w
 ## eBay Production
 
 1. In the eBay Developer Portal, create/use the **Production** keyset.
-2. Assign these OAuth scopes to the keyset:
+2. Assign these OAuth scopes to the keyset (must match `services/ebayUserAuthService.js` `SCOPES` and the duplicated inline copy in `services/ebayAuthService.js` exactly - see the warning comment in that file):
    - `https://api.ebay.com/oauth/api_scope`
    - `https://api.ebay.com/oauth/api_scope/sell.inventory`
    - `https://api.ebay.com/oauth/api_scope/sell.account`
    - `https://api.ebay.com/oauth/api_scope/sell.fulfillment`
+   - `https://api.ebay.com/oauth/api_scope/sell.finances`
    - `https://api.ebay.com/oauth/api_scope/commerce.identity.readonly`
+   - `https://api.ebay.com/oauth/api_scope/commerce.message`
    - `https://api.ebay.com/oauth/api_scope/commerce.notification.subscription`
 3. Configure the Production RuName's accepted-auth URL to:
    `https://YOUR-BACKEND-DOMAIN/api/ebay-connect/callback`
 4. Set `EBAY_ENV=production` and use the Production Client ID, Client Secret, and RuName.
 5. Reconnect every existing eBay account after changing scopes so the new consent is stored in its refresh token.
+
+## Disconnecting an eBay account is now non-destructive
+
+**Before this change, "Disconnect" in Settings permanently deleted everything ELMS kept for that store** (`models/ebayAccountsModel.js` `purgeStoreData`: every listing/draft, order, message/conversation, import, notification - a hard `deleteMany`, not a soft delete). A seller who disconnected and reconnected the same store to pick up a new OAuth scope (e.g. `sell.finances` above) lost their entire Drafts/Live listings/Orders/Messages history for it - the live listings on eBay itself were never touched, but ELMS's own copy of everything about them was gone. This is why every seller had to be told, clearly, to reconnect WITHOUT pressing Disconnect first.
+
+**Disconnect is now soft**: `EbayAccount.disconnectedAt` is set (row and all its data kept exactly as they are) instead of deleting anything. A disconnected store:
+- Is hidden from every "combined, every store" view (`models/listingsModel.js`, `models/ordersModel.js`, `models/conversationsModel.js` `excludeDisconnectedAccounts`) - Drafts, Live listings, Orders, Messages. Asking for that ONE store by its account id still shows its data (nothing to hide from the seller who explicitly wants to look at it).
+- Is excluded from every background job's account loop (`jobs/orderSync.js`, `jobs/orderEarningsSync.js`, `jobs/conversationSync.js`, `jobs/statsSync.js`) - a disconnected store is never synced or charged for sync while disconnected.
+- Does not count against the seller's eBay-account connection limit (`getAccountLimitStatus`).
+- Shows in Settings with a "Disconnected" badge and a "Reconnect" button (the same OAuth flow as "Connect an eBay account" - `addEbayAccount` matches by `ebayUserId` and, finding the disconnected row, clears `disconnectedAt`, makes it active again, and everything reappears immediately across every page).
+
+`models/ebayAccountsModel.js` also exports `permanentlyDeleteEbayAccount` - the OLD destructive behavior, kept for a genuinely-final "forget this store forever" action, but it is **not wired to any route or UI button** as of this change (Settings' "Disconnect" always calls the safe `removeEbayAccount` now). Wire it up deliberately, with its own clear warning, if/when that's actually needed.
+
+**Recovering data already lost by an old, destructive disconnect** (before this fix shipped) is not something the app can do - if that happened, check whether the MongoDB hosting plan keeps automatic backups (e.g. MongoDB Atlas M10+ clusters have continuous backups under the cluster's "Backup" tab) and restore from a snapshot taken before the disconnect.
 
 ## Business Policies and location
 
