@@ -27,7 +27,7 @@ const call = async (method, p, req) => { const res = fakeRes(); await handler(me
   let res = await call('get', '/');
   assert.deepStrictEqual(res.body.words, []);
   assert.ok(res.body.suggestions.includes('nike') && res.body.suggestions.length > 300, 'the starter list is offered as suggestions');
-  assert.strictEqual(res.body.max, 500);
+  assert.strictEqual(res.body.max, 700);
 
   // Enter adds one word (lowercased, tidy), a duplicate is ignored
   res = await call('post', '/words', { body: { word: '  Nike ' } });
@@ -59,11 +59,11 @@ const call = async (method, p, req) => { const res = fakeRes(); await handler(me
   assert.deepStrictEqual(await svc.getVeroWordsOf('u2'), ['gucci'], 'another user is untouched');
 
   // the limit
-  store.u1.veroWords = Array.from({ length: 499 }, (_, i) => 'word' + i);
+  store.u1.veroWords = Array.from({ length: 699 }, (_, i) => 'word' + i);
   res = await call('post', '/words', { body: { word: 'one more' } });
   assert.strictEqual(res.body.success, true);
   res = await call('post', '/words', { body: { word: 'over the limit' } });
   assert.strictEqual(res.statusCode, 400);
-  assert.match(res.body.error, /up to 500/);
+  assert.match(res.body.error, /up to 700/);
   console.log('vero settings tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
