@@ -5,9 +5,11 @@ const { listOrdersNeedingEarnings, setOrderEarningsBulk } = require('../models/o
 const { fetchSaleTransactionsForOrder, netEarningFromTransactions } = require('../services/ebayFinancesService');
 const { acquireLock } = require('../services/jobLockService');
 
-// Gives eBay time to settle a sale into a Finances transaction before the first attempt - a brand-new order's payout
-// is rarely available within minutes of payment.
-const MIN_AGE_MS = 24 * 60 * 60 * 1000;
+// Tried from the moment an order is FULLY_PAID - no fixed wait. eBay does not always have a settled Finances
+// transaction for a brand-new sale yet; when it doesn't, netEarningFromTransactions returns null and the order is
+// simply left for the next run (see syncOneAccount below), so trying early costs nothing and picks it up the moment
+// eBay does have it.
+const MIN_AGE_MS = 0;
 
 /**
  * Splits one eBay order's total net earning across its ELMS line items, proportional to each line's own sale price -
@@ -77,14 +79,16 @@ async function runOrderEarningsSync() {
   if (totalUpdated) console.log(`[order-earnings] Filled in eBay earnings for ${totalUpdated} order line(s).`);
 }
 
-/** Runs every 6 hours - eBay payouts settle over hours, not minutes, so there is no benefit to checking more often. */
+/** Runs every 5 minutes, same as the order sync (jobs/orderSync.js) - so a fresh order's earning fills in within
+ * minutes of eBay settling it rather than waiting for a slower cron. A run only ever calls eBay for orders that are
+ * still missing their earning (listOrdersNeedingEarnings), so an account with nothing pending costs nothing. */
 function startOrderEarningsSync() {
-  cron.schedule('30 */6 * * *', async () => {
-    const gotLock = await acquireLock('order-earnings-sync', 10 * 60 * 1000).catch(() => false);
+  cron.schedule('*/5 * * * *', async () => {
+    const gotLock = await acquireLock('order-earnings-sync', 4 * 60 * 1000).catch(() => false);
     if (!gotLock) return;
     runOrderEarningsSync().catch((err) => console.error('[order-earnings] Unexpected error:', err.message));
   });
-  console.log('[order-earnings] Order earnings sync scheduled (every 6 hours).');
+  console.log('[order-earnings] Order earnings sync scheduled (every 5 minutes).');
 }
 
 module.exports = { startOrderEarningsSync, runOrderEarningsSync, splitProportionally };
