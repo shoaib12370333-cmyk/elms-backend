@@ -10,7 +10,9 @@ const { stripInvisible, fold, foldWithMap } = require('./textCleanService');
 const SEP = "[\\s\\-'.]*";
 const SEPARATOR_CHARS = new Set([' ', '-', "'", '.']);
 
-const MAX_WORDS = 500;
+// 700, not 500: config/veroWords.js's own suggestion list is 531 words, and a seller who clicks "add all of ELMS's
+// words" (routes/veroSettings.js) must have room left over for their own on top of it.
+const MAX_WORDS = 700;
 const MAX_WORD_LENGTH = 60;
 
 function escapeChar(ch) {
