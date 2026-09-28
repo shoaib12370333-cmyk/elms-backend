@@ -13,6 +13,12 @@ const { createTransaction } = require('../services/paddleService');
 const cashtapPayments = require('../services/cashtapPaymentService');
 
 /**
+ * Card and other payment methods go through Paddle. It is offered NEXT TO CashTap (Cash App) when both Paddle secrets are set and
+ * a plan has its Paddle price id. Prices are fixed inside Paddle, so referral discounts, vouchers, yearly and custom plans stay Cash App only.
+ */
+const paddleConfigured = () => !!(process.env.PADDLE_API_KEY && process.env.PADDLE_WEBHOOK_SECRET);
+
+/**
  * GET /api/payments/public-plans
  * No sign-in: the plans as the public website (elmstool.com) shows them. Only what a visitor needs to see - name, price,
  * credits and how many eBay accounts - taken live from the plans the admin manages. Cached for 5 minutes.
@@ -24,7 +30,8 @@ router.get('/public-plans', async (req, res) => {
       .filter((p) => provider === 'cashtap' || p.paddlePriceId)
       .map((p) => ({ name: p.name, priceUsd: p.priceUsd, credits: p.credits, maxEbayAccounts: p.maxEbayAccounts || null }));
     res.set('Cache-Control', 'public, max-age=300');
-    res.json({ success: true, plans });
+    const card = provider === 'paddle' || (paddleConfigured() && (await listActivePlans()).some((p) => p.paddlePriceId));
+    res.json({ success: true, plans, card });
   } catch (err) {
     res.status(500).json({ success: false, error: 'Could not load the plans.' });
   }
@@ -39,7 +46,8 @@ router.get('/public-plans', async (req, res) => {
 router.get('/plans', requireAuth, async (req, res) => {
   const provider = cashtapPayments.activeProvider();
   // Yearly plans and the custom plan are CashTap-only (Paddle prices are fixed inside Paddle).
-  const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId).map((p) => (provider === 'cashtap' ? p : { ...p, yearlyPriceUsd: null }));
+  const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId).map((p) => (provider === 'cashtap' ? p : { ...p, yearlyPriceUsd: null }))
+    .map((p) => ({ ...p, paddleAvailable: provider === 'cashtap' && paddleConfigured() && !!p.paddlePriceId }));
   const custom = provider === 'cashtap' ? await getCustomPlanSettings() : null;
   const me = await getUserById(req.userId).catch(() => null);
   const extra = {
@@ -145,7 +153,13 @@ router.post('/checkout', requireAuth, async (req, res) => {
     return res.status(404).json({ success: false, error: 'User not found.' });
   }
 
-  const provider = cashtapPayments.activeProvider();
+  // The buyer can pick card / other methods (Paddle) even while Cash App (CashTap) is the main checkout.
+  const wantsPaddle = String(req.body.provider || '').toLowerCase() === 'paddle';
+  if (wantsPaddle && !paddleConfigured()) return res.status(400).json({ success: false, error: 'Card payments are not available right now.' });
+  const provider = wantsPaddle ? 'paddle' : cashtapPayments.activeProvider();
+  if (provider === 'paddle' && req.body.voucherId) {
+    return res.status(400).json({ success: false, error: 'A voucher can only be used when paying with Cash App.' });
+  }
   if ((wantsCustom || String(req.body.billing || '') === 'yearly') && provider !== 'cashtap') {
     return res.status(400).json({ success: false, error: 'This option is not available right now.' });
   }
