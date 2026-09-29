@@ -411,6 +411,18 @@ async function setPricingRule(userId, rule) {
   return user ? user.pricingRule : null;
 }
 
+/** The seller's saved description template (Settings -> Description Template), or null when they never set one. */
+async function getDescriptionTemplate(userId) {
+  const user = await User.findById(userId).select('descriptionTemplate').lean();
+  return user && user.descriptionTemplate && typeof user.descriptionTemplate === 'object' ? user.descriptionTemplate : null;
+}
+
+/** Saves a description template that normalizeTemplate (services/descriptionTemplateLibrary.js) has already cleaned. */
+async function setDescriptionTemplate(userId, template) {
+  const user = await User.findByIdAndUpdate(userId, { descriptionTemplate: template }, { new: true }).select('descriptionTemplate').lean();
+  return user ? user.descriptionTemplate : null;
+}
+
 async function setOrderSyncSettings(userId, { orderSyncMode, orderSyncIntervalMinutes }) {
   const update = {};
   if (orderSyncMode !== undefined) update.orderSyncMode = orderSyncMode;
@@ -676,6 +688,8 @@ module.exports = {
   setAutoOrderSettings,
   getPricingRule,
   setPricingRule,
+  getDescriptionTemplate,
+  setDescriptionTemplate,
   setCjCredentials,
   setCjTokens,
   getCjCredentials,

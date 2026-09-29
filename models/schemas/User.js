@@ -144,6 +144,12 @@ const userSchema = new mongoose.Schema(
     // saved. null = never set. It only prices products imported while it is switched on (rule.enabled).
     pricingRule: { type: mongoose.Schema.Types.Mixed, default: null },
 
+    // The seller's own eBay description template (Settings -> Description Template): which starter style it started
+    // from, the ordered "tool" blocks to include (gallery, bullets, specs...), and their branding (store name/logo/
+    // accent color) - checked and cleaned by services/descriptionTemplateLibrary.js normalizeTemplate before it is
+    // saved. null = never set (services/descriptionBeautifyService.js then falls back to the first starter style).
+    descriptionTemplate: { type: mongoose.Schema.Types.Mixed, default: null },
+
     // Unique credential for the ELMS browser extension. The plaintext key is
     // never stored; it is encrypted at rest and its SHA-256 hash is used for lookup.
     extensionKeyEncrypted: { type: String, default: null },

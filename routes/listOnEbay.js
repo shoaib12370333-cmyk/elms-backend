@@ -155,6 +155,31 @@ router.post('/optimize-description', requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/list-on-ebay/beautify-description
+ * Body: { title, description?, bulletPoints?, specifications?, images? } -> { text }
+ *
+ * Restructures the seller's OWN typed description (not a from-scratch rewrite - see /optimize-description for that)
+ * into their saved Description Template (Settings -> Description Template): the "tool" blocks they picked, in their
+ * chosen style. Reads the seller's saved template automatically; a seller who never saved one gets the first
+ * starter style. The listing editor's "Beautify with AI" button replaces the description textarea with the result,
+ * same as "Generate Description With AI" - nothing is saved until the seller presses Save.
+ */
+router.post('/beautify-description', requireAuth, async (req, res) => {
+  const title = String(req.body?.title || '').trim();
+  if (title.length < 3) return res.status(400).json({ success: false, error: 'Enter a title first.' });
+  const { beautifyEbayDescription } = require('../services/descriptionBeautifyService');
+  const { getDescriptionTemplate } = require('../models/usersModel');
+  const template = await getDescriptionTemplate(req.userId);
+  return runAiAction(req, res, {
+    kind: 'beautify', costKey: 'AI_DESCRIPTION_BEAUTIFY', enabledKey: 'aiBeautifyDescriptionEnabled',
+    run: () => beautifyEbayDescription({
+      title, description: req.body?.description, bulletPoints: req.body?.bulletPoints,
+      specifications: req.body?.specifications, images: req.body?.images, template,
+    }),
+  });
+});
+
+/**
  * POST /api/list-on-ebay/fill-aspects
  * Body: { title, description?, bulletPoints?, specifications?, categoryName?, aspects: [...], existing?: {name: [values]} }
  * -> { values: { "Aspect name": ["value"] }, filled }
