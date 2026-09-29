@@ -23,6 +23,10 @@ let inventoryState = null;
 let publishCalls = 0;
 let failOn = null; // 'offer-get' | 'inventory-get' | 'inventory-put' | 'offer-put' | 'publish'
 let silentNoop = false; // eBay accepts the PUT(s) with 200 but the mock's state does not actually change - simulates a real silent no-op
+let staleGetsLeft = 0; // how many GETs, after the first write, still answer with the PRE-write snapshot - simulates eBay's real read-after-write lag
+let writesHappened = false;
+let preWriteOffer = null;
+let preWriteInventory = null;
 
 // axios is CALLED as a function (axios({...})), not axios.get/put - replace the export itself with a callable.
 // Stateful (unlike a plain fixture): a PUT really updates offerState/inventoryState, so the verification re-GET that
@@ -40,19 +44,34 @@ require.cache[axiosPath] = {
     if (failOn === 'inventory-put' && config.method === 'PUT' && isInventory) throw { response: { status: 400, data: { errors: [{ message: 'Quantity is invalid.' }] } } };
     if (failOn === 'offer-put' && config.method === 'PUT' && isOffer) throw { response: { status: 400, data: { errors: [{ message: 'Offer is not published.' }] } } };
     if (failOn === 'publish' && isPublish) throw { response: { status: 400, data: { errors: [{ message: 'This offer has an unresolved issue.' }] } } };
-    if (config.method === 'GET' && isOffer) return { data: offerState };
-    if (config.method === 'GET' && isInventory) return { data: inventoryState };
-    if (config.method === 'PUT' && isOffer) { if (!silentNoop) offerState = { ...offerState, ...config.data }; return { data: {} }; }
-    if (config.method === 'PUT' && isInventory) { if (!silentNoop) inventoryState = { ...inventoryState, ...config.data }; return { data: {} }; }
+    if (config.method === 'GET' && isOffer) {
+      if (writesHappened && staleGetsLeft > 0) { staleGetsLeft -= 1; return { data: preWriteOffer }; }
+      return { data: offerState };
+    }
+    if (config.method === 'GET' && isInventory) {
+      if (writesHappened && staleGetsLeft > 0) { staleGetsLeft -= 1; return { data: preWriteInventory }; }
+      return { data: inventoryState };
+    }
+    if (config.method === 'PUT' && isOffer) {
+      if (!writesHappened) { preWriteOffer = { ...offerState }; preWriteInventory = { ...inventoryState }; writesHappened = true; }
+      if (!silentNoop) offerState = { ...offerState, ...config.data };
+      return { data: {} };
+    }
+    if (config.method === 'PUT' && isInventory) {
+      if (!writesHappened) { preWriteOffer = { ...offerState }; preWriteInventory = { ...inventoryState }; writesHappened = true; }
+      if (!silentNoop) inventoryState = { ...inventoryState, ...config.data };
+      return { data: {} };
+    }
     if (isPublish) { publishCalls += 1; offerState = { ...offerState, status: 'PUBLISHED' }; return { data: { listingId: 'LST1' } }; }
     return { data: {} };
   },
 };
 
-const { updateOfferQuantity, updateOfferPrice } = require('../services/ebayListingService');
+const { updateOfferQuantity, updateOfferPrice, VERIFY_RETRY } = require('../services/ebayListingService');
+VERIFY_RETRY.delayMs = 1; // do not really wait 1.5s per retry in a test
 
 const reset = () => {
-  calls.length = 0; failOn = null; publishCalls = 0; silentNoop = false;
+  calls.length = 0; failOn = null; publishCalls = 0; silentNoop = false; staleGetsLeft = 0; writesHappened = false; preWriteOffer = null; preWriteInventory = null;
   offerState = { sku: 'B0TEST', availableQuantity: 0, status: 'PUBLISHED', categoryId: '177', listingPolicies: { paymentPolicyId: 'p1' }, pricingSummary: { price: { value: '19.99', currency: 'USD' } } };
   inventoryState = { condition: 'NEW', product: { title: 'A Kettle', imageUrls: ['https://i/1.jpg'] }, availability: { shipToLocationAvailability: { quantity: 0 } } };
 };
@@ -105,6 +124,16 @@ const reset = () => {
   reset(); silentNoop = true;
   await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 5), /still shows 0 available/);
 
+  // ---------- eBay's own read-after-write lag (also real and observed: every restock in a seller's very first
+  // batch after the check above was added failed verification on the FIRST read, one retry later they had all
+  // actually gone through) - the first two verifying reads still see the pre-write snapshot, the third sees the
+  // real, changed value: this must succeed, not be reported as a failure just because the confirming read raced ahead ----------
+  reset(); staleGetsLeft = 4; // 2 stale rounds (2 GETs each) before the 3rd round finally reads the real state
+  out = await updateOfferQuantity('rt1', 'O123', 9);
+  assert.strictEqual(out.quantity, 9);
+  assert.strictEqual(out.live.quantity, 9);
+  assert.strictEqual(staleGetsLeft, 0, 'exactly as many stale reads as arranged were consumed - the retry loop did not stop early or loop forever');
+
   // ---------- input validation: unchanged from before ----------
   reset();
   await assert.rejects(() => updateOfferQuantity('rt1', null, 5), /offerId is required/);
@@ -131,6 +160,11 @@ const reset = () => {
   // ---------- a silent no-op is caught here too ----------
   reset(); silentNoop = true;
   await assert.rejects(() => updateOfferPrice('rt1', 'O123', 30), /still shows 19\.99/);
+
+  // ---------- and the same read-after-write lag is tolerated here too ----------
+  reset(); staleGetsLeft = 2;
+  out = await updateOfferPrice('rt1', 'O123', 45);
+  assert.strictEqual(out.live.price, 45);
 
   console.log('updateOfferQuantity / updateOfferPrice tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
