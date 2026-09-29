@@ -28,6 +28,7 @@ const {
   updateListing,
   updateListingSettings,
   updateListingStats,
+  restockListing,
 } = require('../models/listingsModel');
 
 const { fetchItemTraffic } = require('../services/ebayStatsService');
@@ -69,6 +70,7 @@ const {
 } = require('../models/usersModel');
 const { bulkEdit, validateChanges, mapPool } = require('../services/bulkEditService');
 const { bulkLivePrice } = require('../services/liveBulkPriceService');
+const { bulkRestock } = require('../services/liveBulkRestockService');
 
 const { ACTION_COSTS } = require('../config/actionCosts');
 
@@ -177,7 +179,7 @@ router.get('/publish-status', requireAuth, async (req, res) => {
   }
 });
 
-const LIST_STATUSES = new Set(['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended']);
+const LIST_STATUSES = new Set(['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended', 'sold']);
 const LIST_SORTS = new Set(['newest', 'price', 'priceLow', 'profit', 'profitLow', 'views', 'watchers', 'sold']);
 const LIST_SOURCES = new Set(['amazon', 'cj', 'aliexpress']);
 
@@ -859,6 +861,26 @@ router.post('/bulk-live-price', requireAuth, async (req, res) => {
   } catch (err) {
     if (!err.statusCode || err.statusCode >= 500) console.error('bulk live price error:', err.message);
     res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not change the prices. Please try again.' });
+  }
+});
+
+/**
+ * POST /api/listings/bulk-restock   { ids: [...], quantity: 1 }
+ *
+ * The Live listings page's "Sold" tab: puts a fresh available quantity on eBay for every selected sold-out listing
+ * (services/liveBulkRestockService.js), then moves each one back to the "Active" tab in ELMS. A listing that is not
+ * currently sold-out (already restocked, ended, no eBay offer...) is skipped with the reason.
+ */
+router.post('/bulk-restock', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please restock at most ${MAX_BULK_IDS} listings at a time.` });
+  try {
+    const out = await bulkRestock({ userId: req.userId, ids, quantity: req.body?.quantity }, { getListingsByIds, restockListing, getRefreshToken: getEbayAccountRefreshToken });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    if (!err.statusCode || err.statusCode >= 500) console.error('bulk restock error:', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not restock the listings. Please try again.' });
   }
 });
 

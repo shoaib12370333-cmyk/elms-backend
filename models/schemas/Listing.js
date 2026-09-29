@@ -62,12 +62,19 @@ const listingSchema = new mongoose.Schema(
     // Missing on older listings created before this field existed.
     currency: { type: String, default: 'USD' },
     quantity: { type: Number, default: 1 },
+    // Units sold since this listing was last (re)stocked - reset to 0 by a restock, incremented by models/ordersModel.js
+    // upsertOrder the moment a genuinely new order for it is recorded (never on a re-sync of an order already seen).
+    // Compared against `quantity` to flip status to 'sold' automatically; never touched for any other reason.
+    soldQuantity: { type: Number, default: 0 },
     categoryId: { type: String, default: null },
     ebayOfferId: { type: String, default: null },
     ebayListingId: { type: String, default: null },
     status: {
       type: String,
-      enum: ['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended'],
+      // 'sold': a published listing whose soldQuantity has reached its quantity - still live on eBay in principle, but
+      // out of stock, so it is kept out of "Active" and shown on its own "Sold" tab until the seller restocks it
+      // (routes/listings.js POST /bulk-restock), which sets it back to 'published' with a fresh quantity/soldQuantity.
+      enum: ['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended', 'sold'],
       default: 'draft',
     },
     publishStartedAt: { type: Date, default: null },
