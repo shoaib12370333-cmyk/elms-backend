@@ -82,5 +82,11 @@ const call = async (method, p, body, userId = 'u1') => { const res = fakeRes(); 
   assert.strictEqual(res.statusCode, 400, 'nothing to change');
   res = await call('patch', '/bulk-settings', { ids: [], paymentPolicyId: 'X' });
   assert.strictEqual(res.statusCode, 400);
+
+  // ---------- the Live listings "Bulk edit" fields (tags/note/shippingMethod/monitoring) - never gated by status ----------
+  settingsCalls.length = 0;
+  res = await call('patch', '/bulk-settings', { ids: ['c'], tags: 'sale, clearance', note: 'checked twice', shippingMethod: 'express', stockMonitoring: false, priceMonitoring: true });
+  assert.strictEqual(res.body.updated, 1, 'a LIVE (published) listing is accepted here, unlike bulk-pricing/bulk-edit');
+  assert.deepStrictEqual(settingsCalls[0][1], { tags: 'sale, clearance', note: 'checked twice', shippingMethod: 'express', stockMonitoring: false, priceMonitoring: true });
   console.log('bulk pricing tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });

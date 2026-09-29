@@ -790,21 +790,26 @@ router.post('/bulk-pricing', requireAuth, async (req, res) => {
   res.json({ success: true, updated, skipped, profitPercent: percent, prices });
 });
 
+const BULK_SETTINGS_KEYS = ['useDynamicPolicies', 'paymentPolicyId', 'fulfillmentPolicyId', 'returnPolicyId', 'tags', 'note', 'shippingMethod', 'stockMonitoring', 'priceMonitoring'];
+
 /**
- * PATCH /api/listings/bulk-settings   { ids: [...], useDynamicPolicies?, paymentPolicyId?, fulfillmentPolicyId?, returnPolicyId? }
+ * PATCH /api/listings/bulk-settings   { ids: [...], useDynamicPolicies?, paymentPolicyId?, fulfillmentPolicyId?, returnPolicyId?,
+ *                                       tags?, note?, shippingMethod?, stockMonitoring?, priceMonitoring? }
  *
- * Changes the business policies of every selected draft at once. Only the fields sent are changed (so a policy
- * left out stays as it is). useDynamicPolicies true = the eBay account's default policies; false = the ids apply.
+ * Changes the ELMS-side settings of every selected listing at once - never eBay's title/price/quantity, and never
+ * gated by status (updateListingSettings is "safe to call on listings in any status, including published ones" -
+ * this is the Drafts AND Live listings bulk bar's shared "Bulk edit"). Only the fields sent are changed (so one left
+ * out stays as it is). useDynamicPolicies true = the eBay account's default policies; false = the ids apply.
  */
 router.patch('/bulk-settings', requireAuth, async (req, res) => {
   const ids = bulkIds(req.body);
   if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
-  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please change at most ${MAX_BULK_IDS} drafts at a time.` });
+  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please change at most ${MAX_BULK_IDS} at a time.` });
   const fields = {};
-  for (const key of ['useDynamicPolicies', 'paymentPolicyId', 'fulfillmentPolicyId', 'returnPolicyId']) {
+  for (const key of BULK_SETTINGS_KEYS) {
     if (req.body?.[key] !== undefined) fields[key] = req.body[key];
   }
-  if (!Object.keys(fields).length) return res.status(400).json({ success: false, error: 'Choose at least one policy to change.' });
+  if (!Object.keys(fields).length) return res.status(400).json({ success: false, error: 'Choose at least one setting to change.' });
 
   let updated = 0;
   const skipped = [];
@@ -864,17 +869,20 @@ router.post('/bulk-live-price', requireAuth, async (req, res) => {
   }
 });
 
+const MAX_RESTOCK_BATCH = 20; // each listing is now up to ~6 real eBay round trips (write both, maybe republish, verify both) - a request of 500 would time out long before finishing
+
 /**
  * POST /api/listings/bulk-restock   { ids: [...], quantity: 1 }
  *
  * The Live listings page's "Sold" tab: puts a fresh available quantity on eBay for every selected sold-out listing
  * (services/liveBulkRestockService.js), then moves each one back to the "Active" tab in ELMS. A listing that is not
- * currently sold-out (already restocked, ended, no eBay offer...) is skipped with the reason.
+ * currently sold-out (already restocked, ended, no eBay offer...), or whose change could not be verified as really
+ * landing on eBay, is skipped with the reason - never reported as restocked when it was not.
  */
 router.post('/bulk-restock', requireAuth, async (req, res) => {
   const ids = bulkIds(req.body);
   if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
-  if (ids.length > MAX_BULK_IDS) return res.status(400).json({ success: false, error: `Please restock at most ${MAX_BULK_IDS} listings at a time.` });
+  if (ids.length > MAX_RESTOCK_BATCH) return res.status(400).json({ success: false, error: `Please restock at most ${MAX_RESTOCK_BATCH} listings per request - the app sends a larger selection in several requests.` });
   try {
     const out = await bulkRestock({ userId: req.userId, ids, quantity: req.body?.quantity }, { getListingsByIds, restockListing, getRefreshToken: getEbayAccountRefreshToken });
     res.json({ success: true, ...out });

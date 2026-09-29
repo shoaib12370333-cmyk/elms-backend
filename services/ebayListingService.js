@@ -634,8 +634,10 @@ async function publishListing({
 }
 
 /**
- * Ends (withdraws) a live eBay offer, taking the listing down.
- * Used by the stock monitor when the source Amazon product goes out of stock.
+ * (Re-)publishes an offer that already exists on eBay - the same "publish" call a new offer gets, but for one eBay
+ * already has. Brings an offer that has drifted out of PUBLISHED (unpublished, or refused for a fixable reason)
+ * back live; used by updateOfferQuantity/updateOfferPrice when a write would otherwise land on an offer whose
+ * change never reaches the actual listing. (withdrawListing, below, is the one that takes a listing down.)
  *
  * @param {string} refreshToken - the user's eBay refresh token
  * @param {string} offerId - the eBay offerId returned when the listing was published
@@ -933,6 +935,23 @@ async function updateOfferPrice(
     { marketplaceId }
   );
 
+  // Same "200 is not proof" gap as updateOfferQuantity, and the same fix: republish first if the offer is not
+  // PUBLISHED, then re-read what eBay actually holds. Skipped only when the GET above had no sku to verify with.
+  if (offer?.sku) {
+    if (offer.status && offer.status !== 'PUBLISHED') {
+      try {
+        await publishExistingOffer(refreshToken, offerId);
+      } catch (err) {
+        throw new Error(`eBay accepted the new price, but this offer is ${offer.status.toLowerCase()} and could not be republished: ${err.message}`);
+      }
+    }
+    const live = await fetchLiveListing(refreshToken, { offerId, sku: offer.sku });
+    if (live.price == null || Math.abs(live.price - Number(newPrice)) > 0.005) {
+      throw new Error(`eBay accepted the request, but the listing still shows ${live.price == null ? 'no price' : live.price.toFixed(2)} (offer status: ${live.offerStatus || 'unknown'}). Try again, or check the listing directly on eBay.`);
+    }
+    return { offerId, newPrice: updatedOffer.pricingSummary.price.value, currency, live };
+  }
+
   return {
     offerId,
 
@@ -1022,6 +1041,28 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
     updatedOffer,
     { marketplaceId: offer?.marketplaceId || null }
   );
+
+  // Neither PUT above proves the live listing actually changed - eBay answers 200 even when the write did not really
+  // take (confirmed against real listings that "changed" in ELMS but stayed sold out on eBay). Two things can cause
+  // that: the offer sitting outside PUBLISHED (a quantity change on an unpublished offer never reaches the live
+  // listing - republish it first), or eBay simply keeping its own value. Re-reading afterwards is the only way to
+  // know, so a caller (bulkRestock, the stock monitor) that treats a thrown error as "this one did not work" is
+  // told the truth instead of a false success. Skipped only when there is no SKU to verify with (see the `if
+  // (offer?.sku)` above) - the inventory item, which drives the real displayed quantity, was never touched then either.
+  if (offer?.sku) {
+    if (offer.status && offer.status !== 'PUBLISHED') {
+      try {
+        await publishExistingOffer(refreshToken, offerId);
+      } catch (err) {
+        throw new Error(`eBay accepted the new quantity, but this offer is ${offer.status.toLowerCase()} and could not be republished: ${err.message}`);
+      }
+    }
+    const live = await fetchLiveListing(refreshToken, { offerId, sku: offer.sku });
+    if (live.quantity !== quantity) {
+      throw new Error(`eBay accepted the request, but the listing still shows ${live.quantity ?? 'no'} available (offer status: ${live.offerStatus || 'unknown'}). Try again, or check the listing directly on eBay.`);
+    }
+    return { offerId, quantity, live };
+  }
 
   return { offerId, quantity };
 }
