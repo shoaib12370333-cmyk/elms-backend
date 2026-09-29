@@ -801,7 +801,9 @@ async function summarizeLiveListings(userId, { accountId = null } = {}) {
   if (accountId) live.ebayAccountId = accountId;
   const ended = { userId, status: 'ended' };
   if (accountId) ended.ebayAccountId = accountId;
-  const [rows, endedCount, sold, veroTerms] = await Promise.all([lightRows(live), Listing.countDocuments(ended), getSoldByListing(userId), scanVero(userId, live)]);
+  const issues = { userId, status: 'error' };
+  if (accountId) issues.ebayAccountId = accountId;
+  const [rows, endedCount, issuesCount, sold, veroTerms] = await Promise.all([lightRows(live), Listing.countDocuments(ended), Listing.countDocuments(issues), getSoldByListing(userId), scanVero(userId, live)]);
   let views = 0; let watchers = 0; let units = 0; let last = 0; let activeCount = 0; let soldCount = 0;
   const margins = [];
   for (const r of rows) {
@@ -815,7 +817,7 @@ async function summarizeLiveListings(userId, { accountId = null } = {}) {
     if (r.amazon > 0 && sell > 0) margins.push((sell - r.amazon) / sell);
   }
   return {
-    counts: { all: rows.length, active: activeCount, sold: soldCount, ended: endedCount, issues: 0, vero: veroTerms.size },
+    counts: { all: rows.length, active: activeCount, sold: soldCount, ended: endedCount, issues: issuesCount, vero: veroTerms.size },
     totals: {
       units_sold: units, views, watchers,
       average_margin_percent: margins.length ? Math.round((margins.reduce((a, b) => a + b, 0) / margins.length) * 100) : null,

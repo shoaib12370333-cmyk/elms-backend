@@ -66,7 +66,7 @@ const run = async (ids, quantity = 2) => S.bulkRestock({ userId: 'u1', ids, quan
   }
   assert.strictEqual(singles.length, 0, 'eBay is never called for an invalid quantity');
 
-  // ---------- the route: at most 500 ids, a bad quantity refused with the same message, one id twice is one listing ----------
+  // ---------- the route: at most 20 ids (each is up to ~6 real eBay round trips now - see MAX_RESTOCK_BATCH), a bad quantity refused with the same message, one id twice is one listing ----------
   reset(2);
   const noop = async () => null;
   const fakes = {
@@ -91,8 +91,8 @@ const run = async (ids, quantity = 2) => S.bulkRestock({ userId: 'u1', ids, quan
 
   let res = await call({ ids: [], quantity: 3 });
   assert.strictEqual(res.statusCode, 400);
-  res = await call({ ids: Array.from({ length: 501 }, (_, i) => 'X' + i), quantity: 3 });
-  assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /at most 500/);
+  res = await call({ ids: Array.from({ length: 21 }, (_, i) => 'X' + i), quantity: 3 });
+  assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /at most 20/);
   res = await call({ ids: ['L1'], quantity: 0 });
   assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /at least 1/);
   res = await call({ ids: ['L1', 'L1', 'L2'], quantity: 6 });
