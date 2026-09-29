@@ -186,7 +186,12 @@ async function listOrders(userId, accountId) {
   const docs = await Order.find(query)
     .populate(LISTING_FOR_ORDER)
     .populate(ACCOUNT_FOR_ORDER)
-    .sort({ ebayCreatedAt: -1, createdAt: -1 })
+    // A multi-item eBay order gives every one of its line items the exact same ebayCreatedAt (the whole order's
+    // creationDate, not a per-line-item date), and createdAt can tie too when several lines are inserted in the
+    // same sync pass. Without a final unique tiebreaker, MongoDB does not guarantee a stable order for tied
+    // documents across separate queries - so tied orders could silently swap positions between page loads (no
+    // real new order needed, just a routine background sync re-saving them) even though nothing had changed.
+    .sort({ ebayCreatedAt: -1, createdAt: -1, _id: -1 })
     .lean();
   await attachMissingListings(userId, docs);
   if (needsRates(docs)) await warmRates();
