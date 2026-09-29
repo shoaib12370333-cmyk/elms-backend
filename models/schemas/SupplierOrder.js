@@ -50,6 +50,9 @@ const supplierOrderSchema = new mongoose.Schema(
       stateOrProvince: { type: String, default: null },
       postalCode: { type: String, default: null },
       country: { type: String, default: null },
+      // Amazon requires a phone number to save a new address; eBay's buyer phone (Order.buyerPhone) is copied in
+      // here alongside the rest of the address so the extension can add it on Amazon without a second lookup.
+      phone: { type: String, default: null },
     },
 
     // The most this order may cost on Amazon: the listing's saved Amazon price plus the seller's allowed increase %

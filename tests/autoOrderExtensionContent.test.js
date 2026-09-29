@@ -28,7 +28,7 @@ function fakeDocument({ query = {}, queryAll = {}, bodyText = '' } = {}) {
 
 function run(code, ctx) {
   const context = vm.createContext({ console, JSON, Math, Date, Promise, Object, Array, String, Number, RegExp, Set, Map, Error, Event: function Event(t) { this.type = t; }, ...ctx });
-  vm.runInContext(code + '\nthis.__out = { pageKind, readStock, readFulfilledByAmazon, findVariantOption, setQuantity, readCheckoutTotal, addressMatches, readConfirmationOrderId, findGiftOption };', context);
+  vm.runInContext(code + '\nthis.__out = { pageKind, readStock, readFulfilledByAmazon, findVariantOption, setQuantity, readCheckoutTotal, addressMatches, readConfirmationOrderId, findGiftOption, selectMatchingSavedAddress, findAddNewAddressTrigger, fillAddressForm, readDeliveryDate };', context);
   return context.__out;
 }
 
@@ -123,6 +123,75 @@ const QTY_SELECT = '#quantity, select[name="quantity"]';
   assert.strictEqual(fns.findGiftOption(), giftBox);
   fns = run(code, { location: {}, document: fakeDocument() });
   assert.strictEqual(fns.findGiftOption(), null);
+
+  // ---------- selectMatchingSavedAddress(): picks a saved address off the classic checkout's plain <select> by
+  // postal code; never invents a match, and does nothing when there is no such select on the page at all ----------
+  const ADDR_SELECT = '#shipToSelectBoxDropdown';
+  let addrSel = fakeEl({ value: '', options: [{ value: 'a1', textContent: 'Jane Doe, 221B Baker Street, NW1 6XE' }, { value: 'new', textContent: 'Add a new address' }] });
+  fns = run(code, { location: {}, document: fakeDocument({ query: { [ADDR_SELECT]: addrSel } }) });
+  assert.strictEqual(fns.selectMatchingSavedAddress({ postalCode: 'NW1 6XE' }), true);
+  assert.strictEqual(addrSel.value, 'a1');
+
+  addrSel = fakeEl({ value: '', options: [{ value: 'a1', textContent: 'Someone else, 90210' }] });
+  fns = run(code, { location: {}, document: fakeDocument({ query: { [ADDR_SELECT]: addrSel } }) });
+  assert.strictEqual(fns.selectMatchingSavedAddress({ postalCode: 'NW1 6XE' }), false, 'no saved address has this postal code');
+
+  fns = run(code, { location: {}, document: fakeDocument() });
+  assert.strictEqual(fns.selectMatchingSavedAddress({ postalCode: 'NW1 6XE' }), false, 'no address select on the page at all');
+
+  // ---------- findAddNewAddressTrigger(): the select's own "add a new address" option, else a direct link/button,
+  // else a text-based fallback - absence (an unrecognized page) is never an error, just null ----------
+  addrSel = fakeEl({ value: '', options: [{ value: 'a1', textContent: 'Existing address' }, { value: 'new', textContent: 'Add a new address' }] });
+  fns = run(code, { location: {}, document: fakeDocument({ query: { [ADDR_SELECT]: addrSel } }) });
+  let trigger = fns.findAddNewAddressTrigger();
+  assert.ok(trigger);
+  trigger.click();
+  assert.strictEqual(addrSel.value, 'new');
+
+  const ADD_LINK = 'a[href*="address/add"], [data-action*="add-new-address" i], [id*="add-new-address" i]';
+  const link = fakeEl();
+  fns = run(code, { location: {}, document: fakeDocument({ query: { [ADD_LINK]: link } }) });
+  assert.strictEqual(fns.findAddNewAddressTrigger(), link);
+
+  const textBtn = fakeEl({ textContent: 'Add a new address' });
+  fns = run(code, { location: {}, document: fakeDocument({ queryAll: { 'a, button, span[role="button"]': [textBtn] } }) });
+  assert.strictEqual(fns.findAddNewAddressTrigger(), textBtn);
+
+  fns = run(code, { location: {}, document: fakeDocument() });
+  assert.strictEqual(fns.findAddNewAddressTrigger(), null);
+
+  // ---------- fillAddressForm(): fills whatever fields Amazon's own form shows; true only once the fields it will
+  // not submit without (name, line 1, postal code) actually have something in them ----------
+  const ADDR_FIELDS = {
+    '#address-ui-widgets-enterAddressFullName': fakeEl({ value: '' }),
+    '#address-ui-widgets-enterAddressLine1': fakeEl({ value: '' }),
+    '#address-ui-widgets-enterAddressCity': fakeEl({ value: '' }),
+    '#address-ui-widgets-enterAddressPostalCode': fakeEl({ value: '' }),
+    '#address-ui-widgets-enterAddressPhoneNumber': fakeEl({ value: '' }),
+  };
+  fns = run(code, { location: {}, document: fakeDocument({ query: ADDR_FIELDS }) });
+  const filled = fns.fillAddressForm({ fullName: 'Jane Doe', addressLine1: '221B Baker St', city: 'London', postalCode: 'NW1 6XE', phone: '+44 20 1234 5678' });
+  assert.strictEqual(filled, true);
+  assert.strictEqual(ADDR_FIELDS['#address-ui-widgets-enterAddressFullName'].value, 'Jane Doe');
+  assert.strictEqual(ADDR_FIELDS['#address-ui-widgets-enterAddressPostalCode'].value, 'NW1 6XE');
+  assert.strictEqual(ADDR_FIELDS['#address-ui-widgets-enterAddressPhoneNumber'].value, '+44 20 1234 5678');
+
+  fns = run(code, { location: {}, document: fakeDocument() }); // none of the form fields are even on the page
+  assert.strictEqual(fns.fillAddressForm({ fullName: 'Jane Doe', addressLine1: '221B Baker St', postalCode: 'NW1 6XE' }), false);
+
+  // ---------- readDeliveryDate(): best-effort only - never blocks or risks money, so an unreadable date is just null ----------
+  fns = run(code, { location: {}, document: fakeDocument({ bodyText: 'Your order is confirmed.\nArriving Tuesday, Oct 7' }) });
+  let iso = fns.readDeliveryDate();
+  assert.ok(iso, 'a date was parsed');
+  assert.strictEqual(new Date(iso).getUTCMonth(), 9, 'October');
+
+  fns = run(code, { location: {}, document: fakeDocument({ bodyText: 'Estimated delivery: Oct 7, 2027' }) });
+  iso = fns.readDeliveryDate();
+  assert.ok(iso);
+  assert.strictEqual(new Date(iso).getUTCFullYear(), 2027, 'a year on the page is used as-is, not guessed');
+
+  fns = run(code, { location: {}, document: fakeDocument({ bodyText: 'No delivery information on this page.' }) });
+  assert.strictEqual(fns.readDeliveryDate(), null);
 
   // ---------- readConfirmationOrderId(): Amazon's own order-number shape ----------
   fns = run(code, { location: {}, document: fakeDocument({ bodyText: 'Your order has been placed.\nOrder# 112-5551234-1234567' }) });

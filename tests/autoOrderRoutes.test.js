@@ -13,6 +13,7 @@ let primeOnly = true;
 let placedCalls = [];
 let retryOrder = null;
 let linkedOrder = null;
+let retryCalls = [];
 
 stub('models/supplierOrdersModel', {
   getSupplierOrderById: async (userId, id) => (orders[id] && orders[id].userId === userId ? { ...orders[id] } : null),
@@ -26,7 +27,7 @@ stub('models/supplierOrdersModel', {
   markPlacing: async (userId, id) => { const o = orders[id]; if (!o || o.userId !== userId || o.status !== 'checking') return null; o.status = 'placing'; return { ...o }; },
   markNeedsAttention: async (userId, id, reason) => { const o = orders[id]; if (!o) return null; o.status = 'needs_attention'; o.error = reason; return { ...o }; },
   markFailed: async (userId, id, reason) => { const o = orders[id]; if (!o) return null; o.status = 'failed'; o.error = reason; return { ...o }; },
-  retrySupplierOrder: async (userId, id) => { const o = orders[id]; if (!o || !['needs_attention', 'failed'].includes(o.status)) return null; o.status = 'ready'; return { ...o }; },
+  retrySupplierOrder: async (userId, id, opts) => { retryCalls.push({ userId, id, ...opts }); const o = orders[id]; if (!o || !['needs_attention', 'failed'].includes(o.status)) return null; o.status = 'ready'; return { ...o }; },
 });
 stub('models/ordersModel', { getOrderById: async () => retryOrder, linkAmazonOrder: async (u, id, amazonOrderId) => { linkedOrder = { id, amazonOrderId }; } });
 stub('services/autoOrderService', {
@@ -91,9 +92,9 @@ const call = async (method, path, { body, userId = 'u1', params = {} } = {}) => 
   // ---------- POST /:id/placed: requires an amazonOrderId; links the ELMS order and charges credit through the service ----------
   res = await call('post', '/:id/placed', { params: { id: 's2' }, body: {} });
   assert.strictEqual(res.statusCode, 400);
-  res = await call('post', '/:id/placed', { params: { id: 's2' }, body: { amazonOrderId: 'AMZ-9', amazonTotal: 15 } });
+  res = await call('post', '/:id/placed', { params: { id: 's2' }, body: { amazonOrderId: 'AMZ-9', amazonTotal: 15, deliveryDate: '2026-10-05T00:00:00.000Z' } });
   assert.strictEqual(res.body.order.status, 'placed');
-  assert.deepStrictEqual(placedCalls[0], { userId: 'u1', id: 's2', body: { amazonOrderId: 'AMZ-9', amazonTotal: 15 } });
+  assert.deepStrictEqual(placedCalls[0], { userId: 'u1', id: 's2', body: { amazonOrderId: 'AMZ-9', amazonTotal: 15, deliveryDate: '2026-10-05T00:00:00.000Z' } });
 
   // ---------- POST /:id/failed: needsAttention true (default) vs false route to different terminal states ----------
   orders.s3 = { id: 's3', userId: 'u1', status: 'checking' };
@@ -103,11 +104,13 @@ const call = async (method, path, { body, userId = 'u1', params = {} } = {}) => 
   res = await call('post', '/:id/failed', { params: { id: 's4' }, body: { reason: 'Unexpected page.', needsAttention: false } });
   assert.strictEqual(res.body.order.status, 'failed');
 
-  // ---------- POST /:id/retry: re-reads the address from the linked ELMS order ----------
+  // ---------- POST /:id/retry: re-reads the address from the linked ELMS order, folding in the buyer's phone
+  // (a separate field on Order) since Amazon needs one to save a new address ----------
   orders.s5 = { id: 's5', userId: 'u1', status: 'needs_attention', order_id: 'o1' };
-  retryOrder = { shipping_address: { city: 'Retried City' } };
+  retryOrder = { shipping_address: { city: 'Retried City' }, buyer_phone: '+1-555-9999' };
   res = await call('post', '/:id/retry', { params: { id: 's5' } });
   assert.strictEqual(res.body.order.status, 'ready');
+  assert.deepStrictEqual(retryCalls[retryCalls.length - 1].shippingAddress, { city: 'Retried City', phone: '+1-555-9999' });
 
   // ---------- GET / : lists only this user's orders, optionally filtered by status ----------
   res = await call('get', '/', { userId: 'u1' });

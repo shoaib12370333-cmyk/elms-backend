@@ -56,15 +56,16 @@ router.post('/:id/placing', requireAuth, async (req, res) => {
 
 /**
  * POST /api/auto-order/:id/placed
- * Body: { amazonOrderId, amazonTotal }
- * The order was actually placed on Amazon. Links the Amazon order ID onto the ELMS order, writes the eBay note, and
- * charges the AUTO_ORDER credit - see services/autoOrderService.js completeSupplierOrderPlacement.
+ * Body: { amazonOrderId, amazonTotal, deliveryDate? }
+ * The order was actually placed on Amazon. Links the Amazon order ID onto the ELMS order, saves the delivery date
+ * and buying cost the extension read (same fields the manual "Mark as ordered" dialog fills in), writes the eBay
+ * note, and charges the AUTO_ORDER credit - see services/autoOrderService.js completeSupplierOrderPlacement.
  */
 router.post('/:id/placed', requireAuth, async (req, res) => {
-  const { amazonOrderId, amazonTotal } = req.body || {};
+  const { amazonOrderId, amazonTotal, deliveryDate } = req.body || {};
   if (!amazonOrderId) return res.status(400).json({ success: false, error: 'An Amazon order ID is required.' });
   try {
-    const order = await completeSupplierOrderPlacement(req.userId, req.params.id, { amazonOrderId, amazonTotal });
+    const order = await completeSupplierOrderPlacement(req.userId, req.params.id, { amazonOrderId, amazonTotal, deliveryDate });
     if (!order) return res.status(404).json({ success: false, error: 'That supplier order was not found, or was not awaiting placement.' });
     res.json({ success: true, order });
   } catch (err) {
@@ -109,7 +110,9 @@ router.post('/:id/retry', requireAuth, async (req, res) => {
   let shippingAddress;
   if (current.order_id) {
     const order = await getOrderById(req.userId, current.order_id);
-    shippingAddress = order?.shipping_address || undefined;
+    // buyer_phone lives on the order itself, not inside its shipping_address - folded in here the same way
+    // services/autoOrderService.js does when a supplier order is first created.
+    shippingAddress = order?.shipping_address ? { ...order.shipping_address, phone: order.buyer_phone || null } : undefined;
   }
 
   const order = await retrySupplierOrder(req.userId, req.params.id, { shippingAddress });

@@ -105,8 +105,8 @@ async function failJob(active, reason, needsAttention = true) {
   await setActive(null);
 }
 
-async function placeJob(active, { amazonOrderId, amazonTotal }) {
-  try { await api(`/api/auto-order/${active.orderId}/placed`, { method: 'POST', body: { amazonOrderId, amazonTotal } }); }
+async function placeJob(active, { amazonOrderId, amazonTotal, deliveryDate }) {
+  try { await api(`/api/auto-order/${active.orderId}/placed`, { method: 'POST', body: { amazonOrderId, amazonTotal, deliveryDate } }); }
   catch (err) { await recordResult({ orderId: active.orderId, error: `Amazon order ${amazonOrderId} was placed, but ELMS could not be told: ${err.message}` }); }
   await closeJobTab(active.tabId);
   await recordResult({ orderId: active.orderId, placed: true, amazonOrderId, amazonTotal });
@@ -218,7 +218,7 @@ const routes = {
   AO_PLACED: async (m, sender) => {
     const { active } = await getState();
     if (!active || active.tabId !== sender.tab?.id) return { ok: true };
-    await placeJob(active, { amazonOrderId: m.amazonOrderId, amazonTotal: m.amazonTotal });
+    await placeJob(active, { amazonOrderId: m.amazonOrderId, amazonTotal: m.amazonTotal, deliveryDate: m.deliveryDate });
     return { ok: true };
   },
   // ---- popup ----

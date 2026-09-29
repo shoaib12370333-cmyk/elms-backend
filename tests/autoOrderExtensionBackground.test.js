@@ -106,11 +106,12 @@ const order = (over = {}) => ({ id: 'so1', ebay_order_id: 'E1', amazon_url: 'htt
   state = await env.message({ type: 'AO_GET_STATE' });
   assert.strictEqual(state.active.step, 'placing');
 
-  // ---------- AO_PLACED: reports to ELMS, closes the tab, clears the active job, and it is recorded ----------
-  r = await env.message({ type: 'AO_PLACED', amazonOrderId: 'AMZ-1', amazonTotal: 20 }, { tab: { id: activeTabId } });
+  // ---------- AO_PLACED: reports to ELMS (including the delivery date the content script read), closes the tab,
+  // clears the active job, and it is recorded ----------
+  r = await env.message({ type: 'AO_PLACED', amazonOrderId: 'AMZ-1', amazonTotal: 20, deliveryDate: '2026-10-05T00:00:00.000Z' }, { tab: { id: activeTabId } });
   assert.strictEqual(r.ok, true);
   const placedCall = env.fetches.find((c) => c.url.endsWith('/so1/placed'));
-  assert.deepStrictEqual(placedCall.body, { amazonOrderId: 'AMZ-1', amazonTotal: 20 });
+  assert.deepStrictEqual(placedCall.body, { amazonOrderId: 'AMZ-1', amazonTotal: 20, deliveryDate: '2026-10-05T00:00:00.000Z' });
   assert.deepStrictEqual(env.tabs.removed, [activeTabId]);
   state = await env.message({ type: 'AO_GET_STATE' });
   assert.strictEqual(state.active, null);

@@ -18,6 +18,16 @@
     placeOrderButton: '#submitOrderButtonId, input[name="place-your-order-button"], #placeYourOrder, button[name="placeYourOrder"]',
     proceedToCheckout: '#sc-buy-box-ptc-button, input[name="proceedToRetailCheckout"], #hlb-ptc-btn-native, #attach-sidesheet-checkout-button',
     giftOption: '#gift-options-checkbox, input[name="gift-option"], input[id*="gift-option" i]',
+    addressSelect: '#shipToSelectBoxDropdown',
+    addNewAddressTrigger: 'a[href*="address/add"], [data-action*="add-new-address" i], [id*="add-new-address" i]',
+    addrFullName: '#address-ui-widgets-enterAddressFullName',
+    addrLine1: '#address-ui-widgets-enterAddressLine1',
+    addrLine2: '#address-ui-widgets-enterAddressLine2',
+    addrCity: '#address-ui-widgets-enterAddressCity',
+    addrState: '#address-ui-widgets-enterAddressStateOrRegion',
+    addrPostalCode: '#address-ui-widgets-enterAddressPostalCode',
+    addrPhone: '#address-ui-widgets-enterAddressPhoneNumber',
+    addrSubmit: '#address-ui-widgets-form-submit-button input[type="submit"], input[data-action="add-new-address-form-submit"], button[data-action="add-new-address-form-submit"]',
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -120,9 +130,67 @@
     return postal.length > 2 && text.includes(postal);
   }
 
+  // The classic one-page "Buy Now" checkout lists the account's saved addresses in a plain <select> - if one of
+  // them already has the buyer's postal code (a repeat buyer, or the seller has ordered to them before), just pick
+  // it rather than adding a duplicate. Returns true once picked, false when nothing there matches.
+  function selectMatchingSavedAddress(expected) {
+    const sel = qs(SELECTORS.addressSelect);
+    if (!sel || !expected?.postalCode) return false;
+    const postal = String(expected.postalCode).trim();
+    const option = Array.from(sel.options || []).find((o) => (o.textContent || '').includes(postal));
+    if (!option) return false;
+    sel.value = option.value;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  // Whichever UI Amazon shows (the classic select's "Add a new address" entry, or a standalone link/button), find
+  // something that opens the new-address form. Absence is not an error - the caller falls back to needs_attention.
+  function findAddNewAddressTrigger() {
+    const sel = qs(SELECTORS.addressSelect);
+    if (sel) {
+      const option = Array.from(sel.options || []).find((o) => /add.*new.*address/i.test(o.textContent || ''));
+      if (option) return { click: () => { sel.value = option.value; sel.dispatchEvent(new Event('change', { bubbles: true })); } };
+    }
+    const direct = qs(SELECTORS.addNewAddressTrigger);
+    if (direct) return direct;
+    return qsAll('a, button, span[role="button"]').find((el) => /add a new address/i.test(el.textContent || '')) || null;
+  }
+
+  // Fills Amazon's own "add an address" form with the buyer's details. input+change are both dispatched since a
+  // React-driven form (the modern widget) listens for input, while an older plain form only wires up change.
+  function fillAddressForm(address) {
+    const setVal = (sel, value) => {
+      const el = qs(sel);
+      if (!el || value == null || value === '') return;
+      el.value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    setVal(SELECTORS.addrFullName, address.fullName);
+    setVal(SELECTORS.addrLine1, address.addressLine1);
+    setVal(SELECTORS.addrLine2, address.addressLine2);
+    setVal(SELECTORS.addrCity, address.city);
+    setVal(SELECTORS.addrState, address.stateOrProvince);
+    setVal(SELECTORS.addrPostalCode, address.postalCode);
+    setVal(SELECTORS.addrPhone, address.phone);
+    // The fields Amazon will not submit without - if any is missing there is nothing usable to submit at all.
+    return !!(qs(SELECTORS.addrFullName)?.value && qs(SELECTORS.addrLine1)?.value && qs(SELECTORS.addrPostalCode)?.value);
+  }
+
   function readConfirmationOrderId() {
     const m = pageText().match(/\b(\d{3}-\d{7}-\d{7})\b/);
     return m ? m[1] : null;
+  }
+
+  // Amazon's confirmation/review page usually shows an estimated arrival ("Arriving Tuesday, Oct 7" / "Estimated
+  // delivery: Oct 7, 2026"). Best-effort only - this never blocks or risks money, so an unreadable date is simply
+  // left null (ELMS keeps whatever delivery date, if any, was already there).
+  function readDeliveryDate() {
+    const m = pageText().match(/(?:arriving|estimated delivery:?)\s+([A-Za-z]+,?\s+)?([A-Za-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?)/i);
+    if (!m) return null;
+    const parsed = new Date(m[2] + (/\d{4}/.test(m[2]) ? '' : `, ${new Date().getFullYear()}`));
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
   }
 
   // Amazon's optional "This is a gift" checkbox during checkout - selecting it keeps Amazon's prices off the
@@ -194,18 +262,53 @@
     ptc.click();
   }
 
-  async function runCheckoutStep(job) {
-    const addressOk = addressMatches(job.order.shipping_address);
-    if (!(await confirmStep(job, 'confirm_address', addressOk
-      ? 'The selected Amazon address matches the buyer\'s postal code - continue?'
-      : 'The selected Amazon address does NOT match the buyer\'s postal code. Fix it by hand, then press Do it to re-check - or Stop.'))) return;
-    if (!addressOk) {
-      // The seller pressed "Do it" anyway without the address actually matching yet - read it again rather than
-      // trusting the earlier read, exactly like re-checking after fixing it by hand.
-      if (!addressMatches(job.order.shipping_address)) {
-        return report('AO_BLOCKED', { reason: 'The Amazon account\'s selected address does not match the buyer\'s address. Add/select it by hand, then retry.' });
-      }
+  // Gets the buyer's own address selected on the page: picks a saved address that already has their postal code,
+  // else adds a new one from the order's own shipping_address. Never guesses past a step it cannot complete -
+  // anything not exactly as expected is left for the seller (needs_attention), same as everywhere else here.
+  async function ensureBuyerAddress(job) {
+    const address = job.order.shipping_address;
+    if (addressMatches(address)) return true;
+
+    if (selectMatchingSavedAddress(address)) {
+      await humanPause();
+      if (addressMatches(address)) return true;
     }
+
+    if (!address || !address.postalCode) {
+      await report('AO_BLOCKED', { reason: 'No buyer address is saved on this order to add on Amazon.' });
+      return false;
+    }
+    const trigger = findAddNewAddressTrigger();
+    if (!trigger) {
+      await report('AO_BLOCKED', { reason: 'The buyer\'s address is not saved on Amazon and no "Add a new address" option could be found.' });
+      return false;
+    }
+    if (!(await confirmStep(job, 'add_address', `Add the buyer's address on Amazon: ${address.fullName || ''}, ${address.addressLine1 || ''}, ${address.city || ''} ${address.postalCode || ''}`))) return false;
+    await humanPause();
+    trigger.click();
+    await humanPause();
+    if (!fillAddressForm(address)) {
+      await report('AO_BLOCKED', { reason: 'Could not fill in the buyer\'s address on Amazon\'s own form (a required field was missing on the page).' });
+      return false;
+    }
+    const submit = qs(SELECTORS.addrSubmit);
+    if (!submit) {
+      await report('AO_BLOCKED', { reason: 'Filled in the buyer\'s address, but could not find a way to save it.' });
+      return false;
+    }
+    await humanPause();
+    submit.click();
+    await sleep(1500); // Amazon returns to the checkout page after saving a new address; give it a moment.
+    if (!addressMatches(address)) {
+      await report('AO_BLOCKED', { reason: 'Added the buyer\'s address, but it still does not show as selected on the checkout page.' });
+      return false;
+    }
+    return true;
+  }
+
+  async function runCheckoutStep(job) {
+    const addressResult = await ensureBuyerAddress(job);
+    if (!addressResult) return; // already reported (blocked) or the seller stopped mid-confirm
 
     const giftBox = findGiftOption();
     if (giftBox) {
@@ -234,7 +337,8 @@
     const amazonOrderId = readConfirmationOrderId();
     if (!amazonOrderId) return report('AO_BLOCKED', { reason: 'The order looks placed, but no Amazon order number could be read from the confirmation page.' });
     const amazonTotal = readCheckoutTotal();
-    return report('AO_PLACED', { amazonOrderId, amazonTotal });
+    const deliveryDate = readDeliveryDate();
+    return report('AO_PLACED', { amazonOrderId, amazonTotal, deliveryDate });
   }
 
   async function main() {
