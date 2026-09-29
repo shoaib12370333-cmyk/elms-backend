@@ -924,6 +924,14 @@ async function updateOfferPrice(
  * ELMS intentionally accepts only a positive integer quantity here. A source
  * that is out of stock is handled by withdrawListing(), rather than leaving
  * an active eBay offer with zero quantity.
+ *
+ * The offer's own availableQuantity is NOT the whole story: eBay's docs confirm the quantity a live listing actually
+ * shows is min(offer.availableQuantity, inventory_item.availability.shipToLocationAvailability.quantity) - the SKU's
+ * shared, cross-marketplace stock figure, which a sale decrements on its own. Setting only the offer (as this
+ * function did before 2026-09-29) left that figure at whatever it dropped to, so the live listing stayed at 0 no
+ * matter what the offer said - confirmed against two real listings that "changed" in ELMS but never moved on eBay.
+ * reviseActiveListing (above) already does both together for the full editor's save; this does the same two PUTs,
+ * touching nothing on the inventory item besides the quantity itself.
  */
 async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
   if (!offerId) {
@@ -951,6 +959,30 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
     ...updatable,
     availableQuantity: quantity,
   };
+
+  if (offer?.sku) {
+    const currentInventory = await ebayRequest(
+      refreshToken,
+      'GET',
+      `/sell/inventory/v1/inventory_item/${encodeURIComponent(offer.sku)}`
+    );
+    const inventoryUpdate = {
+      ...(currentInventory || {}),
+      availability: {
+        ...(currentInventory?.availability || {}),
+        shipToLocationAvailability: {
+          ...(currentInventory?.availability?.shipToLocationAvailability || {}),
+          quantity,
+        },
+      },
+    };
+    await ebayRequest(
+      refreshToken,
+      'PUT',
+      `/sell/inventory/v1/inventory_item/${encodeURIComponent(offer.sku)}`,
+      inventoryUpdate
+    );
+  }
 
   await ebayRequest(
     refreshToken,
