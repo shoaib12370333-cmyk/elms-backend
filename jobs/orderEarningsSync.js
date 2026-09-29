@@ -27,9 +27,13 @@ function splitProportionally(totalAmount, lines) {
 }
 
 /** A seller who hasn't reconnected eBay since sell.finances was added fails every call the same way - stop after the
- * first such failure for this account instead of repeating the same warning once per pending order. */
+ * first such failure for this account instead of repeating the same warning once per pending order. Real eBay Finances
+ * calls observed in production return this as an "invalid_scope"-worded message, not consistently as an HTTP 401/403
+ * (confirmed 2026-09-29 against real seller accounts), so the message itself is checked too, not just statusCode. */
 function looksLikeMissingScope(err) {
-  return err.statusCode === 401 || err.statusCode === 403;
+  if (err.statusCode === 401 || err.statusCode === 403) return true;
+  const msg = String(err.message || '').toLowerCase();
+  return msg.includes('scope') && (msg.includes('invalid') || msg.includes('exceed') || msg.includes('malformed'));
 }
 
 async function syncOneAccount(account) {

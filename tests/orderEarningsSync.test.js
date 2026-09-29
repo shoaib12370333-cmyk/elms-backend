@@ -71,5 +71,17 @@ const { runOrderEarningsSync, splitProportionally } = require('../jobs/orderEarn
   assert.strictEqual(calls403, 1, 'the second order of the same account is never even tried once the first fails with 403');
   assert.strictEqual(bulkCalls.flat().length, 0);
 
+  // ---------- the same short-circuit for a real eBay "invalid_scope"-worded error whose statusCode is NOT 401/403 ----------
+  pendingByAccount = { acc1: [
+    { _id: 'l7', ebayOrderId: 'O6', salePrice: 9 },
+    { _id: 'l8', ebayOrderId: 'O7', salePrice: 9 },
+  ] };
+  let callsScopeMsg = 0;
+  nextTransactions = async () => { callsScopeMsg++; const e = new Error('The requested scope is invalid, unknown, malformed, or exceeds the scope granted to the client'); e.statusCode = 400; throw e; };
+  financesCalls.length = 0; bulkCalls.length = 0;
+  await runOrderEarningsSync();
+  assert.strictEqual(callsScopeMsg, 1, 'the message alone (statusCode 400 here, not 401/403) is enough to stop trying the rest of this account');
+  assert.strictEqual(bulkCalls.flat().length, 0);
+
   console.log('order earnings sync tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
