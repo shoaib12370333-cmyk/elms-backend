@@ -579,7 +579,7 @@ async function listListings(userId, status, accountId = null) {
 // what the editor needs (description, pictures, item specifics ...) is read for the ONE listing that is opened (getListingFull).
 const PAGE_DEFAULT = 50;
 const PAGE_MAX = 200;
-const PAGE_SELECT = 'sku title mainImage sellPrice amazonPrice status ebayAccountId marketplaceId currency quantity ebayListingId ebayOfferId categoryId errorMessage note markupPercent pricingRule views watchers statsSyncedAt createdAt updatedAt importId amazonInStock stockMonitoring priceMonitoring sourcePlatform cjProductId cjVariantId cjShippingCost';
+const PAGE_SELECT = 'sku title mainImage sellPrice amazonPrice status ebayAccountId marketplaceId currency quantity soldQuantity ebayListingId ebayOfferId categoryId errorMessage note markupPercent pricingRule views watchers statsSyncedAt createdAt updatedAt importId amazonInStock stockMonitoring priceMonitoring sourcePlatform cjProductId cjVariantId cjShippingCost';
 const VERO_TEXT_FIELDS = 'description bulletPoints specifications ebayAspects'; // read for the rows of one page only, to flag VeRO words; never sent
 const IMPORT_FOR_PAGE = 'asin amazonUrl amazonPrice product.price';
 const KEYS_NOT_IN_A_ROW = ['description', 'bullet_points', 'specifications', 'ebay_aspects', 'images', 'images_customized', 'ebay_image_urls', 'publish_response', 'publish_error_details', 'tags', 'draft_customized'];
@@ -795,24 +795,27 @@ async function listRowsByIds(userId, ids) {
  * average margin, when views were last synced). Worked out from a light read, not from full listings. `vero` is only worked out when the seller has VeRO words.
  */
 async function summarizeLiveListings(userId, { accountId = null } = {}) {
-  const live = { userId, status: 'published' };
+  // 'sold' (out of stock, see models/ordersModel.js markSoldIfOut) is still a live listing for every purpose here
+  // (units sold, views, watchers, margin, VeRO) except the "Active" count, which is 'published' only.
+  const live = { userId, status: { $in: ['published', 'sold'] } };
   if (accountId) live.ebayAccountId = accountId;
   const ended = { userId, status: 'ended' };
   if (accountId) ended.ebayAccountId = accountId;
   const [rows, endedCount, sold, veroTerms] = await Promise.all([lightRows(live), Listing.countDocuments(ended), getSoldByListing(userId), scanVero(userId, live)]);
-  let views = 0; let watchers = 0; let units = 0; let last = 0;
+  let views = 0; let watchers = 0; let units = 0; let last = 0; let activeCount = 0; let soldCount = 0;
   const margins = [];
   for (const r of rows) {
     views += numOrNull(r.doc.views) || 0;
     watchers += numOrNull(r.doc.watchers) || 0;
     units += sold.get(r.id) || 0;
+    if (r.doc.status === 'sold') soldCount += 1; else activeCount += 1;
     const t = r.doc.statsSyncedAt ? new Date(r.doc.statsSyncedAt).getTime() : 0;
     if (t > last) last = t;
     const sell = numOrNull(r.doc.sellPrice);
     if (r.amazon > 0 && sell > 0) margins.push((sell - r.amazon) / sell);
   }
   return {
-    counts: { all: rows.length, active: rows.length, sold: 0, ended: endedCount, issues: 0, vero: veroTerms.size },
+    counts: { all: rows.length, active: activeCount, sold: soldCount, ended: endedCount, issues: 0, vero: veroTerms.size },
     totals: {
       units_sold: units, views, watchers,
       average_margin_percent: margins.length ? Math.round((margins.reduce((a, b) => a + b, 0) / margins.length) * 100) : null,
@@ -1076,6 +1079,18 @@ async function markEnded(userId, id, reason) {
   return doc ? serialize(doc) : null;
 }
 
+/** Restocking a sold-out listing (services/liveBulkRestockService.js, after eBay has already taken the new quantity):
+ * back to 'published' with a fresh quantity and a soldQuantity of 0, so the next sale is counted fresh against it. Only
+ * ever moves a listing OUT of 'sold' - never touches one of any other status. */
+async function restockListing(userId, id, quantity) {
+  const doc = await Listing.findOneAndUpdate(
+    { _id: id, userId, status: 'sold' },
+    { status: 'published', quantity, soldQuantity: 0, lastStockSyncedAt: new Date() },
+    { new: true }
+  );
+  return doc ? serialize(doc) : null;
+}
+
 /**
  * Returns every listing (across all users) currently marked as published,
  * with its source import's ASIN and its owning user's ID attached.
@@ -1151,6 +1166,7 @@ function serialize(doc) {
     markup_percent: Number.isFinite(Number(obj.markupPercent)) ? Number(obj.markupPercent) : 0,
     currency: obj.currency || 'USD',
     quantity: obj.quantity,
+    sold_quantity: obj.soldQuantity || 0,
     category_id: obj.categoryId,
     ebay_offer_id: obj.ebayOfferId,
     ebay_listing_id: obj.ebayListingId,
@@ -1360,6 +1376,7 @@ module.exports = {
   markPaused,
   resetErrorToDraft,
   markEnded,
+  restockListing,
   listPublishedListings,
   updateListingSettings,
   updateListingStats,

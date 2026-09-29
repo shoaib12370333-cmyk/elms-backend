@@ -20,6 +20,19 @@ async function excludeDisconnectedAccounts(query, userId) {
 }
 
 /**
+ * Adds a fresh sale to a listing's running "sold since last restock" count and, if that reaches (or passes) how many
+ * were listed, flips it from 'published' to 'sold' - one atomic increment (safe against two orders of the same
+ * listing arriving at once), then a single conditional update guarded by status:'published' so a listing already
+ * moved to 'sold' (or since restocked/ended/etc.) is never touched twice or by mistake.
+ */
+async function markSoldIfOut(listingId, soldQty) {
+  const updated = await Listing.findOneAndUpdate({ _id: listingId }, { $inc: { soldQuantity: soldQty } }, { new: true }).select('quantity soldQuantity status').lean();
+  if (updated && updated.status === 'published' && updated.soldQuantity >= updated.quantity) {
+    await Listing.updateOne({ _id: listingId, status: 'published' }, { $set: { status: 'sold' } });
+  }
+}
+
+/**
  * Creates or updates one order line item from an eBay sync, matched by
  * (userId, ebayOrderId, sku) so re-running the sync never creates
  * duplicates. Looks up the matching listing by SKU so the order can be
@@ -103,6 +116,10 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
         ...fields,
         fulfillmentStatus: fields.lineItemStatus === 'FULFILLED' ? 'shipped' : 'pending',
       });
+      // A genuinely NEW order (never on a re-sync of one already seen): count it against the listing's stock, and if
+      // that sells out everything currently listed, move the listing to the "Sold" tab until the seller restocks it.
+      const soldQty = Number(fields.quantity);
+      if (listingId && Number.isFinite(soldQty) && soldQty > 0) await markSoldIfOut(listingId, soldQty);
     }
   } catch (err) {
     // Two syncs (webhook + job) inserted the same row at once: update the winner instead.
