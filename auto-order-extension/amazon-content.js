@@ -17,6 +17,7 @@
     merchantInfo: '#merchant-info, #tabular-buybox, #buybox',
     placeOrderButton: '#submitOrderButtonId, input[name="place-your-order-button"], #placeYourOrder, button[name="placeYourOrder"]',
     proceedToCheckout: '#sc-buy-box-ptc-button, input[name="proceedToRetailCheckout"], #hlb-ptc-btn-native, #attach-sidesheet-checkout-button',
+    giftOption: '#gift-options-checkbox, input[name="gift-option"], input[id*="gift-option" i]',
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -124,8 +125,27 @@
     return m ? m[1] : null;
   }
 
+  // Amazon's optional "This is a gift" checkbox during checkout - selecting it keeps Amazon's prices off the
+  // packing slip, which matters here since the buyer paying on eBay was never meant to see what this cost on
+  // Amazon. Not every product/account shows this step, so finding nothing is not an error - it is just skipped.
+  function findGiftOption() { return qs(SELECTORS.giftOption); }
+
   // ---------------------------------------------------------------- the actual flow, driven by background.js
   async function report(type, payload) { return chrome.runtime.sendMessage({ type, ...payload }); }
+
+  // Manual mode (job.manualMode): before anything that clicks or types, wait here - polling AO_AWAIT_STEP, since a
+  // service worker can be evicted at any moment and must not be relied on to hold a response open - until the
+  // seller presses "Do it" for this exact step in the popup, or the job is stopped from there. Outside manual mode
+  // this resolves immediately: the seller never even sees these steps happen.
+  async function confirmStep(job, name, description) {
+    if (!job.manualMode) return true;
+    for (;;) {
+      const res = await report('AO_AWAIT_STEP', { name, description });
+      if (res?.stopped) return false;
+      if (res?.proceed) return true;
+      await sleep(1000);
+    }
+  }
 
   async function runProductStep(job) {
     if (readStock() === false) return report('AO_BLOCKED', { reason: 'This item shows as out of stock or unavailable.' });
@@ -135,6 +155,7 @@
     if (job.order.variant_details) {
       const option = findVariantOption(job.order.variant_details);
       if (!option) return report('AO_BLOCKED', { reason: `Could not find the ordered variant ("${job.order.variant_details}") on this page.` });
+      if (!(await confirmStep(job, 'select_variant', `Select the variant: ${job.order.variant_details}`))) return;
       await humanPause();
       option.click();
       await humanPause();
@@ -142,39 +163,69 @@
     setQuantity(job.order.quantity);
     await humanPause();
     const buyNow = qs(SELECTORS.buyNow);
-    const proceed = qs(SELECTORS.proceedToCheckout);
     const addToCart = qs(SELECTORS.addToCart);
     await report('AO_STEP', { step: 'product_checked' });
-    if (buyNow) { buyNow.click(); return; }
+    if (buyNow) {
+      if (!(await confirmStep(job, 'click_buy_now', `Click "Buy Now" (quantity ${job.order.quantity || 1})`))) return;
+      buyNow.click();
+      return;
+    }
     if (addToCart) {
+      if (!(await confirmStep(job, 'click_add_to_cart', `Click "Add to Cart" (quantity ${job.order.quantity || 1})`))) return;
       addToCart.click();
       await humanPause();
-      const ptc = qs(SELECTORS.proceedToCheckout) || proceed;
-      if (ptc) { await humanPause(); ptc.click(); return; }
+      const ptc = qs(SELECTORS.proceedToCheckout);
+      if (ptc) {
+        if (!(await confirmStep(job, 'proceed_to_checkout', 'Click "Proceed to checkout"'))) return;
+        await humanPause();
+        ptc.click();
+        return;
+      }
       return report('AO_BLOCKED', { reason: 'Added to cart, but could not find a way to proceed to checkout.' });
     }
     return report('AO_BLOCKED', { reason: 'Could not find a Buy Now or Add to Cart button on this page.' });
   }
 
-  async function runCartStep() {
+  async function runCartStep(job) {
     const ptc = qs(SELECTORS.proceedToCheckout);
     if (!ptc) return report('AO_BLOCKED', { reason: 'On the cart page, but could not find a way to proceed to checkout.' });
+    if (!(await confirmStep(job, 'proceed_to_checkout', 'Click "Proceed to checkout"'))) return;
     await humanPause();
     ptc.click();
   }
 
   async function runCheckoutStep(job) {
-    if (!addressMatches(job.order.shipping_address)) {
-      return report('AO_BLOCKED', { reason: 'The Amazon account\'s selected address does not match the buyer\'s address. Add/select it by hand, then retry.' });
+    const addressOk = addressMatches(job.order.shipping_address);
+    if (!(await confirmStep(job, 'confirm_address', addressOk
+      ? 'The selected Amazon address matches the buyer\'s postal code - continue?'
+      : 'The selected Amazon address does NOT match the buyer\'s postal code. Fix it by hand, then press Do it to re-check - or Stop.'))) return;
+    if (!addressOk) {
+      // The seller pressed "Do it" anyway without the address actually matching yet - read it again rather than
+      // trusting the earlier read, exactly like re-checking after fixing it by hand.
+      if (!addressMatches(job.order.shipping_address)) {
+        return report('AO_BLOCKED', { reason: 'The Amazon account\'s selected address does not match the buyer\'s address. Add/select it by hand, then retry.' });
+      }
     }
+
+    const giftBox = findGiftOption();
+    if (giftBox) {
+      if (await confirmStep(job, 'gift_option', 'Mark this as a gift? (keeps Amazon\'s price off the packing slip)')) {
+        giftBox.click();
+        await humanPause();
+      }
+    }
+
     const total = readCheckoutTotal();
     const inStock = readStock() !== false; // most themes still show availability on the review page too
     const fulfilledByAmazon = readFulfilledByAmazon() || !job.settings?.primeOnly;
+    if (!(await confirmStep(job, 'confirm_seller', `Sold/shipped by Amazon: ${fulfilledByAmazon ? 'yes' : 'NO'}. Total read from the page: ${total != null ? total : 'could not read it'}.`))) return;
+
     await report('AO_STEP', { step: 'reviewing' });
     const { pass, reason } = await report('AO_CHECKS', { total, inStock, fulfilledByAmazon });
     if (!pass) return report('AO_BLOCKED', { reason: reason || 'This order did not pass its final checks.' });
     const placeBtn = qs(SELECTORS.placeOrderButton);
     if (!placeBtn) return report('AO_BLOCKED', { reason: 'The checks passed, but the Place your order button could not be found.' });
+    if (!(await confirmStep(job, 'click_place_order', 'Click "Place your order" - this spends real money.'))) return;
     await humanPause();
     placeBtn.click();
   }
@@ -199,7 +250,7 @@
       if (kind === 'twofactor') return await report('AO_BLOCKED', { reason: 'Amazon asked for a two-factor code.' });
       if (kind === 'confirmation') return await runConfirmationStep();
       if (kind === 'checkout') return await runCheckoutStep(job);
-      if (kind === 'cart') return await runCartStep();
+      if (kind === 'cart') return await runCartStep(job);
       if (kind === 'product') return await runProductStep(job);
       return await report('AO_BLOCKED', { reason: 'Landed on a page this extension does not recognize.' });
     } catch (err) {

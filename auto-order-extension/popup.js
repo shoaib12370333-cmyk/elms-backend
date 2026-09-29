@@ -57,15 +57,24 @@ function historyLine(entry) {
 function renderState(state) {
   $('onToggle').checked = !!state.autoOrderOn;
   $('pauseToggle').checked = !!state.paused;
+  $('manualToggle').checked = !!state.manualMode;
   const jobBox = $('jobBox');
   const stopBtn = $('stopNow');
+  const pendingBox = $('pendingBox');
   if (state.active) {
     jobBox.classList.remove('hidden');
     stopBtn.classList.remove('hidden');
     jobBox.innerHTML = `Working on eBay order <b>${escapeHtml(state.active.order?.ebay_order_id || '')}</b> &middot; step: <b>${escapeHtml(state.active.step || 'loading')}</b>`;
+    if (state.active.pendingStep) {
+      pendingBox.classList.remove('hidden');
+      $('pendingDesc').textContent = state.active.pendingStep.description || '';
+    } else {
+      pendingBox.classList.add('hidden');
+    }
   } else {
     jobBox.classList.add('hidden');
     stopBtn.classList.add('hidden');
+    pendingBox.classList.add('hidden');
   }
   $('history').innerHTML = (state.history || []).map((e) => { const l = historyLine(e); return `<li class="${l.cls}">${l.text}</li>`; }).join('') || '<li>No activity yet.</li>';
 }
@@ -122,6 +131,16 @@ $('onToggle').addEventListener('change', async (e) => {
 });
 $('pauseToggle').addEventListener('change', async (e) => {
   await chrome.runtime.sendMessage({ type: 'AO_SET_PAUSED', paused: e.target.checked });
+  refreshState();
+});
+$('manualToggle').addEventListener('change', async (e) => {
+  await chrome.runtime.sendMessage({ type: 'AO_SET_MANUAL', manual: e.target.checked });
+  refreshState();
+});
+$('approveStep').addEventListener('click', async () => {
+  $('approveStep').disabled = true;
+  await chrome.runtime.sendMessage({ type: 'AO_APPROVE_STEP' });
+  $('approveStep').disabled = false;
   refreshState();
 });
 $('stopNow').addEventListener('click', async () => {

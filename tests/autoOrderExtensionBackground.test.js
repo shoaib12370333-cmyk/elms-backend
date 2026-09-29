@@ -25,7 +25,7 @@ function boot({ stored = {}, respond } = {}) {
     runtime: { onMessage: { addListener: (fn) => { listeners.message = fn; } }, onInstalled: { addListener: (fn) => { listeners.installed = fn; } } },
     alarms: { create: () => {}, onAlarm: { addListener: (fn) => { listeners.alarm = fn; } } },
     tabs: {
-      create: async (o) => { const id = nextTabId++; tabs.created.push({ id, url: o.url }); return { id }; },
+      create: async (o) => { const id = nextTabId++; tabs.created.push({ id, url: o.url, active: !!o.active }); return { id }; },
       remove: async (id) => { tabs.removed.push(id); },
     },
   };
@@ -160,6 +160,45 @@ const order = (over = {}) => ({ id: 'so1', ebay_order_id: 'E1', amazon_url: 'htt
   assert.ok(env.fetches.find((c) => c.url.endsWith('/so6/failed') && c.body.reason === 'Stopped by the seller.'));
   state = await env.message({ type: 'AO_GET_STATE' });
   assert.strictEqual(state.active, null);
+
+  // ---------- manual mode: the tab opens in the foreground, and a step waits for an explicit approval ----------
+  env = boot({ stored: { autoOrderOn: false }, respond: (c) => (c.url.endsWith('/extension-settings') ? SETTINGS : c.url.endsWith('/auto-order/next') ? { status: 200, body: { success: true, order: order({ id: 'so7' }), settings: {} } } : { status: 200, body: { success: true } }) });
+  r = await env.message({ type: 'AO_SET_MANUAL', manual: true });
+  assert.strictEqual(r.ok, true);
+  r = await env.message({ type: 'AO_SET_ON', on: true });
+  await new Promise((res) => setTimeout(res, 0));
+  assert.strictEqual(env.tabs.created[0].active, true, 'manual mode: the tab is not hidden');
+  const manualTabId = env.tabs.created[0].id;
+
+  // the content script asks to click "Buy Now" - not yet approved, so it must wait
+  r = await env.message({ type: 'AO_AWAIT_STEP', name: 'click_buy_now', description: 'Click "Buy Now"' }, { tab: { id: manualTabId } });
+  assert.strictEqual(r.proceed, false);
+  state = await env.message({ type: 'AO_GET_STATE' });
+  assert.strictEqual(state.active.pendingStep.name, 'click_buy_now');
+  assert.strictEqual(state.active.pendingStep.description, 'Click "Buy Now"');
+
+  // asking again before the seller does anything: still not approved
+  r = await env.message({ type: 'AO_AWAIT_STEP', name: 'click_buy_now', description: 'Click "Buy Now"' }, { tab: { id: manualTabId } });
+  assert.strictEqual(r.proceed, false);
+
+  // the seller presses "Do it" in the popup
+  r = await env.message({ type: 'AO_APPROVE_STEP' });
+  assert.strictEqual(r.ok, true);
+
+  // now the same step name is allowed through, exactly once, and the pending/approved flags are cleared after
+  r = await env.message({ type: 'AO_AWAIT_STEP', name: 'click_buy_now', description: 'Click "Buy Now"' }, { tab: { id: manualTabId } });
+  assert.strictEqual(r.proceed, true);
+  state = await env.message({ type: 'AO_GET_STATE' });
+  assert.strictEqual(state.active.pendingStep, null);
+
+  // a later, different step needs its own separate approval - the earlier approval does not carry over
+  r = await env.message({ type: 'AO_AWAIT_STEP', name: 'click_place_order', description: 'Click "Place your order"' }, { tab: { id: manualTabId } });
+  assert.strictEqual(r.proceed, false);
+
+  // stopping the job mid-wait: the next poll reports "stopped" instead of hanging forever
+  await env.message({ type: 'AO_STOP_NOW' });
+  r = await env.message({ type: 'AO_AWAIT_STEP', name: 'click_place_order', description: 'x' }, { tab: { id: manualTabId } });
+  assert.strictEqual(r.stopped, true);
 
   // ---------- paused: the alarm never even asks for a next order ----------
   env = boot({ stored: { paused: true }, respond: () => { throw new Error('must not be called while paused'); } });
