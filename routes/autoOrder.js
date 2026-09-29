@@ -11,7 +11,7 @@ const {
   retrySupplierOrder,
 } = require('../models/supplierOrdersModel');
 const { getOrderById } = require('../models/ordersModel');
-const { completeSupplierOrderPlacement, withinDailyLimit, hasCredits } = require('../services/autoOrderService');
+const { completeSupplierOrderPlacement, withinDailyLimit, hasCredits, primeOnlySetting } = require('../services/autoOrderService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 
 /**
@@ -39,7 +39,8 @@ router.get('/next', requireAuth, async (req, res) => {
     return res.json({ success: true, order: null, reason: 'daily_limit' });
   }
 
-  res.json({ success: true, order });
+  // Sent alongside the order rather than making the extension fetch seller settings separately just for this one flag.
+  res.json({ success: true, order, settings: { primeOnly: await primeOnlySetting(req.userId) } });
 });
 
 /**

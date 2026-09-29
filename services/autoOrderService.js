@@ -1,4 +1,5 @@
 const User = require('./../models/schemas/User');
+const Import = require('../models/schemas/Import');
 const { createSupplierOrder, markPlaced, todaysPlacedTotal } = require('../models/supplierOrdersModel');
 const { linkAmazonOrder } = require('../models/ordersModel');
 const { getEbayAccountById, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
@@ -36,6 +37,12 @@ async function maybeCreateSupplierOrder({ userId, listing, order, ebayAccountId 
     const caps = [pctCap, hardCap].filter((n) => Number.isFinite(n) && n > 0);
     const maxAllowedCost = caps.length ? Math.min(...caps) : null;
 
+    // The listing's own import record has the exact product page it was read from - not populated on `listing` here,
+    // so a light, separate lookup (only when there is one to look up).
+    const amazonUrl = listing.importId
+      ? (await Import.findById(listing.importId).select('amazonUrl').lean())?.amazonUrl || null
+      : null;
+
     return await createSupplierOrder({
       userId,
       ebayAccountId: ebayAccountId || null,
@@ -46,6 +53,7 @@ async function maybeCreateSupplierOrder({ userId, listing, order, ebayAccountId 
       legacyItemId: order.legacyItemId || null,
       sourcePlatform: 'amazon',
       asin: listing.sku,
+      amazonUrl,
       variantDetails: order.variantDetails || null,
       quantity: order.quantity || 1,
       shippingAddress: order.shippingAddress || null,
@@ -112,4 +120,12 @@ async function completeSupplierOrderPlacement(userId, supplierOrderId, { amazonO
   return updated;
 }
 
-module.exports = { maybeCreateSupplierOrder, withinDailyLimit, completeSupplierOrderPlacement, hasCredits };
+/** Whether the extension should refuse anything not sold/fulfilled by Amazon itself (models/schemas/User.js
+ * autoOrderPrimeOnly, on by default) - sent alongside the order in GET /api/auto-order/next so the extension doesn't
+ * need a second request just to read one setting. */
+async function primeOnlySetting(userId) {
+  const user = await User.findById(userId).select('autoOrderPrimeOnly').lean();
+  return user ? user.autoOrderPrimeOnly !== false : true;
+}
+
+module.exports = { maybeCreateSupplierOrder, withinDailyLimit, completeSupplierOrderPlacement, hasCredits, primeOnlySetting };
