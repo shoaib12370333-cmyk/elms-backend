@@ -15,7 +15,7 @@ const { fetchSaleTransactionsForOrder, netEarningFromTransactions } = require('.
   nextResponse = () => ({ status: 200, data: { transactions: [{ transactionType: 'SALE', amount: { value: '18.50', currency: 'USD' } }] } });
   await fetchSaleTransactionsForOrder('RT1', '12-34567-89012', 'EBAY_GB');
   const { url, config } = calls[calls.length - 1];
-  assert.ok(url.startsWith('https://api.ebay.com/sell/finances/v1/transaction?'));
+  assert.ok(url.startsWith('https://apiz.ebay.com/sell/finances/v1/transaction?'), 'Finances is served from apiz, not api.ebay.com (confirmed 2026-09-29: api.ebay.com 404s on every real call)');
   assert.ok(url.includes('filter=orderId%3A%7B12-34567-89012%7D'), 'orderId filter, URL-encoded');
   assert.ok(url.includes('filter=transactionType%3A%7BSALE%7D'), 'transactionType filter, as its own separate filter= param');
   assert.strictEqual((url.match(/filter=/g) || []).length, 2, 'two separate filter= query params, never one comma-joined string');
