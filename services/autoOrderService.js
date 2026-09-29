@@ -1,7 +1,7 @@
 const User = require('./../models/schemas/User');
 const Import = require('../models/schemas/Import');
 const { createSupplierOrder, markPlaced, todaysPlacedTotal } = require('../models/supplierOrdersModel');
-const { linkAmazonOrder } = require('../models/ordersModel');
+const { linkAmazonOrder, markOrdered } = require('../models/ordersModel');
 const { getEbayAccountById, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const { writeAmazonOrderNote } = require('./ebayOrderNoteService');
 const { hasCredits, spendCredit } = require('../models/usersModel');
@@ -56,7 +56,9 @@ async function maybeCreateSupplierOrder({ userId, listing, order, ebayAccountId 
       amazonUrl,
       variantDetails: order.variantDetails || null,
       quantity: order.quantity || 1,
-      shippingAddress: order.shippingAddress || null,
+      // Amazon needs a phone number to save a new address; eBay's own buyer phone (a separate field on Order, not
+      // part of its shippingAddress) is folded in here so the extension has everything in one place.
+      shippingAddress: order.shippingAddress ? { ...order.shippingAddress, phone: order.buyerPhone || null } : null,
       maxAllowedCost,
       status: 'ready',
       fulfillmentMethod: 'extension',
@@ -82,19 +84,30 @@ async function withinDailyLimit(userId, estimatedCost) {
 /**
  * The extension reported a successful placement. In order:
  *   1. mark the supplier order 'placed' (models/supplierOrdersModel.js already clears its stored address),
- *   2. link the Amazon order ID onto the ELMS order the seller already sees on the Orders page,
+ *   2. link the Amazon order ID onto the ELMS order the seller already sees on the Orders page, and - the same as
+ *      the manual "Mark as ordered" dialog - save the delivery date the extension read and the buying price (the
+ *      real Amazon total) onto the Net Profit sheet, so nothing needs typing in by hand afterwards,
  *   3. best-effort write "Amazon order <id>" into the eBay order's own private note,
  *   4. charge ACTION_COSTS.AUTO_ORDER - best effort: the Amazon purchase already happened for real, so a missing
  *      ELMS credit never undoes it, it is just logged for support to reconcile by hand.
  * @returns {Promise<object|null>} the updated supplier order, or null if it was not in a state this could apply to
  */
-async function completeSupplierOrderPlacement(userId, supplierOrderId, { amazonOrderId, amazonTotal }) {
+async function completeSupplierOrderPlacement(userId, supplierOrderId, { amazonOrderId, amazonTotal, deliveryDate }) {
   const updated = await markPlaced(userId, supplierOrderId, { amazonOrderId, amazonTotal });
   if (!updated) return null;
 
   if (updated.order_id) {
     await linkAmazonOrder(userId, updated.order_id, amazonOrderId, 'ordered_from_amazon').catch((err) => {
       console.error('[auto-order] could not link the Amazon order id to the ELMS order:', err.message);
+    });
+    const parsedDelivery = deliveryDate ? new Date(deliveryDate) : undefined;
+    await markOrdered(userId, updated.order_id, {
+      ordered: true,
+      date: new Date(),
+      deliveryDate: parsedDelivery && !Number.isNaN(parsedDelivery.getTime()) ? parsedDelivery : undefined,
+      buyingPrice: amazonTotal ?? undefined,
+    }).catch((err) => {
+      console.error('[auto-order] could not save the delivery date / buying cost on the ELMS order:', err.message);
     });
   }
 

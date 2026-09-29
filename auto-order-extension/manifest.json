@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ELMS Auto Order",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Automatically places the matching Amazon order for a paid eBay order, inside your own logged-in Amazon session.",
   "permissions": [
     "storage",
