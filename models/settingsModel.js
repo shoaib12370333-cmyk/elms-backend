@@ -91,6 +91,7 @@ function serializeAi(obj) {
     aiAspectsEnabled: obj.aiAspectsEnabled !== false,
     aiReplyEnabled: obj.aiReplyEnabled !== false,
     aiCategoryEnabled: obj.aiCategoryEnabled !== false,
+    aiBeautifyDescriptionEnabled: obj.aiBeautifyDescriptionEnabled !== false,
     aiModel: obj.aiModel || AI_DEFAULT_MODEL,
     aiDescriptionLength: obj.aiDescriptionLength || 'standard',
     aiCustomInstructions: obj.aiCustomInstructions || '',
@@ -112,6 +113,7 @@ async function updateAiSettings(input = {}) {
   if (input.aiAspectsEnabled !== undefined) update.aiAspectsEnabled = !!input.aiAspectsEnabled;
   if (input.aiReplyEnabled !== undefined) update.aiReplyEnabled = !!input.aiReplyEnabled;
   if (input.aiCategoryEnabled !== undefined) update.aiCategoryEnabled = !!input.aiCategoryEnabled;
+  if (input.aiBeautifyDescriptionEnabled !== undefined) update.aiBeautifyDescriptionEnabled = !!input.aiBeautifyDescriptionEnabled;
   if (input.aiModel !== undefined) {
     const model = String(input.aiModel || '').trim();
     if (model && !/^[a-zA-Z0-9._:-]{3,80}$/.test(model)) throw new Error('That does not look like a valid model name.');

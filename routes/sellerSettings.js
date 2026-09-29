@@ -7,7 +7,8 @@ const {
   getEbayAccountRefreshToken,
   updateEbayAccountSettings,
 } = require('../models/ebayAccountsModel');
-const { setAutoOrderSettings } = require('../models/usersModel');
+const { setAutoOrderSettings, getDescriptionTemplate, setDescriptionTemplate } = require('../models/usersModel');
+const { AVAILABLE_BLOCKS, TEMPLATE_STYLES, normalizeTemplate } = require('../services/descriptionTemplateLibrary');
 const { fetchBusinessPolicies } = require('../services/ebayListingService');
 const { lookupPostalCode } = require('../services/postalCodeService');
 const { generatePostalCode } = require('../services/postalGeneratorService');
@@ -59,6 +60,28 @@ router.put('/auto-order', requireAuth, async (req, res) => {
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
+});
+
+/**
+ * GET /api/seller-settings/description-template
+ * Returns the seller's saved Description Template (cleaned to a usable default when they never saved one), plus
+ * the library of starter styles and available "tool" blocks the Settings page's picker is built from.
+ */
+router.get('/description-template', requireAuth, async (req, res) => {
+  const saved = await getDescriptionTemplate(req.userId);
+  res.json({ success: true, template: normalizeTemplate(saved), styles: TEMPLATE_STYLES, blocks: AVAILABLE_BLOCKS });
+});
+
+/**
+ * PUT /api/seller-settings/description-template
+ * Body: { templateId, blocks: [...], branding: { storeName?, logoUrl?, accentColor? }, customHtml?, sizeChartHtml?, videoUrl? }
+ * Saves the seller's Description Template - used by both the listing editor's "Beautify with AI" button and the
+ * Drafts bulk bar's "Beautify descriptions with AI".
+ */
+router.put('/description-template', requireAuth, async (req, res) => {
+  const template = normalizeTemplate(req.body);
+  const saved = await setDescriptionTemplate(req.userId, template);
+  res.json({ success: true, template: saved });
 });
 
 /**

@@ -993,6 +993,47 @@ router.post('/bulk-category', requireAuth, async (req, res) => {
   }
 });
 
+/** GET /api/listings/bulk-description-beautify/cost - what one AI description beautify costs right now (the admin sets it). */
+router.get('/bulk-description-beautify/cost', requireAuth, (req, res) => {
+  res.json({ success: true, cost: Number(ACTION_COSTS.AI_DESCRIPTION_BEAUTIFY || 0) });
+});
+
+const MAX_DESC_BEAUTIFY_BATCH = 15;
+
+/**
+ * POST /api/listings/bulk-description-beautify   { ids: [...] }
+ *
+ * Restructures every selected draft's own description into the seller's saved Description Template (Settings ->
+ * Description Template) and saves it - the bulk version of the listing editor's "Beautify with AI" button. Each
+ * draft that is actually beautified costs the admin-set AI_DESCRIPTION_BEAUTIFY credits; one that is skipped, fails,
+ * or runs out of credits costs nothing. One draft failing never stops the others. At most 15 per request (an HTML
+ * rewrite is a heavier AI call than an item-specifics fill, so the batch is a little smaller).
+ */
+router.post('/bulk-description-beautify', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_DESC_BEAUTIFY_BATCH) return res.status(400).json({ success: false, error: `Please beautify at most ${MAX_DESC_BEAUTIFY_BATCH} drafts per request.` });
+  try {
+    const { getAiSettings } = require('../models/settingsModel');
+    if (!(await getAiSettings()).aiBeautifyDescriptionEnabled) return res.status(403).json({ success: false, error: 'This AI feature is turned off by the administrator.' });
+    const { getDescriptionTemplate } = require('../models/usersModel');
+    const { normalizeTemplate } = require('../services/descriptionTemplateLibrary');
+    const template = normalizeTemplate(await getDescriptionTemplate(req.userId));
+    const { beautifyManyDraftDescriptions } = require('../services/descriptionBeautifyService');
+    const results = await beautifyManyDraftDescriptions(req.userId, ids, template);
+    res.json({
+      success: true,
+      results,
+      filled: results.filter((r) => r.status === 'done').length,
+      creditsUsed: results.reduce((sum, r) => sum + (r.creditsUsed || 0), 0),
+      cost: Number(ACTION_COSTS.AI_DESCRIPTION_BEAUTIFY || 0),
+    });
+  } catch (err) {
+    console.error('bulk description beautify error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not beautify the descriptions. Please try again.' });
+  }
+});
+
 /**
  * POST /api/listings/:id/pause
  * Withdraws the eBay offer but keeps the offer object and ELMS listing.

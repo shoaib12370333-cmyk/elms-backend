@@ -41,6 +41,7 @@ const settingsSchema = new mongoose.Schema(
     aiAspectsEnabled: { type: Boolean, default: true },
     aiReplyEnabled: { type: Boolean, default: true },
     aiCategoryEnabled: { type: Boolean, default: true },
+    aiBeautifyDescriptionEnabled: { type: Boolean, default: true },
     aiModel: { type: String, default: null, trim: true },
     aiDescriptionLength: { type: String, enum: ['short', 'standard', 'detailed'], default: 'standard' },
     aiCustomInstructions: { type: String, default: '', trim: true, maxlength: 600 },
