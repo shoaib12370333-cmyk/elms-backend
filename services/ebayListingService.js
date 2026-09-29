@@ -706,6 +706,30 @@ async function fetchLiveListing(refreshToken, { offerId, sku, deadlineAt = null 
   return normalizeLive(offer, item);
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Retry pacing for verifyAfterWrite, mutable so tests can speed it past real delays (the deps-object seam pattern
+// already used elsewhere, e.g. services/liveBulkRestockService.js's `deps`) rather than actually waiting seconds.
+const VERIFY_RETRY = { attempts: 4, delayMs: 1500 };
+
+/**
+ * Re-reads a live listing after a write, giving eBay a moment to catch up: a PUT answering 200 is not proof the
+ * change is visible on an immediate GET straight after it - eBay's own Inventory API is not perfectly read-after-
+ * write consistent (confirmed: a seller's very first batch of restocks after this check was added all failed
+ * verification on the first read, one retry later they had all actually gone through). `isDone(live)` decides when
+ * to stop early; without a retry loop, a real, successful write would be reported as a failure just because the
+ * confirming read raced ahead of it.
+ */
+async function verifyAfterWrite(refreshToken, offerId, sku, isDone, { attempts = VERIFY_RETRY.attempts, delayMs = VERIFY_RETRY.delayMs } = {}) {
+  let live = null;
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) await sleep(delayMs);
+    live = await fetchLiveListing(refreshToken, { offerId, sku });
+    if (isDone(live)) return live;
+  }
+  return live;
+}
+
 /**
  * Revises an active Inventory-API listing. The Inventory API requires full replacement payloads for
  * inventory items/offers, so the current eBay objects are read first and only the fields that were sent are changed:
@@ -945,7 +969,8 @@ async function updateOfferPrice(
         throw new Error(`eBay accepted the new price, but this offer is ${offer.status.toLowerCase()} and could not be republished: ${err.message}`);
       }
     }
-    const live = await fetchLiveListing(refreshToken, { offerId, sku: offer.sku });
+    const targetPrice = Number(newPrice);
+    const live = await verifyAfterWrite(refreshToken, offerId, offer.sku, (l) => l.price != null && Math.abs(l.price - targetPrice) <= 0.005);
     if (live.price == null || Math.abs(live.price - Number(newPrice)) > 0.005) {
       throw new Error(`eBay accepted the request, but the listing still shows ${live.price == null ? 'no price' : live.price.toFixed(2)} (offer status: ${live.offerStatus || 'unknown'}). Try again, or check the listing directly on eBay.`);
     }
@@ -1057,7 +1082,7 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
         throw new Error(`eBay accepted the new quantity, but this offer is ${offer.status.toLowerCase()} and could not be republished: ${err.message}`);
       }
     }
-    const live = await fetchLiveListing(refreshToken, { offerId, sku: offer.sku });
+    const live = await verifyAfterWrite(refreshToken, offerId, offer.sku, (l) => l.quantity === quantity);
     if (live.quantity !== quantity) {
       throw new Error(`eBay accepted the request, but the listing still shows ${live.quantity ?? 'no'} available (offer status: ${live.offerStatus || 'unknown'}). Try again, or check the listing directly on eBay.`);
     }
@@ -1358,4 +1383,5 @@ module.exports = {
   fetchBusinessPolicies,
   createOrGetCustomLocation,
   fulfillmentPolicyUsesCalculatedShipping,
+  VERIFY_RETRY,
 };
