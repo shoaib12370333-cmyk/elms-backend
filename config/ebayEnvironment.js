@@ -30,9 +30,13 @@ const isSandbox =
 const EBAY_API_BASE_URL = isSandbox ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com';
 // The Commerce Identity API is served from its own host (apiz), not from api.ebay.com.
 const EBAY_IDENTITY_BASE_URL = isSandbox ? 'https://apiz.sandbox.ebay.com' : 'https://apiz.ebay.com';
+// The Sell Finances API is ALSO served from apiz, not api.ebay.com (confirmed 2026-09-29: every real call from
+// services/ebayFinancesService.js against api.ebay.com came back 404, regardless of account/token - apiz is the
+// documented host for this API, same as Identity above, though the two are otherwise unrelated APIs).
+const EBAY_FINANCES_BASE_URL = isSandbox ? 'https://apiz.sandbox.ebay.com' : 'https://apiz.ebay.com';
 const EBAY_TOKEN_URL = `${EBAY_API_BASE_URL}/identity/v1/oauth2/token`;
 const EBAY_AUTHORIZE_URL = isSandbox
   ? 'https://auth.sandbox.ebay.com/oauth2/authorize'
   : 'https://auth.ebay.com/oauth2/authorize';
 
-module.exports = { isSandbox, EBAY_API_BASE_URL, EBAY_IDENTITY_BASE_URL, EBAY_TOKEN_URL, EBAY_AUTHORIZE_URL };
+module.exports = { isSandbox, EBAY_API_BASE_URL, EBAY_IDENTITY_BASE_URL, EBAY_FINANCES_BASE_URL, EBAY_TOKEN_URL, EBAY_AUTHORIZE_URL };

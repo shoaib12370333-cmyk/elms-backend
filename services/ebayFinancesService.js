@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
-const { EBAY_API_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnvironment');
+const { EBAY_FINANCES_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnvironment');
 
 /**
  * eBay's Sell Finances API (developer.ebay.com/develop/api/sell/finances_api) - what a sold order actually earns after
@@ -9,6 +9,10 @@ const { EBAY_API_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnvironment'
  * Needs the sell.finances OAuth scope, added alongside the other scopes this app already requests (services/
  * ebayUserAuthService.js, services/ebayAuthService.js) - a seller connected before that scope existed must reconnect
  * ("Connect eBay" again) before a call here will succeed; see PRODUCTION-SETUP.md.
+ *
+ * Served from apiz (EBAY_FINANCES_BASE_URL), NOT api.ebay.com - confirmed 2026-09-29 against a real, correctly-scoped
+ * seller account: every call against api.ebay.com came back a plain 404 regardless of the order, while apiz.ebay.com
+ * is eBay's own documented host for this API (same apiz host the Commerce Identity API uses, config/ebayEnvironment.js).
  *
  * getOrderEarnings (the endpoint that would hand back a ready-made "net earning" figure directly) is NOT used here: per
  * the docs, it needs a separate eBay-approved "application growth check" and is limited to US/China/Hong Kong sellers
