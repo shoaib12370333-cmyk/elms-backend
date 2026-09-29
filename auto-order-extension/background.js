@@ -77,8 +77,8 @@ async function api(path, { method = 'GET', body, timeoutMs = 120000 } = {}) {
 // ---------------------------------------------------------------- state (chrome.storage.local; a service worker can
 // be killed at any time, so nothing about the in-flight job lives only in memory)
 async function getState() {
-  const d = await chrome.storage.local.get(['autoOrderOn', 'paused', 'active', 'lastPoll', 'history']);
-  return { autoOrderOn: !!d.autoOrderOn, paused: !!d.paused, active: d.active || null, lastPoll: d.lastPoll || null, history: d.history || [] };
+  const d = await chrome.storage.local.get(['autoOrderOn', 'paused', 'active', 'lastPoll', 'history', 'manualMode']);
+  return { autoOrderOn: !!d.autoOrderOn, paused: !!d.paused, active: d.active || null, lastPoll: d.lastPoll || null, history: d.history || [], manualMode: !!d.manualMode };
 }
 
 async function recordResult(entry) {
@@ -114,15 +114,18 @@ async function placeJob(active, { amazonOrderId, amazonTotal }) {
 }
 
 // ---------------------------------------------------------------- starting a job
-async function startJob(order, settings) {
+async function startJob(order, settings, manualMode) {
   if (!order.amazon_url || !SUPPORTED_AMAZON_HOSTS.test(safeHost(order.amazon_url))) {
     return failJob({ orderId: order.id, tabId: null }, 'This order\'s Amazon site is not one this extension supports yet.');
   }
   if (order.max_allowed_cost == null) {
     return failJob({ orderId: order.id, tabId: null }, 'No safe price limit could be worked out for this order.');
   }
-  const tab = await chrome.tabs.create({ url: order.amazon_url, active: false });
-  await setActive({ orderId: order.id, tabId: tab.id, step: 'loading', order, settings, startedAt: Date.now() });
+  // Manual mode: the tab is opened in the foreground so the seller can actually watch it, and every risky action
+  // waits for an explicit "Do it" in the popup (see AO_AWAIT_STEP/AO_APPROVE_STEP below) instead of clicking through
+  // on its own - meant for a first, supervised run, not everyday use.
+  const tab = await chrome.tabs.create({ url: order.amazon_url, active: !!manualMode });
+  await setActive({ orderId: order.id, tabId: tab.id, step: 'loading', order, settings, manualMode: !!manualMode, pendingStep: null, approvedStep: null, startedAt: Date.now() });
   await recordResult({ orderId: order.id, started: true });
 }
 
@@ -130,7 +133,7 @@ function safeHost(url) { try { return new URL(url).hostname; } catch (_) { retur
 
 // ---------------------------------------------------------------- the poll loop
 async function tick() {
-  const { autoOrderOn, paused, active } = await getState();
+  const { autoOrderOn, paused, active, manualMode } = await getState();
   if (!autoOrderOn || paused) return;
 
   if (active) {
@@ -143,7 +146,7 @@ async function tick() {
   catch (err) { await recordResult({ error: err.message }); return; }
 
   if (!next.order) { await recordResult({ idle: true, reason: next.reason || null }); return; }
-  await startJob(next.order, next.settings || {});
+  await startJob(next.order, next.settings || {}, manualMode);
 }
 
 chrome.alarms?.create('auto-order-poll', { periodInMinutes: POLL_MINUTES });
@@ -157,12 +160,32 @@ const routes = {
   AO_ANNOUNCE: async (_m, sender) => {
     const { active } = await getState();
     if (!active || active.tabId !== sender.tab?.id) return { job: null };
-    return { job: { order: active.order, step: active.step, settings: active.settings } };
+    return { job: { order: active.order, step: active.step, settings: active.settings, manualMode: !!active.manualMode } };
   },
   AO_STEP: async (m, sender) => {
     const { active } = await getState();
     if (!active || active.tabId !== sender.tab?.id) return { ok: false };
     await setActive({ ...active, step: m.step });
+    return { ok: true };
+  },
+  // Manual mode only: the content script is about to do something and waits here (polling, not a held-open
+  // response - a service worker can be evicted at any time) until the popup approves this exact step by name.
+  AO_AWAIT_STEP: async (m, sender) => {
+    const { active } = await getState();
+    if (!active || active.tabId !== sender.tab?.id) return { stopped: true };
+    if (active.approvedStep === m.name) {
+      await setActive({ ...active, pendingStep: null, approvedStep: null });
+      return { proceed: true };
+    }
+    if (active.pendingStep?.name !== m.name || active.pendingStep?.description !== m.description) {
+      await setActive({ ...active, pendingStep: { name: m.name, description: m.description } });
+    }
+    return { proceed: false };
+  },
+  AO_APPROVE_STEP: async () => {
+    const { active } = await getState();
+    if (!active || !active.pendingStep) return { ok: false };
+    await setActive({ ...active, approvedStep: active.pendingStep.name });
     return { ok: true };
   },
   // The content script reports the numbers it actually read on the final review page; the pass/fail decision is
@@ -202,6 +225,7 @@ const routes = {
   AO_GET_STATE: async () => getState(),
   AO_SET_ON: async (m) => { await chrome.storage.local.set({ autoOrderOn: !!m.on }); if (m.on) tick(); return { ok: true }; },
   AO_SET_PAUSED: async (m) => { await chrome.storage.local.set({ paused: !!m.paused }); return { ok: true }; },
+  AO_SET_MANUAL: async (m) => { await chrome.storage.local.set({ manualMode: !!m.manual }); return { ok: true }; },
   AO_STOP_NOW: async () => {
     const { active } = await getState();
     if (active) await failJob(active, 'Stopped by the seller.');

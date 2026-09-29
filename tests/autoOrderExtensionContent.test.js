@@ -28,7 +28,7 @@ function fakeDocument({ query = {}, queryAll = {}, bodyText = '' } = {}) {
 
 function run(code, ctx) {
   const context = vm.createContext({ console, JSON, Math, Date, Promise, Object, Array, String, Number, RegExp, Set, Map, Error, Event: function Event(t) { this.type = t; }, ...ctx });
-  vm.runInContext(code + '\nthis.__out = { pageKind, readStock, readFulfilledByAmazon, findVariantOption, setQuantity, readCheckoutTotal, addressMatches, readConfirmationOrderId };', context);
+  vm.runInContext(code + '\nthis.__out = { pageKind, readStock, readFulfilledByAmazon, findVariantOption, setQuantity, readCheckoutTotal, addressMatches, readConfirmationOrderId, findGiftOption };', context);
   return context.__out;
 }
 
@@ -115,6 +115,14 @@ const QTY_SELECT = '#quantity, select[name="quantity"]';
   assert.strictEqual(fns.addressMatches({ postalCode: '90210' }), false);
   assert.strictEqual(fns.addressMatches(null), false);
   assert.strictEqual(fns.addressMatches({}), false, 'no postal code to check: never assumed to match');
+
+  // ---------- findGiftOption(): present on some checkouts, absent on others - never an error either way ----------
+  const GIFT = '#gift-options-checkbox, input[name="gift-option"], input[id*="gift-option" i]';
+  const giftBox = fakeEl({ attrs: { type: 'checkbox' } });
+  fns = run(code, { location: {}, document: fakeDocument({ query: { [GIFT]: giftBox } }) });
+  assert.strictEqual(fns.findGiftOption(), giftBox);
+  fns = run(code, { location: {}, document: fakeDocument() });
+  assert.strictEqual(fns.findGiftOption(), null);
 
   // ---------- readConfirmationOrderId(): Amazon's own order-number shape ----------
   fns = run(code, { location: {}, document: fakeDocument({ bodyText: 'Your order has been placed.\nOrder# 112-5551234-1234567' }) });

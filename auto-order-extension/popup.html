@@ -58,6 +58,9 @@ button:disabled{opacity:.6;cursor:wait}
 .toggle input:checked+.slider::before{transform:translateX(18px)}
 .job{padding:10px 12px;border-radius:10px;background:#f1f5f9;font-size:12px;color:#334155;margin-top:10px}
 .job b{color:var(--ink)}
+.pending{padding:12px;border-radius:10px;background:#FFFBEB;border:1.5px solid #FDE68A;color:#92400E;font-size:12.5px;margin-top:10px}
+.pending #approveStep{margin-top:10px;height:36px;font-size:12.5px;background:var(--yellow);color:#3b2600}
+.pending #approveStep:hover{background:#dd9c02}
 .history{margin:10px 0 0;padding:0;list-style:none;display:grid;gap:6px;max-height:150px;overflow:auto}
 .history li{font-size:11.5px;color:#475569;padding:7px 9px;border-radius:8px;background:#f8fafc;border:1px solid var(--line)}
 .history .ok{color:#166534}
@@ -89,7 +92,15 @@ button:disabled{opacity:.6;cursor:wait}
       <div class="switch-txt"><b>Pause</b><small>Stop checking for new orders, keep the setting on</small></div>
       <label class="toggle"><input type="checkbox" id="pauseToggle"><span class="slider"></span></label>
     </div>
+    <div class="switch-row">
+      <div class="switch-txt"><b>Manual mode</b><small>Watch the Amazon tab, confirm every step yourself</small></div>
+      <label class="toggle"><input type="checkbox" id="manualToggle"><span class="slider"></span></label>
+    </div>
     <div id="jobBox" class="job hidden"></div>
+    <div id="pendingBox" class="pending hidden">
+      <div id="pendingDesc"></div>
+      <button id="approveStep" type="button">Do it</button>
+    </div>
     <button id="stopNow" class="stop hidden" type="button">Stop the current order now</button>
   </div>
 
