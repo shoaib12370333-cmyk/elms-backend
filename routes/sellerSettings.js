@@ -14,29 +14,48 @@ const { generatePostalCode } = require('../services/postalGeneratorService');
 const { assertSupportedMarketplace, normalizeMarketplaceId } = require('../config/ebayMarketplaces');
 
 
+/** Shared shape for both the GET and the PUT response, so the frontend always sees the same fields. */
+function autoOrderSettingsOut(u) {
+  return {
+    autoOrderMode: u.autoOrderMode || 'disabled',
+    fullAutoConfirmedAt: u.fullAutoConfirmedAt || null,
+    // Full-Auto now actually runs (services/autoOrderService.js + the Auto Order browser extension), through the
+    // seller's own logged-in Amazon session - it was a saved-only preference before that existed.
+    fullAutoAvailable: true,
+    autoOrderMaxPriceIncreasePercent: u.autoOrderMaxPriceIncreasePercent ?? 10,
+    autoOrderMaxCost: u.autoOrderMaxCost ?? null,
+    autoOrderDailyLimit: u.autoOrderDailyLimit ?? null,
+    autoOrderPrimeOnly: u.autoOrderPrimeOnly !== false,
+  };
+}
+
 /**
  * GET /api/seller-settings/auto-order
- * Returns the user's Auto Order mode. Full-Auto is a preference only until a
- * supported Amazon buyer-account adapter is connected.
+ * Returns the user's Auto Order mode and its limits.
  */
 router.get('/auto-order', requireAuth, async (req, res) => {
   const User = require('../models/schemas/User');
   const user = await User.findById(req.userId).lean();
   if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
-  res.json({ success: true, autoOrderMode: user.autoOrderMode || 'disabled', fullAutoConfirmedAt: user.fullAutoConfirmedAt || null, fullAutoAvailable: false });
+  res.json({ success: true, ...autoOrderSettingsOut(user) });
 });
 
 /**
  * PUT /api/seller-settings/auto-order
- * Body: { autoOrderMode: disabled|semi_auto|full_auto, confirmFullAuto?: true }
+ * Body: { autoOrderMode: disabled|semi_auto|full_auto, confirmFullAuto?: true, autoOrderMaxPriceIncreasePercent?,
+ *         autoOrderMaxCost?, autoOrderDailyLimit?, autoOrderPrimeOnly? }
  */
 router.put('/auto-order', requireAuth, async (req, res) => {
   try {
     const settings = await setAutoOrderSettings(req.userId, {
       autoOrderMode: req.body?.autoOrderMode,
       confirmFullAuto: req.body?.confirmFullAuto === true,
+      autoOrderMaxPriceIncreasePercent: req.body?.autoOrderMaxPriceIncreasePercent,
+      autoOrderMaxCost: req.body?.autoOrderMaxCost,
+      autoOrderDailyLimit: req.body?.autoOrderDailyLimit,
+      autoOrderPrimeOnly: req.body?.autoOrderPrimeOnly,
     });
-    res.json({ success: true, settings: { autoOrderMode: settings.autoOrderMode, fullAutoConfirmedAt: settings.fullAutoConfirmedAt, fullAutoAvailable: false } });
+    res.json({ success: true, settings: autoOrderSettingsOut(settings) });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }

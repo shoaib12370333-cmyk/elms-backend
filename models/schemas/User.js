@@ -132,6 +132,13 @@ const userSchema = new mongoose.Schema(
     // execution time until a supported buyer-account adapter is connected.
     autoOrderMode: { type: String, enum: ['disabled', 'semi_auto', 'full_auto'], default: 'disabled' },
     fullAutoConfirmedAt: { type: Date, default: null },
+    // How far over the listing's saved Amazon price Full-Auto may still place the order (Amazon prices move; this is
+    // the seller's own tolerance). A flat ceiling on top of that, and a per-day total, are both optional (null = no cap).
+    // Prime-only also requires the source lister to look sold/fulfilled by Amazon, not a third-party Amazon seller.
+    autoOrderMaxPriceIncreasePercent: { type: Number, default: 10 },
+    autoOrderMaxCost: { type: Number, default: null },
+    autoOrderDailyLimit: { type: Number, default: null },
+    autoOrderPrimeOnly: { type: Boolean, default: true },
 
     // The seller's pricing rule (Settings -> Pricing), checked and cleaned by services/pricingService.js normalizeRule before it is
     // saved. null = never set. It only prices products imported while it is switched on (rule.enabled).

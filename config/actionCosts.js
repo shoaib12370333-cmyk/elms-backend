@@ -25,9 +25,11 @@ const ACTION_COSTS = {
   // jobs/orderSync.js). Only the polling-only mode is charged, once per day (not per sync run).
   ORDER_SYNC_POLLING_DAILY: 5,
 
-  // Not yet implemented - reserved here so the cost model doesn't need to
-  // change shape when these features are built.
-  AUTO_ORDER: 1, // placing/assisting an Amazon order for a buyer's eBay order (planned)
+  // Charged once the Auto Order browser extension actually places the Amazon order (services/autoOrderService.js
+  // completeSupplierOrderPlacement) - never for a failed or needs_attention attempt.
+  AUTO_ORDER: 1,
+
+  // Not yet implemented - reserved here so the cost model doesn't need to change shape when this is built.
   TRACKING_CONVERSION: 0, // converting/validating a tracking number for eBay (planned) - FREE
 
   // Research tools (Canopy API-powered) - each is a single lookup, priced
@@ -76,7 +78,7 @@ const ACTION_COST_METADATA = [
   { key: 'STOCK_MONITORING', label: 'Stock monitoring (daily)', usesCanopy: true, description: 'Automatic daily in-stock/out-of-stock check for every published listing.' },
   { key: 'PRICE_MONITORING', label: 'Price monitoring (daily)', usesCanopy: true, description: 'Automatic daily Amazon price check - reuses the same Canopy call as Stock monitoring, so it never adds an extra Canopy call even though it does read Canopy data.' },
   { key: 'ORDER_SYNC_POLLING_DAILY', label: 'Order sync - polling only (per day)', usesCanopy: false, description: 'Daily charge for a user on polling-only order sync. Real-time order sync is free.' },
-  { key: 'AUTO_ORDER', label: 'Auto order (planned)', usesCanopy: false, description: 'Placing/assisting an Amazon order for a buyer’s eBay order. Not yet implemented.' },
+  { key: 'AUTO_ORDER', label: 'Auto order', usesCanopy: false, description: 'Placing an Amazon order for a buyer’s eBay order through the Auto Order browser extension. Charged only once the order is actually placed.' },
   { key: 'TRACKING_CONVERSION', label: 'Tracking conversion (planned)', usesCanopy: false, description: 'Converting/validating a tracking number for eBay. Not yet implemented.' },
   { key: 'KEYWORD_RANK_CHECKER', label: 'Keyword Rank Checker', usesCanopy: true, description: 'One keyword-vs-ASIN rank lookup - may page through several Canopy search-result pages internally for a single lookup.' },
   { key: 'REVIEW_ANALYZER', label: 'Review Analyzer', usesCanopy: true, description: 'Fetching a product’s reviews and ratings breakdown.' },

@@ -359,17 +359,42 @@ async function setMaxEbayAccounts(userId, max) {
  * Lets a user choose their own order-sync mode (realtime vs polling) and
  * interval - see jobs/orderSync.js for how these are applied.
  */
-async function setAutoOrderSettings(userId, { autoOrderMode, confirmFullAuto }) {
+async function setAutoOrderSettings(userId, {
+  autoOrderMode,
+  confirmFullAuto,
+  autoOrderMaxPriceIncreasePercent,
+  autoOrderMaxCost,
+  autoOrderDailyLimit,
+  autoOrderPrimeOnly,
+} = {}) {
   if (!['disabled', 'semi_auto', 'full_auto'].includes(autoOrderMode)) {
     throw new Error('autoOrderMode must be disabled, semi_auto, or full_auto.');
   }
   if (autoOrderMode === 'full_auto' && !confirmFullAuto) {
-    throw new Error('Full-Auto requires explicit confirmation. Buyer-account automation is not connected yet.');
+    throw new Error('Full-Auto requires explicit confirmation that eBay\'s drop shipping policy applies to your account and you accept that responsibility.');
   }
 
   const update = { autoOrderMode };
   if (autoOrderMode === 'full_auto') update.fullAutoConfirmedAt = new Date();
   else update.fullAutoConfirmedAt = null;
+
+  if (autoOrderMaxPriceIncreasePercent !== undefined) {
+    const pct = Number(autoOrderMaxPriceIncreasePercent);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error('The allowed price increase must be a number between 0 and 100.');
+    update.autoOrderMaxPriceIncreasePercent = pct;
+  }
+  if (autoOrderMaxCost !== undefined) {
+    const cost = autoOrderMaxCost === null || autoOrderMaxCost === '' ? null : Number(autoOrderMaxCost);
+    if (cost !== null && (!Number.isFinite(cost) || cost <= 0)) throw new Error('The maximum order cost must be a number above 0, or left blank.');
+    update.autoOrderMaxCost = cost;
+  }
+  if (autoOrderDailyLimit !== undefined) {
+    const limit = autoOrderDailyLimit === null || autoOrderDailyLimit === '' ? null : Number(autoOrderDailyLimit);
+    if (limit !== null && (!Number.isFinite(limit) || limit <= 0)) throw new Error('The daily spending limit must be a number above 0, or left blank.');
+    update.autoOrderDailyLimit = limit;
+  }
+  if (autoOrderPrimeOnly !== undefined) update.autoOrderPrimeOnly = !!autoOrderPrimeOnly;
+
   const user = await User.findByIdAndUpdate(userId, update, { new: true });
   return user ? serialize(user) : null;
 }
@@ -609,6 +634,10 @@ function serialize(doc) {
     orderSyncIntervalMinutes: obj.orderSyncIntervalMinutes ?? 15,
     autoOrderMode: obj.autoOrderMode || 'disabled',
     fullAutoConfirmedAt: obj.fullAutoConfirmedAt || null,
+    autoOrderMaxPriceIncreasePercent: obj.autoOrderMaxPriceIncreasePercent ?? 10,
+    autoOrderMaxCost: obj.autoOrderMaxCost ?? null,
+    autoOrderDailyLimit: obj.autoOrderDailyLimit ?? null,
+    autoOrderPrimeOnly: obj.autoOrderPrimeOnly !== false,
     planName: obj.planName || null,
     planExpiresAt: obj.planExpiresAt || null,
     planTerm: obj.planTerm || null,
