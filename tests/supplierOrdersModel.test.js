@@ -30,7 +30,7 @@ stub('models/schemas/SupplierOrder', {
     Object.assign(doc, update);
     return doc;
   })(),
-  find: (query) => ({ sort: () => ({ lean: async () => Object.values(rows).filter((r) => r.userId === query.userId && (!query.status || (query.status.$in || [query.status]).includes(r.status))) }) }),
+  find: (query) => ({ sort: () => ({ populate: () => ({ lean: async () => Object.values(rows).filter((r) => r.userId === query.userId && (!query.status || (query.status.$in || [query.status]).includes(r.status))) }) }) }),
   aggregate: async () => [],
 });
 
@@ -101,6 +101,19 @@ const fresh = (over = {}) => ({ userId: 'u1', ebayLineItemId: 'LI1', status: 're
   const mine = await listSupplierOrders('u1', { status: 'needs_attention' });
   assert.strictEqual(mine.length, 1);
   assert.strictEqual(mine[0].ebay_line_item_id, 'LIA');
+
+  // ---------- listSupplierOrders enriches with sale_price/profit once the linked order is populated and the order is
+  // placed - a plain, un-populated orderId (every other function here) never leaks through as sale_price/profit ----------
+  rows = {}; seq = 0;
+  await createSupplierOrder(fresh({ ebayLineItemId: 'LIP', orderId: { _id: 'o1', salePrice: 40, currency: 'USD' } }));
+  const toPlace = Object.values(rows)[0];
+  toPlace.status = 'checking';
+  await markPlaced('u1', toPlace._id, { amazonOrderId: 'AMZ-P', amazonTotal: 25 });
+  const [placedRow] = await listSupplierOrders('u1', { status: 'placed' });
+  assert.strictEqual(placedRow.sale_price, 40);
+  assert.strictEqual(placedRow.currency, 'USD');
+  assert.strictEqual(placedRow.profit, 15, '40 sale - 25 real Amazon total');
+  assert.strictEqual(placedRow.order_id, 'o1', 'order_id still resolves to the id even when orderId is populated');
 
   console.log('supplierOrdersModel: all good');
   process.exit(0);

@@ -5,12 +5,17 @@ const SupplierOrder = require('./schemas/SupplierOrder');
  * README above SupplierOrder explains why needs_attention keeps its address - it can still be retried). */
 const TERMINAL_STATUSES = ['placed', 'failed', 'cancelled'];
 
+/** orderId is a plain ObjectId everywhere except the populated list used for the Orders page, where it is the linked
+ * Order's { _id, salePrice, currency } - this tells the two apart without a second flag. */
+const idOf = (v) => (v ? (typeof v === 'object' && v._id ? String(v._id) : String(v)) : null);
+
 function serialize(doc) {
   const obj = typeof doc.toObject === 'function' ? doc.toObject() : doc;
-  return {
+  const linkedOrder = obj.orderId && typeof obj.orderId === 'object' && obj.orderId._id ? obj.orderId : null;
+  const out = {
     id: obj._id.toString(),
     ebay_account_id: obj.ebayAccountId ? obj.ebayAccountId.toString() : null,
-    order_id: obj.orderId ? obj.orderId.toString() : null,
+    order_id: idOf(obj.orderId),
     listing_id: obj.listingId ? obj.listingId.toString() : null,
     ebay_order_id: obj.ebayOrderId,
     ebay_line_item_id: obj.ebayLineItemId,
@@ -30,6 +35,15 @@ function serialize(doc) {
     created_at: obj.createdAt,
     updated_at: obj.updatedAt,
   };
+  // The eBay sale price only comes along when the caller populated orderId (listSupplierOrders, for the Orders page).
+  // Profit only means something once the real Amazon total is known, i.e. once placed - assumes the same currency on
+  // both sides, which holds for the common case of an Amazon site matching the eBay marketplace's currency.
+  out.sale_price = linkedOrder ? (linkedOrder.salePrice ?? null) : null;
+  out.currency = linkedOrder ? (linkedOrder.currency || null) : null;
+  out.profit = out.status === 'placed' && out.amazon_total != null && out.sale_price != null
+    ? Number((out.sale_price - out.amazon_total).toFixed(2))
+    : null;
+  return out;
 }
 
 /** Creates a supplier order for one eBay line item. Silently returns null on a duplicate (the unique ebayLineItemId index
@@ -53,7 +67,7 @@ async function getSupplierOrderById(userId, id) {
 async function listSupplierOrders(userId, { status } = {}) {
   const query = { userId };
   if (status) query.status = Array.isArray(status) ? { $in: status } : status;
-  const docs = await SupplierOrder.find(query).sort({ createdAt: -1 }).lean();
+  const docs = await SupplierOrder.find(query).sort({ createdAt: -1 }).populate({ path: 'orderId', select: 'salePrice currency' }).lean();
   return docs.map(serialize);
 }
 
