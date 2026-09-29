@@ -35,6 +35,36 @@ function describeEbayError(e) {
 }
 
 /**
+ * eBay reuses one generic error (25019 "Cannot revise listing...") for very different underlying reasons -
+ * the real reason is an unlabeled code buried in `parameters` (e.g. "KYC_DSAReq_EUB2C_SYI" or
+ * "SSR_BlockListing_ListingRevokedStatus"), not in the message eBay shows. A seller has no way to know what
+ * those codes mean, so recognize the ones actually seen in production and explain them in plain language.
+ */
+const KNOWN_EBAY_REASONS = [
+  {
+    match: /^KYC_DSAReq/i,
+    friendly: 'eBay needs you to verify your identity or business details before this listing can go live (an EU Digital Services Act requirement). Open eBay Seller Hub, complete the verification eBay is asking for, then try again.',
+  },
+  {
+    match: /^SSR_BlockListing_ListingRevokedStatus/i,
+    friendly: 'eBay has blocked this listing from being created or revised, usually because of a policy or trademark (VeRO) issue. Check your eBay Messages for the exact reason, then try again.',
+  },
+];
+
+function friendlyReasonFor(ebayErrors) {
+  if (!Array.isArray(ebayErrors)) return null;
+  for (const e of ebayErrors) {
+    const params = Array.isArray(e?.parameters) ? e.parameters : [];
+    for (const p of params) {
+      const value = String(p?.value ?? '');
+      const hit = KNOWN_EBAY_REASONS.find((r) => r.match.test(value));
+      if (hit) return hit.friendly;
+    }
+  }
+  return null;
+}
+
+/**
  * A small helper that sends an authenticated request to eBay (on behalf of
  * a specific user's refresh token) and turns eBay-style error objects into
  * a readable message.
@@ -92,9 +122,10 @@ async function ebayRequest(refreshToken, method, path, body, options = {}) {
     const ebayErrors = err.response?.data?.errors;
 
     const message =
-      ebayErrors && ebayErrors.length
+      friendlyReasonFor(ebayErrors) ||
+      (ebayErrors && ebayErrors.length
         ? ebayErrors.map(describeEbayError).join('; ')
-        : err.message || 'The eBay API request failed.';
+        : err.message || 'The eBay API request failed.');
 
     const wrapped = new Error(message);
     wrapped.statusCode = err.response?.status || 500;
@@ -1273,6 +1304,7 @@ module.exports = {
   publishListing,
   buildListingBodies,
   describeEbayError,
+  friendlyReasonFor,
   ebayRequest,
   buildAspects,
   publishExistingOffer,
