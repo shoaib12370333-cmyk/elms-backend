@@ -581,7 +581,9 @@ async function listOrdersNeedingEarnings(ebayAccountId, minAgeMs) {
   return Order.find({
     ebayAccountId,
     orderEarning: null,
-    ebayPaymentStatus: 'FULLY_PAID',
+    // eBay's OrderPaymentStatusEnum has no "FULLY_PAID" value - the fully-paid state is 'PAID' (the others are FAILED,
+    // FULLY_REFUNDED, PARTIALLY_REFUNDED, PENDING). Checking for 'FULLY_PAID' matched zero real orders, ever.
+    ebayPaymentStatus: 'PAID',
     ebayOrderId: { $ne: null },
     paidAt: { $ne: null, $lt: cutoff },
   }).select('_id ebayOrderId salePrice').lean();
