@@ -22,6 +22,7 @@ function serialize(doc) {
     legacy_item_id: obj.legacyItemId,
     source_platform: obj.sourcePlatform,
     asin: obj.asin,
+    amazon_url: obj.amazonUrl,
     variant_details: obj.variantDetails,
     quantity: obj.quantity,
     shipping_address: obj.shippingAddress || null,

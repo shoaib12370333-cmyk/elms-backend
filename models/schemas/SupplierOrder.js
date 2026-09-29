@@ -32,6 +32,10 @@ const supplierOrderSchema = new mongoose.Schema(
     // listing, so a supplier order still says where it came from even if the listing is edited or removed later.
     sourcePlatform: { type: String, enum: ['amazon'], default: 'amazon' },
     asin: { type: String, default: null },
+    // The exact product page the listing was imported from (models/schemas/Import.js amazonUrl) - the extension opens
+    // this rather than guessing a "/dp/<asin>" URL, so it lands on the right Amazon site (amazon.com, .co.uk, .de, ...)
+    // and the exact listing (a variant's own URL, a different seller) the price/import was actually taken from.
+    amazonUrl: { type: String, default: null },
     variantDetails: { type: String, default: null },
     quantity: { type: Number, default: 1 },
 

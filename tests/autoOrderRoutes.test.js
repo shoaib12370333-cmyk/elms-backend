@@ -9,6 +9,7 @@ const stub = (rel, exports) => { const p = require.resolve(path.join('..', rel))
 let orders = {};
 let credits = true;
 let dailyOk = true;
+let primeOnly = true;
 let placedCalls = [];
 let retryOrder = null;
 let linkedOrder = null;
@@ -31,6 +32,7 @@ stub('models/ordersModel', { getOrderById: async () => retryOrder, linkAmazonOrd
 stub('services/autoOrderService', {
   hasCredits: async () => credits,
   withinDailyLimit: async () => dailyOk,
+  primeOnlySetting: async () => primeOnly,
   completeSupplierOrderPlacement: async (userId, id, body) => {
     placedCalls.push({ userId, id, body });
     const o = orders[id]; if (!o) return null; o.status = 'placed'; o.amazonOrderId = body.amazonOrderId; return { ...o };
@@ -70,12 +72,15 @@ const call = async (method, path, { body, userId = 'u1', params = {} } = {}) => 
   assert.strictEqual(res.body.reason, 'daily_limit');
   assert.strictEqual(orders.s1.status, 'needs_attention');
 
-  // ---------- GET /next: the happy path, claims and returns it ----------
+  // ---------- GET /next: the happy path, claims and returns it, with the seller's Prime-only setting alongside ----------
   orders = { s2: { id: 's2', userId: 'u1', status: 'ready', max_allowed_cost: 20 } };
   dailyOk = true;
+  primeOnly = false;
   res = await call('get', '/next', {});
   assert.strictEqual(res.body.order.id, 's2');
   assert.strictEqual(orders.s2.status, 'checking');
+  assert.strictEqual(res.body.settings.primeOnly, false);
+  primeOnly = true;
 
   // ---------- POST /:id/placing: only from 'checking' ----------
   res = await call('post', '/:id/placing', { params: { id: 's2' } });

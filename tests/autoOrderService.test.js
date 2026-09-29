@@ -10,8 +10,10 @@ const stub = (rel, exports) => { const p = require.resolve(path.join('..', rel))
 let user = null;
 let created = [];
 let placedRows = [];
+let imports = {};
 
 stub('models/schemas/User', { findById: (id) => ({ select: () => ({ lean: async () => (user && String(user._id) === String(id) ? { ...user } : null) }) }) });
+stub('models/schemas/Import', { findById: (id) => ({ select: () => ({ lean: async () => imports[id] || null }) }) });
 stub('models/supplierOrdersModel', {
   createSupplierOrder: async (data) => { const doc = { id: 'so' + (created.length + 1), ...data }; created.push(doc); return doc; },
   markPlaced: async () => null,
@@ -23,7 +25,7 @@ stub('services/ebayOrderNoteService', { writeAmazonOrderNote: async () => ({ sta
 stub('models/usersModel', { hasCredits: async () => true, spendCredit: async () => true });
 stub('config/actionCosts', { ACTION_COSTS: { AUTO_ORDER: 1 } });
 
-const { maybeCreateSupplierOrder, withinDailyLimit } = require('../services/autoOrderService');
+const { maybeCreateSupplierOrder, withinDailyLimit, primeOnlySetting } = require('../services/autoOrderService');
 
 const listing = (over = {}) => ({ _id: 'l1', sourcePlatform: 'amazon', sku: 'B0TESTAAAA', amazonPrice: 20, ...over });
 const order = (over = {}) => ({ _id: 'o1', ebayOrderId: 'E1', ebayLineItemId: 'LI1', variantDetails: null, quantity: 1, shippingAddress: { city: 'X' }, ebayPaymentStatus: 'PAID', ...over });
@@ -58,12 +60,19 @@ const order = (over = {}) => ({ _id: 'o1', ebayOrderId: 'E1', ebayLineItemId: 'L
   assert.strictEqual(out, null);
 
   // ---------- the happy path: everything lines up ----------
-  out = await maybeCreateSupplierOrder({ userId: 'u1', listing: listing(), order: order(), ebayAccountId: 'acc1' });
+  imports = { imp1: { amazonUrl: 'https://www.amazon.com/dp/B0TESTAAAA' } };
+  out = await maybeCreateSupplierOrder({ userId: 'u1', listing: listing({ importId: 'imp1' }), order: order(), ebayAccountId: 'acc1' });
   assert.ok(out, 'a supplier order is created');
   assert.strictEqual(out.status, 'ready');
   assert.strictEqual(out.fulfillmentMethod, 'extension');
   assert.strictEqual(out.asin, 'B0TESTAAAA', 'the ASIN is the listing\'s own sku, an Amazon listing\'s sku IS its ASIN');
+  assert.strictEqual(out.amazonUrl, 'https://www.amazon.com/dp/B0TESTAAAA', 'the exact product page, from the listing\'s import');
   assert.strictEqual(out.maxAllowedCost, 22, '10% over the $20 saved Amazon price, no flat cap set');
+
+  // ---------- a listing with no linked import at all: amazonUrl is simply null, never an error ----------
+  created = [];
+  out = await maybeCreateSupplierOrder({ userId: 'u1', listing: listing(), order: order({ ebayLineItemId: 'LI0' }), ebayAccountId: 'acc1' });
+  assert.strictEqual(out.amazonUrl, null);
 
   // ---------- a flat autoOrderMaxCost lower than the percentage cap wins (the tighter of the two) ----------
   created = [];
@@ -91,6 +100,12 @@ const order = (over = {}) => ({ _id: 'o1', ebayOrderId: 'E1', ebayLineItemId: 'L
   placedRows = [{ userId: 'u1', amount: 80 }];
   assert.strictEqual(await withinDailyLimit('u1', 15), true, '80 + 15 = 95, still within the 100 limit');
   assert.strictEqual(await withinDailyLimit('u1', 25), false, '80 + 25 = 105, over the 100 limit');
+
+  // ---------- primeOnlySetting: defaults to true (the safer default) unless explicitly turned off ----------
+  user.autoOrderPrimeOnly = undefined;
+  assert.strictEqual(await primeOnlySetting('u1'), true, 'unset: defaults on');
+  user.autoOrderPrimeOnly = false;
+  assert.strictEqual(await primeOnlySetting('u1'), false);
 
   console.log('autoOrderService: all good');
   process.exit(0);
