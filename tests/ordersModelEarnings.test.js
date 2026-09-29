@@ -23,7 +23,7 @@ const { listOrdersNeedingEarnings, setOrderEarningsBulk } = require('../models/o
   await listOrdersNeedingEarnings('acc1', 24 * 60 * 60 * 1000);
   assert.strictEqual(lastFindFilter.ebayAccountId, 'acc1');
   assert.strictEqual(lastFindFilter.orderEarning, null);
-  assert.strictEqual(lastFindFilter.ebayPaymentStatus, 'FULLY_PAID', 'a partially paid/refunded order is never picked up in v1');
+  assert.strictEqual(lastFindFilter.ebayPaymentStatus, 'PAID', 'a partially paid/refunded order is never picked up in v1 - and PAID, not FULLY_PAID, is the real eBay OrderPaymentStatusEnum value');
   assert.deepStrictEqual(lastFindFilter.ebayOrderId, { $ne: null });
   assert.strictEqual(lastFindFilter.paidAt.$ne, null);
   const cutoffMs = lastFindFilter.paidAt.$lt.getTime();

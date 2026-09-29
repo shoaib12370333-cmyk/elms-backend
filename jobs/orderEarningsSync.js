@@ -5,7 +5,7 @@ const { listOrdersNeedingEarnings, setOrderEarningsBulk } = require('../models/o
 const { fetchSaleTransactionsForOrder, netEarningFromTransactions } = require('../services/ebayFinancesService');
 const { acquireLock } = require('../services/jobLockService');
 
-// Tried from the moment an order is FULLY_PAID - no fixed wait. eBay does not always have a settled Finances
+// Tried from the moment an order is PAID - no fixed wait. eBay does not always have a settled Finances
 // transaction for a brand-new sale yet; when it doesn't, netEarningFromTransactions returns null and the order is
 // simply left for the next run (see syncOneAccount below), so trying early costs nothing and picks it up the moment
 // eBay does have it.
