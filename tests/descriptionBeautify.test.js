@@ -84,11 +84,39 @@ const reset = () => { for (const k of Object.keys(saved)) delete saved[k]; spent
   assert.ok(out.text.includes('https://a.com/1.jpg'), 'the listing\'s own real image is spliced in - never invented by the AI');
   assert.ok(out.text.includes('Acme Deals'), 'the seller\'s own store name is spliced in');
   assert.ok(out.text.includes('Why buy from us'), 'the seller\'s own custom HTML is spliced in');
+  assert.deepStrictEqual(out.missingBlocks, [], 'every instructed block was found in the AI\'s answer - nothing flagged');
+  assert.deepStrictEqual(out.warnings, []);
 
   // a data block with nothing behind it is removed cleanly, not left as an empty gap or a literal token
   aiAnswer = '<p>Facts</p>{{ELMS_GALLERY}}{{ELMS_VIDEO}}';
   out = await beautifyEbayDescription({ title: 'X', images: [], template: { templateId: 'minimal', blocks: ['gallery', 'video'], branding: {}, videoUrl: '' } });
   assert.strictEqual(out.text, '<p>Facts</p>', 'no images and no video URL: both placeholders vanish, nothing invented');
+
+  // silent-failure guard 1: the AI simply omits an instructed 'ai' block (drops the "Shipping & Delivery" section
+  // entirely instead of writing it) - must not throw, but must be reported instead of just shipping a shorter
+  // description than the seller's template configured with nothing surfaced anywhere.
+  aiAnswer = '<h2>Key Features</h2><ul><li>Black mesh</li></ul>';
+  out = await beautifyEbayDescription({
+    title: 'Acme Shoes', bulletPoints: ['Black mesh'],
+    template: { templateId: 'minimal', blocks: ['bullets', 'shipping'], branding: {} },
+  });
+  assert.ok(out.text.includes('Key Features'), 'the description is still returned, not blocked by a missing block');
+  assert.deepStrictEqual(out.missingBlocks, ['shipping'], 'the AI silently dropped the shipping section - flagged, not swallowed');
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /Shipping & Delivery/);
+
+  // silent-failure guard 2: the AI paraphrases or drops the literal data-block placeholder token instead of
+  // echoing it back verbatim - split/join then finds nothing to splice, so the gallery must be flagged too, not
+  // just silently absent from the final HTML.
+  aiAnswer = '<h2>Key Features</h2><ul><li>Black mesh</li></ul><p>See the photos above.</p>';
+  out = await beautifyEbayDescription({
+    title: 'Acme Shoes', bulletPoints: ['Black mesh'], images: ['https://a.com/1.jpg'],
+    template: { templateId: 'minimal', blocks: ['bullets', 'gallery'], branding: {} },
+  });
+  assert.deepStrictEqual(out.missingBlocks, ['gallery'], 'the AI paraphrased away the {{ELMS_GALLERY}} token - flagged, not swallowed');
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /Image Gallery/);
+  assert.ok(!out.text.includes('https://a.com/1.jpg'), 'with no placeholder to splice into, the real image is correctly never appended blindly');
 
   // an empty/too-short AI answer is a hard failure, never saved as a real description
   aiAnswer = 'hi';
