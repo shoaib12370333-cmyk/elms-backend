@@ -83,5 +83,19 @@ const { runOrderEarningsSync, splitProportionally } = require('../jobs/orderEarn
   assert.strictEqual(callsScopeMsg, 1, 'the message alone (statusCode 400 here, not 401/403) is enough to stop trying the rest of this account');
   assert.strictEqual(bulkCalls.flat().length, 0);
 
+  // ---------- the exact production wording for a dead/revoked refresh token (eBay's OAuth invalid_grant, HTTP 400 -
+  // NOT 401/403) also short-circuits the rest of this account's orders, instead of hammering eBay's token endpoint
+  // once per pending order, every run, forever (the bug this exact case was missing before) ----------
+  pendingByAccount = { acc1: [
+    { _id: 'l9', ebayOrderId: 'O8', salePrice: 9 },
+    { _id: 'l10', ebayOrderId: 'O9', salePrice: 9 },
+  ] };
+  let callsInvalidToken = 0;
+  nextTransactions = async () => { callsInvalidToken++; const e = new Error('the provided authorization refresh token is invalid or was issued to another client'); e.statusCode = 400; throw e; };
+  financesCalls.length = 0; bulkCalls.length = 0;
+  await runOrderEarningsSync();
+  assert.strictEqual(callsInvalidToken, 1, 'a dead refresh token also stops the rest of this account\'s orders on the first failure');
+  assert.strictEqual(bulkCalls.flat().length, 0);
+
   console.log('order earnings sync tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });

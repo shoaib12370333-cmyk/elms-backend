@@ -720,11 +720,11 @@ const VERIFY_RETRY = { attempts: 4, delayMs: 1500 };
  * to stop early; without a retry loop, a real, successful write would be reported as a failure just because the
  * confirming read raced ahead of it.
  */
-async function verifyAfterWrite(refreshToken, offerId, sku, isDone, { attempts = VERIFY_RETRY.attempts, delayMs = VERIFY_RETRY.delayMs } = {}) {
+async function verifyAfterWrite(refreshToken, offerId, sku, isDone, { attempts = VERIFY_RETRY.attempts, delayMs = VERIFY_RETRY.delayMs, deadlineAt = null } = {}) {
   let live = null;
   for (let i = 0; i < attempts; i += 1) {
     if (i > 0) await sleep(delayMs);
-    live = await fetchLiveListing(refreshToken, { offerId, sku });
+    live = await fetchLiveListing(refreshToken, { offerId, sku, deadlineAt });
     if (isDone(live)) return live;
   }
   return live;
@@ -870,11 +870,15 @@ async function reviseActiveListing(
     timeoutMessage: 'eBay timed out while updating the live offer.',
   });
 
-  // Read it back: what eBay holds now is the truth (a catalog-matched item, for example, keeps its own Brand).
+  // Read it back: what eBay holds now is the truth (a catalog-matched item, for example, keeps its own Brand). Same
+  // read-after-write lag as updateOfferQuantity/updateOfferPrice (services/ebayListingService.js), fixed there with
+  // a retry - applied here too, gated on the two fields every revise always sends (price, quantity): a lagging read
+  // would otherwise report the seller's own successful edit as "eBay kept its own price/quantity" (compareLive,
+  // below) and, worse, save that stale pre-edit value back into ELMS's own copy of the listing.
   let live = null;
   let liveError = null;
   try {
-    live = await fetchLiveListing(refreshToken, { offerId, sku, deadlineAt });
+    live = await verifyAfterWrite(refreshToken, offerId, sku, (l) => l.price !== null && Math.abs(l.price - pushPrice) <= 0.005 && l.quantity === Number(quantity), { deadlineAt });
   } catch (err) {
     liveError = err.message;
   }

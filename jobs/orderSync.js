@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { syncAccountOrders } = require('../services/orderSyncService');
 const { getEbayAccountRefreshToken, getEbayAccountById } = require('../models/ebayAccountsModel');
 const { acquireLock } = require('../services/jobLockService');
+const { isUnrecoverableEbayAuthError } = require('../services/ebayAuthErrorService');
 const { spendCredit } = require('../models/usersModel');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const EbayAccount = require('../models/schemas/EbayAccount');
@@ -89,6 +90,15 @@ async function runOrderSync() {
       await EbayAccount.updateOne({ _id: accountId }, { lastSyncAttemptAt: new Date() });
     } catch (err) {
       console.error(`[order-sync] Could not sync orders for eBay account ${account.ebayUserId}: ${err.message}`);
+      // A dead refresh token or a missing scope cannot be fixed by retrying - only the seller reconnecting the
+      // account fixes it. Without this, lastSyncAttemptAt never advances on failure, so `dueForSync` above stays
+      // true on every single 5-minute tick forever, hitting eBay's OAuth token endpoint far more often than this
+      // user's own orderSyncIntervalMinutes intends (confirmed 2026-09-30 against a real broken account). Advancing
+      // it here lets the account back off to the user's configured interval instead, same as a successful run -
+      // a genuinely transient error (a timeout, a momentary 5xx) still retries on the very next tick as before.
+      if (isUnrecoverableEbayAuthError(err)) {
+        await EbayAccount.updateOne({ _id: accountId }, { lastSyncAttemptAt: new Date() }).catch(() => {});
+      }
     }
   }
 

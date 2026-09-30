@@ -61,6 +61,11 @@ function chain(rows, store) {
     limit: (n) => { st.limit = n; return c; },
     lean: () => { seen.leans += 1; const p = Promise.resolve(run()); p.cursor = c.cursor; return p; }, // a query, like Mongoose's: awaited, or turned into a cursor
     cursor: () => ({ [Symbol.asyncIterator]: async function* () { for (const d of run()) yield d; } }),
+    // A real Mongoose Query is thenable even without .lean() (listPublishedListings awaits it directly, since it
+    // needs doc.importId's populated fields the way serialize() reads them) - match that so awaiting the chain
+    // itself, not just its .lean(), resolves to the rows instead of awaiting a plain non-promise object.
+    then: (resolve, reject) => Promise.resolve(run()).then(resolve, reject),
+    catch: (reject) => Promise.resolve(run()).catch(reject),
   };
   return c;
 }
@@ -201,12 +206,18 @@ const add = (over = {}) => { n += 1; const d = { _id: hex(n), userId: USER, impo
   const S1 = add({ sellPrice: 20, amazonPrice: 10, views: 10, watchers: 2, statsSyncedAt: new Date('2026-09-20T10:00:00Z') });
   const S2 = add({ sellPrice: 40, amazonPrice: null, importId: hex(7001), views: 5, watchers: 3, statsSyncedAt: new Date('2026-09-25T10:00:00Z') });
   const S3 = add({ status: 'sold', quantity: 1, soldQuantity: 1, sellPrice: 30, amazonPrice: 15, views: 7, watchers: 1, statsSyncedAt: new Date('2026-09-22T10:00:00Z') });
-  add({ sellPrice: 15, amazonPrice: null, views: null, watchers: null }); add({ status: 'ended' }); add({ status: 'error' }); add({ status: 'draft' }); add({ userId: OTHER });
+  const S4 = add({ sellPrice: 15, amazonPrice: null, views: null, watchers: null }); add({ status: 'ended' }); add({ status: 'error' }); add({ status: 'draft' }); add({ userId: OTHER });
   imports.set(hex(7001), { _id: hex(7001), amazonPrice: 30, product: { price: 30 } });
   orders.push({ listingId: S1._id, quantity: 3 }, { listingId: S2._id, quantity: 1 }, { listingId: S3._id, quantity: 2 }, { listingId: hex(4242), quantity: 50 });
   const sum = await M.summarizeLiveListings(USER, {});
   assert.deepStrictEqual(sum.counts, { all: 4, active: 3, sold: 1, ended: 1, issues: 1, vero: 0 }, 'a sold-out listing is its own count, out of active, but still counted in "all"; a published-with-issues listing is its own "issues" count');
   assert.deepStrictEqual(sum.totals, { units_sold: 6, views: 22, watchers: 6, average_margin_percent: 42, last_synced_at: '2026-09-25T10:00:00.000Z' }, 'margins: 50%, 25%, 50% -> 42%; units sold (and views/watchers) include the sold-out listing too');
+
+  // ---------- the stock monitor's own selection query includes 'sold' too, not just 'published' - a sold-out
+  // listing is still live on eBay and needs its price/quantity kept in step, or it goes back live at a stale
+  // price the next time it is restocked (the same class of gap summarizeLiveListings' counts already handles) ----------
+  const monitored = await M.listPublishedListings(USER);
+  assert.deepStrictEqual(monitored.map((l) => l.id).sort(), [S1._id, S2._id, S3._id, S4._id].sort(), 'published AND sold-out listings are both checked; ended/error/draft and another seller\'s are not');
 
   // ---------- ids, rows of chosen ids, the full row ----------
   const ids = await M.listListingIds(USER, { statuses: ['published'] }); assert.strictEqual(ids.length, 3);

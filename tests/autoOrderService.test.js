@@ -13,20 +13,24 @@ let placedRows = [];
 let imports = {};
 let placedCalls = [];
 let markOrderedCalls = [];
+let placedEbayInfo = { ebay_account_id: null, ebay_order_id: null };
+let ebayAccount = null;
+let ebayRefreshToken = null;
+let noteCalls = [];
 
 stub('models/schemas/User', { findById: (id) => ({ select: () => ({ lean: async () => (user && String(user._id) === String(id) ? { ...user } : null) }) }) });
 stub('models/schemas/Import', { findById: (id) => ({ select: () => ({ lean: async () => imports[id] || null }) }) });
 stub('models/supplierOrdersModel', {
   createSupplierOrder: async (data) => { const doc = { id: 'so' + (created.length + 1), ...data }; created.push(doc); return doc; },
-  markPlaced: async (userId, id, body) => { placedCalls.push({ userId, id, body }); return { order_id: 'o1', ebay_account_id: null, ebay_order_id: null }; },
+  markPlaced: async (userId, id, body) => { placedCalls.push({ userId, id, body }); return { order_id: 'o1', ...placedEbayInfo }; },
   todaysPlacedTotal: async (userId) => placedRows.filter((r) => r.userId === userId).reduce((t, r) => t + r.amount, 0),
 });
 stub('models/ordersModel', {
   linkAmazonOrder: async () => null,
   markOrdered: async (userId, id, body) => { markOrderedCalls.push({ userId, id, body }); return { order: {} }; },
 });
-stub('models/ebayAccountsModel', { getEbayAccountById: async () => null, getEbayAccountRefreshToken: async () => null });
-stub('services/ebayOrderNoteService', { writeAmazonOrderNote: async () => ({ status: 'skipped' }) });
+stub('models/ebayAccountsModel', { getEbayAccountById: async () => ebayAccount, getEbayAccountRefreshToken: async () => ebayRefreshToken });
+stub('services/ebayOrderNoteService', { writeAmazonOrderNote: async (refreshToken, marketplaceId, body) => { noteCalls.push({ refreshToken, marketplaceId, body }); return { status: 'ok' }; } });
 stub('models/usersModel', { hasCredits: async () => true, spendCredit: async () => true });
 stub('config/actionCosts', { ACTION_COSTS: { AUTO_ORDER: 1 } });
 
@@ -124,6 +128,28 @@ const order = (over = {}) => ({ _id: 'o1', ebayOrderId: 'E1', ebayLineItemId: 'L
   markOrderedCalls = [];
   await completeSupplierOrderPlacement('u1', 'so1', { amazonOrderId: 'AMZ-2', amazonTotal: 10, deliveryDate: null });
   assert.strictEqual(markOrderedCalls[0].body.deliveryDate, undefined);
+
+  // ---------- the eBay order note uses the account's OWN marketplace, never a hardcoded EBAY_US - a UK/DE/AU/...
+  // seller's Amazon order note used to silently go to the wrong regional eBay site (account.marketplace_id does not
+  // exist on the serialized account - the real field is camelCase marketplaceId - so it always fell back to
+  // 'EBAY_US' and the note was silently skipped for every non-US seller) ----------
+  placedEbayInfo = { ebay_account_id: 'acc1', ebay_order_id: 'E1' };
+  ebayAccount = { id: 'acc1', marketplaceId: 'EBAY_GB' };
+  ebayRefreshToken = 'rt-gb';
+  noteCalls = [];
+  await completeSupplierOrderPlacement('u1', 'so1', { amazonOrderId: 'AMZ-3', amazonTotal: 12 });
+  assert.strictEqual(noteCalls.length, 1);
+  assert.strictEqual(noteCalls[0].marketplaceId, 'EBAY_GB', 'the seller\'s real marketplace is used, not a hardcoded EBAY_US');
+  assert.strictEqual(noteCalls[0].refreshToken, 'rt-gb');
+  assert.strictEqual(noteCalls[0].body.orderId, 'E1');
+  assert.strictEqual(noteCalls[0].body.amazonOrderId, 'AMZ-3');
+
+  // an account with no marketplaceId at all still falls back to EBAY_US (never throws, never sends undefined)
+  ebayAccount = { id: 'acc1' };
+  noteCalls = [];
+  await completeSupplierOrderPlacement('u1', 'so1', { amazonOrderId: 'AMZ-4', amazonTotal: 12 });
+  assert.strictEqual(noteCalls[0].marketplaceId, 'EBAY_US');
+  placedEbayInfo = { ebay_account_id: null, ebay_order_id: null }; ebayAccount = null; ebayRefreshToken = null;
 
   // ---------- primeOnlySetting: defaults to true (the safer default) unless explicitly turned off ----------
   user.autoOrderPrimeOnly = undefined;

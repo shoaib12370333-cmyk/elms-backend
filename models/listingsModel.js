@@ -1099,13 +1099,16 @@ async function restockListing(userId, id, quantity) {
  * Used by the stock monitor, which runs for everyone, not one user at a time.
  */
 /**
- * Returns every listing currently marked as published, with its source
- * import's ASIN attached - used by the stock monitor. If userId is given,
- * only that user's published listings are returned (used by the per-user
- * scheduled stock check).
+ * Returns every listing currently marked as published (or sold-out but still live on eBay - see the 'sold' status
+ * comment above), with its source import's ASIN attached - used by the stock monitor. If userId is given, only that
+ * user's published listings are returned (used by the per-user scheduled stock check).
+ *
+ * 'sold' is included for the same reason summarizeLiveListings already treats it as still-live: without it, a
+ * listing that sold out keeps its pre-sellout Amazon price baseline frozen until it happens to be restocked and
+ * picked up on a LATER run - up to a full stockCheckIntervalDays - so it can go back live at a stale price.
  */
 async function listPublishedListings(userId) {
-  const query = { status: 'published' };
+  const query = { status: { $in: ['published', 'sold'] } };
   if (userId) query.userId = userId;
 
   const docs = await Listing.find(query).populate('importId');
