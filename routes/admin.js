@@ -6,12 +6,16 @@ const { isSuperAdminEmail, superAdminEmail } = require('../services/superAdmin')
 const User = require('../models/schemas/User');
 const {
   listAllUsers,
+  getUserById,
   setCreditBalance,
   setStockCheckInterval,
   setMaxEbayAccounts,
 } = require('../models/usersModel');
 const { listAllTickets, resolveTicket } = require('../models/supportTicketsModel');
 const { createPlan, updatePlan, deletePlan, listAllPlans } = require('../models/plansModel');
+const { listingStatusBreakdown } = require('../models/listingsModel');
+const { ordersSummary, netProfitSummary } = require('../models/ordersModel');
+const { enrichUsers } = require('../services/adminUserStatsService');
 const {
   getSettings,
   updateWelcomeBonusSettings,
@@ -82,8 +86,34 @@ router.delete('/admins/:id', requireSuperAdmin, async (req, res) => {
  */
 router.get('/users', async (req, res) => {
   // Each user also carries: online / minutes since they left, paid or free plan, last sign-in IP + place, suspended.
-  const { users, summary } = await require('../services/adminUserStatsService').enrichUsers(await listAllUsers());
+  const { users, summary } = await enrichUsers(await listAllUsers());
   res.json({ success: true, users, summary });
+});
+
+/**
+ * GET /api/admin/user-lookup?email=someone@example.com
+ *
+ * One user's whole picture by email, for the Admin Panel's own "User Lookup" page: their profile (plan, credits, eBay
+ * stores, suspended/banned), how many listings they have in each status, and their orders + net profit (per currency -
+ * a euro and a dollar are never added together), reusing the exact same aggregates the seller's own Orders / Net Profit
+ * pages use, so the numbers here always agree with what the seller sees.
+ */
+router.get('/user-lookup', async (req, res) => {
+  const email = String(req.query.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, error: 'Enter a valid email address.' });
+
+  const found = await User.findOne({ email }, { _id: 1 }).lean();
+  if (!found) return res.status(404).json({ success: false, error: 'No ELMS user has that email.' });
+  const userId = String(found._id);
+
+  const [{ users: enriched }, listings, orders, netProfit] = await Promise.all([
+    enrichUsers([await getUserById(userId)]),
+    listingStatusBreakdown(userId),
+    ordersSummary(userId),
+    netProfitSummary(userId),
+  ]);
+
+  res.json({ success: true, user: enriched[0], listings, orders, netProfit });
 });
 
 /** One CSV cell: quoted when it holds a comma, a quote or a line break. */
