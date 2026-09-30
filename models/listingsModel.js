@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Listing = require('./schemas/Listing');
 const EbayAccount = require('./schemas/EbayAccount');
 const { normalizeAsinSku, requireAsinSku } = require('../services/skuService');
@@ -474,6 +475,19 @@ async function countListingsByStatus(userId, status, accountId = null) {
   const query = { userId, status };
   if (accountId) query.ebayAccountId = accountId;
   return Listing.countDocuments(query);
+}
+
+// Every status a Listing can be in (models/schemas/Listing.js) - kept here (not re-derived from the schema) so the admin
+// lookup below always shows every status, including one that currently has zero listings.
+const LISTING_STATUSES = ['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended', 'sold'];
+
+/** How many of one user's listings are in each status, in one aggregate - for the Admin Panel's User Lookup page. */
+async function listingStatusBreakdown(userId) {
+  const rows = await Listing.aggregate([{ $match: { userId: new mongoose.Types.ObjectId(String(userId)) } }, { $group: { _id: '$status', count: { $sum: 1 } } }]);
+  const by = new Map(rows.map((r) => [r._id, r.count]));
+  const counts = {};
+  LISTING_STATUSES.forEach((s) => { counts[s] = by.get(s) || 0; });
+  return counts;
 }
 
 /**
@@ -1375,6 +1389,7 @@ module.exports = {
   clearVeroCache,
   listListingsByStatuses,
   countListingsByStatus,
+  listingStatusBreakdown,
   updateListing,
   markPublished,
   markError,
