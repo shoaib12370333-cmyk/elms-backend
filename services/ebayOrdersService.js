@@ -73,17 +73,23 @@ async function fetchOrders(refreshToken, sinceDate) {
   const allOrders = [];
   const limit = 200;
   let offset = 0;
+  const MAX_PAGES = 50; // 10,000 orders in one sync window - see the log below if this is ever actually hit
 
-  for (let page = 0; page < 50; page++) {
+  let page = 0;
+  for (; page < MAX_PAGES; page++) {
     const filter = sinceDate
       ? `&filter=${encodeURIComponent(`lastmodifieddate:[${sinceDate.toISOString()}..]`)}`
       : '';
     const data = await ebayGet(refreshToken, `/sell/fulfillment/v1/order?limit=${limit}&offset=${offset}${filter}`);
     const orders = Array.isArray(data.orders) ? data.orders : [];
     allOrders.push(...orders);
-    if (orders.length < limit) break;
+    if (orders.length < limit) return allOrders; // eBay itself says there is no more - the ordinary, expected exit
     offset += limit;
   }
+  // Reached MAX_PAGES without eBay ever answering a short page: there ARE more orders past this point that were
+  // never fetched, and nothing here would otherwise say so - the caller would treat allOrders as complete. This
+  // should only ever fire for a seller with more orders modified in one sync window than MAX_PAGES * limit covers.
+  console.error(`[ebay-orders] fetchOrders stopped at the ${MAX_PAGES}-page limit (${allOrders.length} orders) with more still on eBay - some orders were not fetched this run.`);
   return allOrders;
 }
 
