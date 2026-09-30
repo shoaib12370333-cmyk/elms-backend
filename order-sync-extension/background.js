@@ -68,6 +68,9 @@ async function api(path, { method = 'GET', body, timeoutMs = 30000 } = {}) {
 const tabKey = (tabId) => `tab_order_${tabId}`;
 
 const routes = {
+  // The buyer's own shipping address (already on the ELMS order) - shown so the seller can copy/paste it onto
+  // Amazon's address form themselves. Never written back to Amazon in any way.
+  ELMS_GET_ORDER: (m) => api(`/api/orders/${encodeURIComponent(m.orderId)}`).then((j) => j.order),
   ELMS_MARK_ORDERED: (m) => api(`/api/orders/${encodeURIComponent(m.orderId)}/ordered`, {
     method: 'POST',
     body: { ordered: true, deliveryDate: m.deliveryDate || null, buyingPrice: m.buyingPrice },

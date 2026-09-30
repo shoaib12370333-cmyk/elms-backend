@@ -8,7 +8,7 @@ const vm = require('vm');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'order-sync-extension', 'content.js'), 'utf8').replace(/\r\n/g, '\n');
 const between = (from, to) => { const a = src.indexOf(from); const b = src.indexOf(to, a); assert.ok(a >= 0 && b > a, 'markers: ' + from); return src.slice(a, b); };
-const code = between('  const money =', '  function toast(');
+const code = between('  const money =', '  async function main()');
 
 function fakeEl(props = {}) {
   return Object.assign({ textContent: '', children: [], parentElement: null, closest() { return null; } }, props);
@@ -18,7 +18,7 @@ function fakeDocument({ queryAll = {}, bodyText = '' } = {}) {
 }
 function run(ctx) {
   const context = vm.createContext({ console, JSON, Math, Date, RegExp, Array, String, Number, Object, ...ctx });
-  vm.runInContext(code + '\nthis.__out = { isOrderConfirmationPage, readCheckoutTotal, readDeliveryDate };', context);
+  vm.runInContext(code + '\nthis.__out = { isOrderConfirmationPage, readCheckoutTotal, readDeliveryDate, fullAddressText, addressRowHtml };', context);
   return context.__out;
 }
 
@@ -59,6 +59,27 @@ function run(ctx) {
   assert.strictEqual(fns.readDeliveryDate(), '2026-12-03', 'a 3-letter month abbreviation and a single-digit day, both zero-padded');
   fns = run({ location: { pathname: '/spc/confirmation' }, document: fakeDocument({ bodyText: 'Thanks for your order.' }) });
   assert.strictEqual(fns.readDeliveryDate(), null, 'no delivery wording on the page - never guessed');
+
+  // ---------- fullAddressText(): a clean, shipping-label-style block - never a stray blank line for a missing field ----------
+  fns = run({ location: { pathname: '/dp/x' }, document: fakeDocument() });
+  assert.strictEqual(
+    fns.fullAddressText({ fullName: 'Jane Doe', addressLine1: '221B Baker St', addressLine2: '', city: 'London', stateOrProvince: '', postalCode: 'NW1 6XE', country: 'United Kingdom' }),
+    'Jane Doe\n221B Baker St\nLondon, NW1 6XE\nUnited Kingdom',
+    'no address line 2 or state: no blank line or stray comma left behind'
+  );
+  assert.strictEqual(
+    fns.fullAddressText({ fullName: 'Sam Lee', addressLine1: '1 Main St', addressLine2: 'Apt 4', city: 'Austin', stateOrProvince: 'TX', postalCode: '73301', country: 'United States' }),
+    'Sam Lee\n1 Main St\nApt 4\nAustin, TX, 73301\nUnited States'
+  );
+
+  // ---------- addressRowHtml(): never emitted for a field the order has no value for; user-typed text is escaped ----------
+  fns = run({ location: { pathname: '/dp/x' }, document: fakeDocument() });
+  assert.strictEqual(fns.addressRowHtml('Address line 2', ''), '', 'blank field: no row at all, not an empty one');
+  assert.strictEqual(fns.addressRowHtml('Address line 2', null), '');
+  const row = fns.addressRowHtml('Name', '<b>Jane</b> & "Sons"');
+  assert.ok(!row.includes('<b>Jane</b>'), 'the buyer\'s own text is escaped, never rendered as HTML');
+  assert.ok(row.includes('&lt;b&gt;Jane&lt;/b&gt;'));
+  assert.ok(row.includes('data-copy="&lt;b&gt;Jane&lt;/b&gt; &amp; &quot;Sons&quot;"'), 'the un-escaped value is still what gets copied to the clipboard');
 
   console.log('order sync extension content tests passed');
 })().catch((err) => { console.error(err); process.exit(1); });

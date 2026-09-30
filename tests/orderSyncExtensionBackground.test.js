@@ -70,6 +70,15 @@ const EXCHANGE = { status: 200, body: { success: true, sessionToken: 'fresh-toke
   r = await env.message({ type: 'ELMS_GET_TAB_ORDER' }, { tab: { id: 9 } });
   assert.strictEqual(r.result, null);
 
+  // ---------- ELMS_GET_ORDER: the buyer's own address, unwrapped from { order } ----------
+  env = boot({ respond: (c) => (c.url.endsWith('/extension-settings') ? SETTINGS : { status: 200, body: { success: true, order: { id: 'o1', shipping_address: { fullName: 'Jane Doe', postalCode: 'NW1 6XE' }, buyer_phone: '+44123' } } }) });
+  r = await env.message({ type: 'ELMS_GET_ORDER', orderId: 'o1' });
+  assert.strictEqual(r.success, true);
+  assert.deepStrictEqual(r.result, { id: 'o1', shipping_address: { fullName: 'Jane Doe', postalCode: 'NW1 6XE' }, buyer_phone: '+44123' });
+  const getCall = env.fetches.find((c) => c.url.endsWith('/api/orders/o1'));
+  assert.strictEqual(getCall.method, 'GET');
+  assert.strictEqual(getCall.auth, 'Bearer old-token');
+
   // ---------- ELMS_MARK_ORDERED: the right endpoint, method, body and auth ----------
   env = boot({ respond: (c) => (c.url.endsWith('/extension-settings') ? SETTINGS : { status: 200, body: { success: true, order: { id: 'o1', fulfillment_status: 'ordered_from_amazon' } } }) });
   r = await env.message({ type: 'ELMS_MARK_ORDERED', orderId: 'o1', deliveryDate: '2026-10-05', buyingPrice: 42.5 });

@@ -56,6 +56,68 @@
     return res.result;
   }
 
+  const escapeHtml = (s) => String(s || '').replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+  const escapeAttr = escapeHtml;
+
+  // Copies `text` to the clipboard from inside a click handler (a real user gesture, same as any person pressing
+  // Ctrl+C themselves) and flashes the button's own label to confirm it - never touches Amazon's page in any other
+  // way, and Amazon never sees anything beyond an ordinary paste a moment later.
+  async function copyAndFlash(btn, text) {
+    const original = btn.textContent;
+    try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied!'; }
+    catch (_) { btn.textContent = 'Could not copy'; }
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  }
+
+  function addressRowHtml(label, value) {
+    if (!value) return '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #1e293b;">
+      <div style="min-width:0;"><div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">${escapeHtml(label)}</div><div style="font-size:13px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(value)}</div></div>
+      <button data-copy="${escapeAttr(value)}" style="flex:none;background:#1e40af;color:#fff;border:0;border-radius:6px;padding:5px 10px;font:600 11px Arial,sans-serif;cursor:pointer;">Copy</button>
+    </div>`;
+  }
+
+  // One "Copy full address" block, in the order a shipping label would read it - blank lines (no line 2, say) are
+  // never left in, so a paste never carries stray empty rows.
+  function fullAddressText(address) {
+    return [address.fullName, address.addressLine1, address.addressLine2, [address.city, address.stateOrProvince, address.postalCode].filter(Boolean).join(', '), address.country].filter(Boolean).join('\n');
+  }
+
+  // A small, collapsible floating panel with the buyer's own address (already on the ELMS order) so it can be
+  // copy-pasted straight onto Amazon's own address form - the seller does every keystroke/paste themselves; this
+  // never reads Amazon's form, never fills a field, never submits anything. Persists across the whole flow (product
+  // -> cart -> checkout) rather than trying to guess exactly which page shows the address form, since that varies
+  // by account/locale/A-B test and guessing wrong would just mean the panel never appears when needed.
+  function showAddressPanel(address, phone) {
+    if (document.getElementById('elms-address-panel')) return; // already shown on this page
+    const fields = [
+      ['Name', address.fullName], ['Address line 1', address.addressLine1], ['Address line 2', address.addressLine2],
+      ['City', address.city], ['State / province', address.stateOrProvince], ['Postal code', address.postalCode],
+      ['Country', address.country], ['Phone', phone],
+    ];
+    const wrap = document.createElement('div');
+    wrap.id = 'elms-address-panel';
+    wrap.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:2147483647;font:13px/1.4 Arial,sans-serif;width:270px;background:#0f172a;color:#fff;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.35);overflow:hidden;';
+    wrap.innerHTML = `
+      <div id="elms-panel-head" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;cursor:pointer;background:#172554;">
+        <b style="font-size:12.5px;">ELMS buyer address</b><span id="elms-panel-toggle" style="font-size:16px;line-height:1;">&#8722;</span>
+      </div>
+      <div id="elms-panel-body" style="padding:4px 12px 12px;">
+        ${fields.map(([label, value]) => addressRowHtml(label, value)).join('')}
+        <button id="elms-copy-all" style="width:100%;margin-top:10px;background:#0064d2;color:#fff;border:0;border-radius:8px;padding:9px;font:700 12px Arial,sans-serif;cursor:pointer;">Copy full address</button>
+      </div>`;
+    document.documentElement.appendChild(wrap);
+
+    wrap.querySelectorAll('[data-copy]').forEach((btn) => btn.addEventListener('click', () => copyAndFlash(btn, btn.getAttribute('data-copy'))));
+    document.getElementById('elms-copy-all').addEventListener('click', (e) => copyAndFlash(e.currentTarget, fullAddressText(address)));
+    document.getElementById('elms-panel-head').addEventListener('click', () => {
+      const body = document.getElementById('elms-panel-body');
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      document.getElementById('elms-panel-toggle').innerHTML = collapsed ? '&#8722;' : '+';
+    });
+  }
+
   async function main() {
     // A fresh visit from ELMS's own "AMAZON" link on an order: remember which order this browser TAB belongs to.
     // Amazon's own checkout pages never carry this parameter forward themselves, which is exactly why the
@@ -63,11 +125,17 @@
     const linkedOrderId = new URLSearchParams(location.search).get('elms_order');
     if (linkedOrderId) await report('ELMS_REMEMBER_TAB_ORDER', { orderId: linkedOrderId }).catch(() => {});
 
-    if (!isOrderConfirmationPage()) return;
-
     let orderId;
     try { orderId = await report('ELMS_GET_TAB_ORDER'); } catch (_) { return; }
-    if (!orderId) return; // an ordinary Amazon order, not opened from an ELMS order - nothing to do here
+    if (!orderId) return; // an ordinary Amazon page, not opened from an ELMS order - nothing to do here
+
+    if (!isOrderConfirmationPage()) {
+      try {
+        const order = await report('ELMS_GET_ORDER', { orderId });
+        if (order?.shipping_address) showAddressPanel(order.shipping_address, order.buyer_phone);
+      } catch (_) { /* non-critical: the seller can still open the order in ELMS itself */ }
+      return;
+    }
 
     const buyingPrice = readCheckoutTotal();
     if (buyingPrice == null) return; // could not read a total confidently enough to save - never guess
