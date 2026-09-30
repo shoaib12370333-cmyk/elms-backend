@@ -38,6 +38,45 @@ function renderVideo(videoUrl) {
   return `<div style="text-align:center;padding:10px 0;"><a href="${escapeAttr(videoUrl)}" target="_blank" rel="noopener noreferrer">&#9654; Watch the product video</a></div>`;
 }
 
+/** Best-effort textual "is this block probably in the AI's raw answer" checks for the 'ai' kind blocks that have a
+ * recognizable instructed heading or markup - content wording varies, so this only catches a block the AI dropped
+ * outright, not one it reworded. 'intro' and 'trust_badges' have no instructed heading, so they are never checked. */
+const AI_BLOCK_PRESENT = {
+  bullets: (html) => /key features/i.test(html) || /<li[\s>]/i.test(html),
+  specs: (html) => /specifications/i.test(html) || /<table[\s>]/i.test(html),
+  shipping: (html) => /shipping/i.test(html),
+  returns: (html) => /returns/i.test(html),
+  faq: (html) => /\bfaq\b/i.test(html) || /frequently asked/i.test(html),
+};
+
+/** Best-effort check that every block the prompt instructed actually shows up in the AI's raw answer, so a block
+ * the AI silently dropped - skipped an instructed 'ai' section, or paraphrased away a literal data-block placeholder
+ * so split/join finds nothing to splice - surfaces as a warning instead of just shipping a shorter description than
+ * the seller configured, with no error anywhere. Never a hard failure, and never certain: a block that IS there can
+ * still be flagged if the AI's wording doesn't match the heuristic. */
+function findMissingBlocks(rawHtml, template, hasSpecs) {
+  const missingBlocks = [];
+  const warnings = [];
+  for (const key of template.blocks) {
+    const def = AVAILABLE_BLOCKS.find((b) => b.key === key);
+    if (!def) continue;
+    if (DATA_BLOCK_KEYS.has(key)) {
+      if (!rawHtml.includes(PLACEHOLDER[key])) {
+        missingBlocks.push(key);
+        warnings.push(`"${def.label}" was left out - the AI didn't include its placeholder, so no data could be filled in. Try beautifying again.`);
+      }
+      continue;
+    }
+    if (key === 'specs' && !hasSpecs) continue; // the AI is told to skip this block entirely when there are no specs to write
+    const isPresent = AI_BLOCK_PRESENT[key];
+    if (isPresent && !isPresent(rawHtml)) {
+      missingBlocks.push(key);
+      warnings.push(`"${def.label}" doesn't seem to be in the AI's answer and may have been left out. Try beautifying again.`);
+    }
+  }
+  return { missingBlocks, warnings };
+}
+
 /** Replaces each data-block placeholder with the seller's own real data, or removes it when there is none - the AI
  * never sees or invents this content, it only leaves room for it. */
 function spliceDataBlocks(html, template, images) {
@@ -95,8 +134,9 @@ async function beautifyEbayDescription({ title, description, bulletPoints, speci
     err.statusCode = 502;
     throw err;
   }
+  const { missingBlocks, warnings } = findMissingBlocks(html, template, specs.length > 0);
   html = spliceDataBlocks(html, template, images);
-  return { text: html, usage: result };
+  return { text: html, usage: result, missingBlocks, warnings };
 }
 
 /**
@@ -125,7 +165,7 @@ async function beautifyDraftDescription(userId, id, template) {
       return ai;
     });
     AiUsage.create({ userId, kind: 'beautify', ok: true, credits: cost, model: out.usage?.model, inputTokens: out.usage?.inputTokens, outputTokens: out.usage?.outputTokens }).catch(() => {});
-    return { id, title, status: 'done', creditsUsed: cost };
+    return { id, title, status: 'done', creditsUsed: cost, missingBlocks: out.missingBlocks, warnings: out.warnings };
   } catch (err) {
     if (err.outOfCredits) return { id, title, status: 'no_credits', reason: err.message, creditsUsed: 0 };
     AiUsage.create({ userId, kind: 'beautify', ok: false, credits: 0 }).catch(() => {});

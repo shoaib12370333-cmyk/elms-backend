@@ -114,7 +114,7 @@ async function runAiAction(req, res, { kind, costKey, enabledKey, run }) {
   try {
     const out = await run(settings);
     AiUsage.create({ userId: req.userId, kind, ok: true, credits: cost, model: out.usage?.model, inputTokens: out.usage?.inputTokens, outputTokens: out.usage?.outputTokens }).catch(() => {});
-    return res.json({ success: true, text: out.text, data: out.data, title: kind === 'title' ? out.text : undefined, description: kind === 'description' ? out.text : undefined, creditsUsed: cost });
+    return res.json({ success: true, text: out.text, data: out.data, title: kind === 'title' ? out.text : undefined, description: kind === 'description' ? out.text : undefined, creditsUsed: cost, warnings: out.warnings, missingBlocks: out.missingBlocks });
   } catch (err) {
     await refundCredit(req.userId, cost);
     AiUsage.create({ userId: req.userId, kind, ok: false, credits: 0 }).catch(() => {});
