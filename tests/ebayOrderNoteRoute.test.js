@@ -14,6 +14,10 @@ const syncCalls = [];
 let syncResult = { status: 'written', note: 'ELMS: ordered 27 Sep 2026' };
 let token = 'rt-1';
 const query = (result) => { const q = { select: () => q, lean: async () => result }; return q; };
+let trackingResult = { id: 'o1', ebay_account_id: 'a1', buyer_username: 'buyer1', legacy_item_id: '110001', item_title: 'Widget', shipping_address: { fullName: 'Jane Doe' }, review_message_at: null };
+const reviewCalls = [];
+let userSettings = { autoThankYouMessage: false, autoReviewRequestMessage: false };
+const settingsWrites = [];
 const fakes = {
   '../models/conversationsModel': { listConversations: async () => [], countUnreadConversations: async () => 0, upsertConversation: async () => null, addInternalNote: async () => null, updateConversationState: async () => null, trashConversation: async () => null, restoreConversation: async () => null, getConversationById: async () => null, getConversationForThread: async () => null, markConversationRead: async () => null },
   '../services/ebayBuyerProfileService': { PROFILE_TTL_MS: 1, ensureBuyerProfile: async () => null },
@@ -26,7 +30,7 @@ const fakes = {
   '../models/schemas/Listing': { findOne: () => query(null) },
   '../jobs/conversationSync': { syncConversationsForUser: async () => ({}) },
   '../models/ordersModel': {
-    ordersSummary: async () => ({}), listOrders: async () => [], updateFulfillmentStatus: async () => null, upsertOrder: async () => null, setTracking: async () => null, linkAmazonOrder: async () => null, setSellerNote: async () => null, setBuyPrice: async () => null, linkOrderToListing: async () => null,
+    ordersSummary: async () => ({}), listOrders: async () => [], updateFulfillmentStatus: async () => null, upsertOrder: async () => null, setTracking: async () => trackingResult, linkAmazonOrder: async () => null, setSellerNote: async () => null, setBuyPrice: async () => null, linkOrderToListing: async () => null,
     getOrderById: async (u, id) => (id === 'o1' ? order : null),
     markOrdered: async (u, id, o) => { marks.push([id, o]); return markResult(id, o); },
     setEbayNoteState: async (u, id, state) => { states.push([id, state]); return { ...order, ebay_note_at: state.written === true ? '2026-09-27T10:00:00Z' : null, ebay_note_error: state.error }; },
@@ -37,8 +41,17 @@ const fakes = {
   '../routes/fetchProduct': { fetchAndSaveDraft: async () => null },
   '../models/usersModel': { hasCredits: async () => true },
   // loaded by the routes when they run
-  '../models/schemas/User': { findById: () => query({ ebayOrderNote: switchOn }), updateOne: async (q, u) => { userWrites.push(u.$set); switchOn = u.$set.ebayOrderNote; } },
+  '../models/schemas/User': {
+    findById: () => query({ ebayOrderNote: switchOn, ...userSettings }),
+    updateOne: async (q, u) => {
+      userWrites.push(u.$set);
+      if ('ebayOrderNote' in u.$set) switchOn = u.$set.ebayOrderNote;
+      if ('autoThankYouMessage' in u.$set || 'autoReviewRequestMessage' in u.$set) { settingsWrites.push(u.$set); Object.assign(userSettings, u.$set); }
+    },
+  },
   '../services/ebayOrderNoteService': { syncOrderNote: async (t, mp, o) => { syncCalls.push([t, mp, o]); return syncResult; } },
+  '../models/trackingLinksModel': { createOrGetForOrder: async () => ({ code: 'tc1' }), getForOrder: async () => null },
+  '../services/autoBuyerMessageService': { maybeSendReviewRequestMessage: async (args) => { reviewCalls.push(args); } },
 };
 const origLoad = Module._load;
 Module._load = function (request, parent) {
@@ -125,6 +138,39 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
   marks.length = 0; res = await ordered({ ordered: false, deliveryDate: inFuture }); assert.strictEqual(res.statusCode, 200); assert.strictEqual(marks[0][1].ordered, false); assert.strictEqual(marks[0][1].deliveryDate, undefined, 'Undo needs no date');
   res = await ordered({ ordered: true }, 'nope'); assert.strictEqual(res.statusCode, 404);
   markResult = () => ({ error: 'shipped' }); res = await ordered({ ordered: true }); assert.strictEqual(res.statusCode, 409); assert.match(res.body.error, /already shipped/);
+
+  // ---------- the auto buyer message settings: off until the seller turns them on, both independent of each other ----------
+  reset(); userSettings = { autoThankYouMessage: false, autoReviewRequestMessage: false }; settingsWrites.length = 0;
+  res = await call('get', '/auto-message-settings'); assert.deepStrictEqual(res.body, { success: true, thankYou: false, reviewRequest: false });
+  res = await call('put', '/auto-message-settings', { body: { thankYou: 'yes' } }); assert.strictEqual(res.statusCode, 400); assert.strictEqual(settingsWrites.length, 0);
+  res = await call('put', '/auto-message-settings', { body: { thankYou: true } });
+  assert.deepStrictEqual(res.body, { success: true, thankYou: true, reviewRequest: false }); assert.deepStrictEqual(settingsWrites, [{ autoThankYouMessage: true }]);
+  res = await call('get', '/auto-message-settings'); assert.deepStrictEqual(res.body, { success: true, thankYou: true, reviewRequest: false });
+  res = await call('put', '/auto-message-settings', { body: { reviewRequest: true } });
+  assert.deepStrictEqual(res.body, { success: true, thankYou: true, reviewRequest: true }, 'turning one on never disturbs the other');
+
+  // ---------- PUT /:id/tracking: the auto "shipped, please review" message fires only the FIRST time a tracking number lands on this order ----------
+  reset(); order = { id: 'o1', ebay_order_id: '11-12345-67890', legacy_item_id: '110001', ebay_account_id: 'a1', marketplace_id: 'EBAY_GB', tracking_number: null };
+  res = await call('put', '/:id/tracking', { params: { id: 'o1' }, body: { trackingNumber: 'TRACK123', shippingCarrier: 'usps' } });
+  assert.strictEqual(res.statusCode, 200); assert.strictEqual(reviewCalls.length, 1, 'first time this order ever got a tracking number');
+  assert.deepStrictEqual(reviewCalls[0], {
+    userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '110001', itemTitle: 'Widget',
+    buyerFullName: 'Jane Doe', justShipped: true, alreadySent: false,
+  });
+
+  // ---------- the order already had a tracking number before this call: never fires again (correcting a typo, re-saving, etc.) ----------
+  reviewCalls.length = 0;
+  order = { ...order, tracking_number: 'OLDTRACK' };
+  res = await call('put', '/:id/tracking', { params: { id: 'o1' }, body: { trackingNumber: 'TRACK999' } });
+  assert.strictEqual(res.statusCode, 200); assert.strictEqual(reviewCalls.length, 0, 'this order was already shipped once - a corrected tracking number is not a fresh "just shipped" moment');
+
+  // ---------- the review message was already sent for this order: the trigger still fires (it is a fresh transition here) but says so ----------
+  reviewCalls.length = 0;
+  order = { ...order, tracking_number: null };
+  trackingResult = { ...trackingResult, review_message_at: '2026-09-27T10:00:00Z' };
+  await call('put', '/:id/tracking', { params: { id: 'o1' }, body: { trackingNumber: 'TRACK1' } });
+  assert.strictEqual(reviewCalls[0].alreadySent, true, 'autoBuyerMessageService is told - it is the one that must not resend, not this route');
+  trackingResult = { ...trackingResult, review_message_at: null };
 
   Module._load = origLoad;
   console.log('ebay order note route tests passed');
