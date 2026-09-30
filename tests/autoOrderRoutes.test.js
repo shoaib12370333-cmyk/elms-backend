@@ -14,6 +14,10 @@ let placedCalls = [];
 let retryOrder = null;
 let linkedOrder = null;
 let retryCalls = [];
+let queueResults = {}; // orderId -> what queueSupplierOrder should return
+let queueCalls = [];
+let startCalls = [];
+let startedCount = 0;
 
 stub('models/supplierOrdersModel', {
   getSupplierOrderById: async (userId, id) => (orders[id] && orders[id].userId === userId ? { ...orders[id] } : null),
@@ -38,6 +42,8 @@ stub('services/autoOrderService', {
     placedCalls.push({ userId, id, body });
     const o = orders[id]; if (!o) return null; o.status = 'placed'; o.amazonOrderId = body.amazonOrderId; return { ...o };
   },
+  queueSupplierOrder: async (userId, orderId) => { queueCalls.push({ userId, orderId }); return queueResults[orderId] || { status: 'skipped', reason: 'Order not found.' }; },
+  startQueuedSupplierOrders: async (userId) => { startCalls.push(userId); return startedCount; },
 });
 stub('config/actionCosts', { ACTION_COSTS: { AUTO_ORDER: 1 } });
 stub('middleware/requireAuth', { requireAuth: (req, res, next) => { req.userId = req.headers['x-test-user'] || 'u1'; next(); } });
@@ -115,6 +121,27 @@ const call = async (method, path, { body, userId = 'u1', params = {} } = {}) => 
   // ---------- GET / : lists only this user's orders, optionally filtered by status ----------
   res = await call('get', '/', { userId: 'u1' });
   assert.ok(res.body.orders.length >= 3);
+
+  // ---------- POST /queue: the Orders page's "Send to Auto Order" - one call per id, one bad id never blocks the rest ----------
+  queueResults = { good1: { status: 'queued', supplierOrder: { id: 'sq1', status: 'pending' } }, good2: { status: 'queued', supplierOrder: { id: 'sq2', status: 'pending' } }, bad1: { status: 'skipped', reason: 'This order is not paid yet.' } };
+  queueCalls = [];
+  res = await call('post', '/queue', { body: { orderIds: ['good1', 'bad1', 'good2', 'good1'] } }); // a repeated id is still only queued once
+  assert.strictEqual(res.body.success, true);
+  assert.strictEqual(res.body.queued, 2);
+  assert.strictEqual(res.body.results.length, 3);
+  assert.strictEqual(queueCalls.length, 3);
+  assert.strictEqual(res.body.results.find((r) => r.orderId === 'bad1').reason, 'This order is not paid yet.');
+  res = await call('post', '/queue', { body: { orderIds: [] } });
+  assert.strictEqual(res.statusCode, 400);
+  res = await call('post', '/queue', { body: { orderIds: Array.from({ length: 101 }, (_, i) => 'x' + i) } });
+  assert.strictEqual(res.statusCode, 400, 'at most 100 per request');
+
+  // ---------- POST /start: the Orders page's "Start Auto Order" - a plain one-shot promotion for THIS user ----------
+  startCalls = []; startedCount = 4;
+  res = await call('post', '/start', { userId: 'u9' });
+  assert.strictEqual(res.body.success, true);
+  assert.strictEqual(res.body.started, 4);
+  assert.deepStrictEqual(startCalls, ['u9']);
 
   console.log('autoOrder routes: all good');
   process.exit(0);

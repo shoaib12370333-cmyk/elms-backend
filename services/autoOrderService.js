@@ -1,33 +1,42 @@
 const User = require('./../models/schemas/User');
 const Import = require('../models/schemas/Import');
-const { createSupplierOrder, markPlaced, todaysPlacedTotal } = require('../models/supplierOrdersModel');
-const { linkAmazonOrder, markOrdered } = require('../models/ordersModel');
+const Listing = require('../models/schemas/Listing');
+const { createSupplierOrder, markPlaced, todaysPlacedTotal, startPendingSupplierOrders } = require('../models/supplierOrdersModel');
+const { linkAmazonOrder, markOrdered, getOrderById } = require('../models/ordersModel');
 const { getEbayAccountById, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const { writeAmazonOrderNote } = require('./ebayOrderNoteService');
 const { hasCredits, spendCredit } = require('../models/usersModel');
 const { ACTION_COSTS } = require('../config/actionCosts');
 
 /**
- * Called from models/ordersModel.js upsertOrder for every order line that is genuinely new or has just turned into
- * a paid one. Creates the matching supplier order when, and only when, every one of these holds:
- *   - the listing exists and is an Amazon listing (sourcePlatform 'amazon') - never CJ or AliExpress, which use their
- *     own supplier APIs instead of a buyer-account browser extension,
+ * The Orders page's own "Send to Auto Order" bulk action - the seller explicitly picking ONE paid eBay order to
+ * queue for Auto Order. There is no automatic-on-payment creation any more: the seller decides which orders enter
+ * Auto Order at all, not just when the queue starts (see startQueuedSupplierOrders, below). Creates the supplier
+ * order as 'pending' (queued, not yet eligible for the extension's poll - claimNextReadyOrder only ever claims
+ * 'ready') when, and only when, every one of these holds:
+ *   - the order exists and belongs to this seller,
  *   - the eBay order line is actually paid,
  *   - the line item has an ebayLineItemId to key the (unique-indexed) supplier order on,
+ *   - it is linked to a listing that is an Amazon listing (sourcePlatform 'amazon') - never CJ or AliExpress, which
+ *     use their own supplier APIs instead of a buyer-account browser extension,
  *   - the seller has Auto Order switched to 'full_auto'.
- * Never throws: a problem here must never break order sync itself. Returns the created supplier order, or null when
- * any condition above was not met (including the ordinary case of a duplicate line item already handled).
+ * Never throws: one bad order in a bulk selection must never take down the rest of that request.
+ * @returns {Promise<{status: 'queued', supplierOrder: object} | {status: 'skipped', reason: string}>}
  */
-async function maybeCreateSupplierOrder({ userId, listing, order, ebayAccountId }) {
+async function queueSupplierOrder(userId, orderId) {
+  const skip = (reason) => ({ status: 'skipped', reason });
   try {
-    if (!listing || listing.sourcePlatform !== 'amazon') return null;
-    if (String(order.ebayPaymentStatus || '').toUpperCase() !== 'PAID') return null;
-    if (!order.ebayLineItemId) return null;
+    const order = await getOrderById(userId, orderId);
+    if (!order) return skip('Order not found.');
+    if (String(order.ebay_payment_status || '').toUpperCase() !== 'PAID') return skip('This order is not paid yet.');
+    if (!order.ebay_line_item_id) return skip('This order has no eBay line item to key on.');
+    if (!order.listing_id) return skip('This order is not linked to one of your listings.');
 
-    const user = await User.findById(userId)
-      .select('autoOrderMode autoOrderMaxPriceIncreasePercent autoOrderMaxCost')
-      .lean();
-    if (!user || user.autoOrderMode !== 'full_auto') return null;
+    const listing = await Listing.findOne({ _id: order.listing_id, userId }).select('sourcePlatform amazonPrice importId sku').lean();
+    if (!listing || listing.sourcePlatform !== 'amazon') return skip('Only Amazon-sourced listings can be sent to Auto Order.');
+
+    const user = await User.findById(userId).select('autoOrderMode autoOrderMaxPriceIncreasePercent autoOrderMaxCost').lean();
+    if (!user || user.autoOrderMode !== 'full_auto') return skip('Auto Order is not switched to Full-auto in Settings.');
 
     const basePrice = Number(listing.amazonPrice);
     const pctCap = Number.isFinite(basePrice) && basePrice > 0
@@ -37,36 +46,47 @@ async function maybeCreateSupplierOrder({ userId, listing, order, ebayAccountId 
     const caps = [pctCap, hardCap].filter((n) => Number.isFinite(n) && n > 0);
     const maxAllowedCost = caps.length ? Math.min(...caps) : null;
 
-    // The listing's own import record has the exact product page it was read from - not populated on `listing` here,
-    // so a light, separate lookup (only when there is one to look up).
+    // The listing's own import record has the exact product page it was read from.
     const amazonUrl = listing.importId
       ? (await Import.findById(listing.importId).select('amazonUrl').lean())?.amazonUrl || null
       : null;
 
-    return await createSupplierOrder({
+    const created = await createSupplierOrder({
       userId,
-      ebayAccountId: ebayAccountId || null,
-      orderId: order._id,
+      ebayAccountId: order.ebay_account_id || null,
+      orderId: order.id,
       listingId: listing._id,
-      ebayOrderId: order.ebayOrderId,
-      ebayLineItemId: order.ebayLineItemId,
-      legacyItemId: order.legacyItemId || null,
+      ebayOrderId: order.ebay_order_id,
+      ebayLineItemId: order.ebay_line_item_id,
+      legacyItemId: order.legacy_item_id || null,
       sourcePlatform: 'amazon',
       asin: listing.sku,
       amazonUrl,
-      variantDetails: order.variantDetails || null,
+      variantDetails: order.variant_details || null,
       quantity: order.quantity || 1,
       // Amazon needs a phone number to save a new address; eBay's own buyer phone (a separate field on Order, not
       // part of its shippingAddress) is folded in here so the extension has everything in one place.
-      shippingAddress: order.shippingAddress ? { ...order.shippingAddress, phone: order.buyerPhone || null } : null,
+      shippingAddress: order.shipping_address ? { ...order.shipping_address, phone: order.buyer_phone || null } : null,
       maxAllowedCost,
-      status: 'ready',
+      status: 'pending',
       fulfillmentMethod: 'extension',
     });
+    if (!created) return skip('This order was already sent to Auto Order.');
+    return { status: 'queued', supplierOrder: created };
   } catch (err) {
-    console.error('[auto-order] could not create a supplier order:', err.message);
-    return null;
+    console.error('[auto-order] could not queue a supplier order:', err.message);
+    return skip(err.message || 'Could not queue this order.');
   }
+}
+
+/**
+ * The Orders page's own "Start Auto Order" button - promotes every one of this seller's queued ('pending') supplier
+ * orders to 'ready' in one shot, so the extension's normal poll picks them up from there, one at a time, exactly as
+ * before. A one-time promotion, not a standing mode: anything queued afterward needs its own Start.
+ * @returns {Promise<number>} how many were actually promoted
+ */
+async function startQueuedSupplierOrders(userId) {
+  return startPendingSupplierOrders(userId);
 }
 
 /**
@@ -141,4 +161,4 @@ async function primeOnlySetting(userId) {
   return user ? user.autoOrderPrimeOnly !== false : true;
 }
 
-module.exports = { maybeCreateSupplierOrder, withinDailyLimit, completeSupplierOrderPlacement, hasCredits, primeOnlySetting };
+module.exports = { queueSupplierOrder, startQueuedSupplierOrders, withinDailyLimit, completeSupplierOrderPlacement, hasCredits, primeOnlySetting };

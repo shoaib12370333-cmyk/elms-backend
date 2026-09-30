@@ -133,12 +133,8 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     }
   }
 
-  // Auto Order (services/autoOrderService.js): only for an Amazon listing, only once the line is paid, and only for
-  // this user's own supplier-order settings - all checked inside maybeCreateSupplierOrder, which never throws. Required
-  // lazily to avoid a require cycle (autoOrderService itself calls back into this file's linkAmazonOrder).
-  if (listing) {
-    await require('../services/autoOrderService').maybeCreateSupplierOrder({ userId, listing, order: doc, ebayAccountId });
-  }
+  // Auto Order (services/autoOrderService.js) no longer queues itself here - the seller decides which paid orders
+  // enter Auto Order at all via the Orders page's own "Send to Auto Order" bulk action (queueSupplierOrder).
 
   return serialize(doc);
 }

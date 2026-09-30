@@ -6,12 +6,19 @@ const mongoose = require('mongoose');
  * switched to 'full_auto' (models/schemas/User.js autoOrderMode) - never for a CJdropshipping or AliExpress listing, since
  * those have their own supplier APIs instead of a buyer-account browser extension.
  *
+ * The seller decides which paid orders enter Auto Order at all - there is no automatic-on-payment creation. The Orders
+ * page's own "Send to Auto Order" bulk action creates one of these per selected order (services/autoOrderService.js
+ * queueSupplierOrder), always starting 'pending' (queued, not yet eligible for the extension - see
+ * models/supplierOrdersModel.js claimNextReadyOrder, which only ever claims 'ready'). Nothing happens to a queued order
+ * until the seller presses "Start Auto Order" (startPendingSupplierOrders), a one-shot promotion of every 'pending' order
+ * to 'ready' at that moment - anything queued afterward needs its own Start.
+ *
  * Status flow (services/autoOrderService.js / models/supplierOrdersModel.js hold every transition):
- *   ready -> checking (the extension claimed it and is opening the Amazon page) -> placing (all of its own checks passed,
- *   about to click "Place your order") -> placed (done) | needs_attention (a known, human-fixable block: captcha, sign-in,
- *   price rose, out of stock, over a spending limit - the extension never retries these on its own) | failed (an
- *   unexpected error). 'pending' and 'cancelled' exist for completeness (a future async pre-check, or the eBay order
- *   itself being cancelled before an Amazon order was placed) but nothing here sets them yet.
+ *   pending (queued, waiting for Start) -> ready (eligible for the extension's poll) -> checking (the extension claimed
+ *   it and is opening the Amazon page) -> placing (all of its own checks passed, about to click "Place your order") ->
+ *   placed (done) | needs_attention (a known, human-fixable block: captcha, sign-in, price rose, out of stock, over a
+ *   spending limit - the extension never retries these on its own) | failed (an unexpected error). 'cancelled' exists
+ *   for completeness (the eBay order itself being cancelled before an Amazon order was placed) but nothing sets it yet.
  */
 const supplierOrderSchema = new mongoose.Schema(
   {

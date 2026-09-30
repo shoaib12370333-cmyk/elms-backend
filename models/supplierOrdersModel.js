@@ -145,6 +145,15 @@ async function retrySupplierOrder(userId, id, { shippingAddress } = {}) {
   return doc ? serialize(doc) : null;
 }
 
+/** The seller's "Start Auto Order" button: promotes every one of THIS user's queued ('pending') supplier orders to
+ * 'ready' in one shot, so the extension's normal poll (claimNextReadyOrder, above) can pick them up from there, one
+ * at a time, exactly as it already does. A one-time promotion, not a standing mode - anything queued afterward
+ * needs its own Start. Returns how many were actually promoted. */
+async function startPendingSupplierOrders(userId) {
+  const result = await SupplierOrder.updateMany({ userId, status: 'pending' }, { status: 'ready' });
+  return result.modifiedCount || 0;
+}
+
 async function markCreditCharged(id) {
   await SupplierOrder.updateOne({ _id: id }, { creditCharged: true });
 }
@@ -172,6 +181,7 @@ module.exports = {
   markNeedsAttention,
   markFailed,
   retrySupplierOrder,
+  startPendingSupplierOrders,
   markCreditCharged,
   todaysPlacedTotal,
   serialize,

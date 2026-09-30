@@ -11,7 +11,7 @@ const {
   retrySupplierOrder,
 } = require('../models/supplierOrdersModel');
 const { getOrderById } = require('../models/ordersModel');
-const { completeSupplierOrderPlacement, withinDailyLimit, hasCredits, primeOnlySetting } = require('../services/autoOrderService');
+const { completeSupplierOrderPlacement, withinDailyLimit, hasCredits, primeOnlySetting, queueSupplierOrder, startQueuedSupplierOrders } = require('../services/autoOrderService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 
 /**
@@ -118,6 +118,38 @@ router.post('/:id/retry', requireAuth, async (req, res) => {
   const order = await retrySupplierOrder(req.userId, req.params.id, { shippingAddress });
   if (!order) return res.status(400).json({ success: false, error: 'This order is not in a state that can be retried.' });
   res.json({ success: true, order });
+});
+
+const MAX_QUEUE_BATCH = 100;
+
+/**
+ * POST /api/auto-order/queue
+ * Body: { orderIds: [...] }
+ * The Orders page's own "Send to Auto Order" bulk action - the seller explicitly picking which paid orders enter
+ * Auto Order (there is no automatic-on-payment creation any more). Each is queued 'pending', not yet eligible for
+ * the extension - see POST /start below. One bad order in the selection never stops the rest.
+ */
+router.post('/queue', requireAuth, async (req, res) => {
+  const ids = Array.from(new Set((Array.isArray(req.body?.orderIds) ? req.body.orderIds : []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!ids.length) return res.status(400).json({ success: false, error: 'orderIds must be a non-empty array.' });
+  if (ids.length > MAX_QUEUE_BATCH) return res.status(400).json({ success: false, error: `Please send at most ${MAX_QUEUE_BATCH} orders at a time.` });
+  const results = [];
+  for (const orderId of ids) {
+    const out = await queueSupplierOrder(req.userId, orderId);
+    results.push({ orderId, ...out });
+  }
+  res.json({ success: true, results, queued: results.filter((r) => r.status === 'queued').length });
+});
+
+/**
+ * POST /api/auto-order/start
+ * The Orders page's own "Start Auto Order" button - promotes every one of this seller's currently-queued supplier
+ * orders to 'ready' in one shot. The extension's normal poll (every few minutes) picks them up from there, one at a
+ * time, exactly as before. A one-time promotion, not a standing mode: anything queued afterward needs its own Start.
+ */
+router.post('/start', requireAuth, async (req, res) => {
+  const started = await startQueuedSupplierOrders(req.userId);
+  res.json({ success: true, started });
 });
 
 module.exports = router;
