@@ -9,6 +9,7 @@
 // data the seller actually saved - a data block that has no real data behind it is simply left out, never guessed.
 const AVAILABLE_BLOCKS = [
   { key: 'gallery', label: 'Image Gallery', kind: 'data', hint: 'The listing\'s own photos, placed where the AI leaves room for them.' },
+  { key: 'intro', label: 'Description / Sales Pitch', kind: 'ai', hint: 'A short persuasive paragraph selling the product, written from its own facts - not just a specs/features list.' },
   { key: 'bullets', label: 'Key Features / Bullets', kind: 'ai', hint: 'A short bulleted list of the product\'s real features.' },
   { key: 'specs', label: 'Specifications Table', kind: 'ai', hint: 'The product\'s saved specifications, as a table.' },
   { key: 'shipping', label: 'Shipping & Delivery', kind: 'ai', hint: 'A short, generic shipping note (no invented delivery promises).' },
@@ -23,14 +24,14 @@ const AVAILABLE_BLOCKS = [
 const BLOCK_KEYS = new Set(AVAILABLE_BLOCKS.map((b) => b.key));
 
 const TEMPLATE_STYLES = [
-  { id: 'minimal', name: 'Minimal / Clean', tone: 'calm and clean, short sentences, no emojis', defaultBlocks: ['bullets', 'specs', 'shipping'] },
-  { id: 'bold', name: 'Bold / Sale-style', tone: 'confident and energetic, a little urgency, tasteful emoji use', defaultBlocks: ['trust_badges', 'store_banner', 'bullets', 'shipping', 'returns'] },
-  { id: 'premium', name: 'Premium / Luxury', tone: 'elegant and refined, brand-forward, no emojis', defaultBlocks: ['store_banner', 'bullets', 'specs', 'custom_html', 'shipping', 'returns'] },
-  { id: 'tech', name: 'Tech / Gadget', tone: 'precise and spec-forward, confident, minimal emojis', defaultBlocks: ['gallery', 'specs', 'bullets', 'custom_html', 'shipping', 'returns', 'faq'] },
-  { id: 'fashion', name: 'Fashion / Apparel', tone: 'stylish and warm, light emoji use', defaultBlocks: ['gallery', 'size_chart', 'bullets', 'specs', 'shipping', 'returns'] },
-  { id: 'kids', name: 'Kids / Toys', tone: 'playful and warm, reassuring for parents, light emoji use', defaultBlocks: ['gallery', 'bullets', 'specs', 'faq', 'shipping', 'returns'] },
-  { id: 'home', name: 'Home & Kitchen', tone: 'practical and helpful, no emojis', defaultBlocks: ['gallery', 'bullets', 'specs', 'video', 'shipping', 'returns'] },
-  { id: 'automotive', name: 'Automotive / Parts', tone: 'direct and technical, compatibility-focused, no emojis', defaultBlocks: ['gallery', 'custom_html', 'specs', 'bullets', 'faq', 'shipping', 'returns'] },
+  { id: 'minimal', name: 'Minimal / Clean', tone: 'calm and clean, short sentences, no emojis', defaultBlocks: ['intro', 'bullets', 'specs', 'shipping'] },
+  { id: 'bold', name: 'Bold / Sale-style', tone: 'confident and energetic, a little urgency, tasteful emoji use', defaultBlocks: ['intro', 'trust_badges', 'store_banner', 'bullets', 'shipping', 'returns'] },
+  { id: 'premium', name: 'Premium / Luxury', tone: 'elegant and refined, brand-forward, no emojis', defaultBlocks: ['intro', 'store_banner', 'bullets', 'specs', 'custom_html', 'shipping', 'returns'] },
+  { id: 'tech', name: 'Tech / Gadget', tone: 'precise and spec-forward, confident, minimal emojis', defaultBlocks: ['gallery', 'intro', 'specs', 'bullets', 'custom_html', 'shipping', 'returns', 'faq'] },
+  { id: 'fashion', name: 'Fashion / Apparel', tone: 'stylish and warm, light emoji use', defaultBlocks: ['gallery', 'intro', 'size_chart', 'bullets', 'specs', 'shipping', 'returns'] },
+  { id: 'kids', name: 'Kids / Toys', tone: 'playful and warm, reassuring for parents, light emoji use', defaultBlocks: ['gallery', 'intro', 'bullets', 'specs', 'faq', 'shipping', 'returns'] },
+  { id: 'home', name: 'Home & Kitchen', tone: 'practical and helpful, no emojis', defaultBlocks: ['gallery', 'intro', 'bullets', 'specs', 'video', 'shipping', 'returns'] },
+  { id: 'automotive', name: 'Automotive / Parts', tone: 'direct and technical, compatibility-focused, no emojis', defaultBlocks: ['gallery', 'intro', 'custom_html', 'specs', 'bullets', 'faq', 'shipping', 'returns'] },
 ];
 const STYLE_IDS = new Set(TEMPLATE_STYLES.map((s) => s.id));
 
