@@ -7,6 +7,7 @@ const {
   loginWithPassword,
   getUserById,
   markWelcomePopupSeen,
+  markPlanExpiredNoticeSeen,
   setOrderSyncSettings,
   getOrCreateExtensionKey,
   regenerateExtensionKey,
@@ -435,6 +436,20 @@ router.post('/welcome-seen', requireAuth, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('welcome-seen error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not save that.' });
+  }
+});
+
+/**
+ * POST /api/auth/plan-expired-notice-seen
+ * The user closed the "your plan ended" notice; it is not shown again for that same expiry.
+ */
+router.post('/plan-expired-notice-seen', requireAuth, async (req, res) => {
+  try {
+    await markPlanExpiredNoticeSeen(req.userId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('plan-expired-notice-seen error:', err.message);
     res.status(500).json({ success: false, error: 'Could not save that.' });
   }
 });

@@ -30,7 +30,9 @@ async function grantOnce({ userId, plan, transactionId }) {
 
     const now = new Date();
     const currentLimit = buyer.maxEbayAccounts == null ? 1 : Number(buyer.maxEbayAccounts) || 0;
-    const set = { planName: plan.name };
+    // Buying again is the normal way a seller resolves an expired-plan notice - clear it here so it never lingers
+    // once they're back on a paid plan.
+    const set = { planName: plan.name, planExpiredNotice: null };
     if (limit > 0 && currentLimit < limit) set.maxEbayAccounts = limit; // raised, never lowered: an admin may have given more
     if (plan.termMonths > 0) {
       // a monthly / yearly plan runs one term from now, or one term on from where the running plan ends (buying early adds up)

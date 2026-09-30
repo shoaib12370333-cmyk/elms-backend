@@ -108,11 +108,13 @@ const { expireIfDue, expireDuePlans } = require('../services/planExpiryService')
   assert.strictEqual(users.get('old').planExpiresAt, null);
   assert.strictEqual(users.get('old').creditBalance, 6000);
 
-  // the end: credits go, the limit goes back, the mail is sent once
-  users.get('u1').planExpiresAt = new Date(Date.now() - 1000);
+  // the end: credits go, the limit goes back, the mail is sent once, and the app gets a one-time notice of its own
+  const expiredAt = new Date(Date.now() - 1000);
+  users.get('u1').planExpiresAt = expiredAt;
   assert.strictEqual(await expireIfDue('u1'), true);
   u = users.get('u1');
   assert.deepStrictEqual([u.creditBalance, u.maxEbayAccounts, u.planExpiresAt, u.planTerm, u.planName], [0, 1, null, null, null]);
+  assert.deepStrictEqual(u.planExpiredNotice, { planName: 'Pro (monthly)', endedAt: expiredAt }, 'the app can show this even though the plan fields themselves are now cleared');
   assert.strictEqual(emails.length, 1);
   assert.strictEqual(await expireIfDue('u1'), false, 'a second call finds nothing to close');
   assert.strictEqual(emails.length, 1);
@@ -131,6 +133,7 @@ const { expireIfDue, expireDuePlans } = require('../services/planExpiryService')
   assert.strictEqual(u.creditBalance, 6000, 'the old 400 ended, the new 6000 started');
   assert.strictEqual(u.planPrevMaxEbayAccounts, 1);
   assert.strictEqual(u.maxEbayAccounts, 2);
+  assert.strictEqual(u.planExpiredNotice, null, 'buying again is how a seller resolves the notice, so it never lingers once they are back on a paid plan');
 
   console.log('planTerms tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });

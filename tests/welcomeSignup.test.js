@@ -132,6 +132,16 @@ Object.assign(process.env, { SMTP_HOST: 'smtp.test.local', SMTP_USER: 'noreply@e
   assert.strictEqual(store.find((x) => x._id === u.id).welcomePopupSeenAt.getTime(), firstClose.getTime(), 'the first close is kept');
   assert.deepStrictEqual((await users.getUserById(u2.id)).welcomePopup, { credits: 50 }, 'someone else still sees theirs');
 
+  // ---------- the "your plan ended" notice: dismissed the same way, one account at a time ----------
+  store.find((x) => x._id === u.id).planExpiredNotice = { planName: 'Pro', endedAt: new Date('2026-09-27') };
+  store.find((x) => x._id === u2.id).planExpiredNotice = { planName: 'Starter', endedAt: new Date('2026-09-20') };
+  assert.deepStrictEqual((await users.getUserById(u.id)).planExpiredNotice, { planName: 'Pro', endedAt: new Date('2026-09-27') });
+  res = fakeRes();
+  await handler('post', '/plan-expired-notice-seen')({ userId: u.id }, res);
+  assert.strictEqual(res.body.success, true);
+  assert.strictEqual((await users.getUserById(u.id)).planExpiredNotice, null, 'dismissed: not shown again');
+  assert.deepStrictEqual((await users.getUserById(u2.id)).planExpiredNotice, { planName: 'Starter', endedAt: new Date('2026-09-20') }, 'someone else\'s notice is untouched');
+
   // a problem saving it is an answer, not a crash
   const realUpdate = User.updateOne;
   User.updateOne = async () => { throw new Error('db down'); };

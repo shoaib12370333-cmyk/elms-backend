@@ -54,6 +54,10 @@ const userSchema = new mongoose.Schema(
     planExpiresAt: { type: Date, default: null },
     planTerm: { type: String, enum: ['monthly', 'yearly', null], default: null },
     planPrevMaxEbayAccounts: { type: Number, default: null },
+    // Set once by services/planExpiryService.js the moment a paid plan ends, so the app can show a one-time "your
+    // plan ended" notice (until now the only sign was an email) - cleared either when the seller dismisses it
+    // (POST /api/auth/plan-expired-notice-seen) or the moment they buy a new plan (services/planGrantService.js).
+    planExpiredNotice: { type: mongoose.Schema.Types.Mixed, default: null },
     // Ids of the payments already given to this person (services/planGrantService.js). The credits and the payment id are written by
     // one update, so a payment that is reported twice is credited once. Only the newest few are kept; not sent to the site.
     processedPayments: { type: [String], default: undefined, select: false },
