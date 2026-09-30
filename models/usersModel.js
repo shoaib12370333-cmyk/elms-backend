@@ -162,6 +162,11 @@ async function markWelcomePopupSeen(userId) {
   await User.updateOne({ _id: userId, welcomePopupSeenAt: null }, { $set: { welcomePopupSeenAt: new Date() } });
 }
 
+/** The user closed the "your plan ended" notice: it is not shown again for that same expiry (a later one can still show). */
+async function markPlanExpiredNoticeSeen(userId) {
+  await User.updateOne({ _id: userId }, { $set: { planExpiredNotice: null } });
+}
+
 /**
  * Verifies email/password login credentials. Returns the user on success,
  * or throws a generic "invalid credentials" error on failure (never reveals
@@ -603,6 +608,8 @@ function serialize(doc) {
     planName: obj.planName || null,
     planExpiresAt: obj.planExpiresAt || null,
     planTerm: obj.planTerm || null,
+    // A one-time "your plan ended" notice (services/planExpiryService.js) - null once dismissed or once a new plan is bought.
+    planExpiredNotice: obj.planExpiredNotice || null,
     suspendedAt: obj.suspendedAt || null,
     suspendedReason: obj.suspendedReason || null,
     suspendedPermanent: !!obj.suspendedPermanent,
@@ -620,6 +627,7 @@ module.exports = {
   findOrCreateUser,
   registerWithPassword,
   markWelcomePopupSeen,
+  markPlanExpiredNoticeSeen,
   loginWithPassword,
   getUserById,
   getEbayRefreshToken,

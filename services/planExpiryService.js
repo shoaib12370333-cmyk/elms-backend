@@ -14,7 +14,14 @@ async function expireIfDue(userId, now = new Date()) {
   // matching the end date we just read means a second caller (or a renewal in between) does not close it again
   const res = await User.updateOne(
     { _id: user._id, planExpiresAt: user.planExpiresAt },
-    { $set: { creditBalance: 0, maxEbayAccounts: Math.max(1, Number(user.planPrevMaxEbayAccounts) || 1), planExpiresAt: null, planTerm: null, planName: null, planPrevMaxEbayAccounts: null } }
+    {
+      $set: {
+        creditBalance: 0, maxEbayAccounts: Math.max(1, Number(user.planPrevMaxEbayAccounts) || 1),
+        planExpiresAt: null, planTerm: null, planName: null, planPrevMaxEbayAccounts: null,
+        // The email is easy to miss; this is what lets the app itself show "your plan ended" once, until dismissed.
+        planExpiredNotice: { planName: user.planName, endedAt: user.planExpiresAt },
+      },
+    }
   );
   if (!(res.modifiedCount || res.nModified)) return false;
   try {
