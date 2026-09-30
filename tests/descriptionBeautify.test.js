@@ -33,7 +33,6 @@ stub('models/usersModel', {
   refundCredit: async (u, cost) => { balance += cost; refunded.push(cost); return true; },
   getDescriptionTemplate: async (u) => templates[u] || null,
   setDescriptionTemplate: async (u, t) => { templates[u] = t; return t; },
-  setAutoOrderSettings: async () => ({}),
 });
 stub('models/schemas/AiUsage', { create: async () => ({}) });
 stub('models/settingsModel', { getAiSettings: async () => ({ aiBeautifyDescriptionEnabled: aiEnabled, aiCustomInstructions: '' }) });

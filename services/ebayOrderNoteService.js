@@ -156,43 +156,4 @@ async function syncOrderNote(refreshToken, marketplaceId, { orderId, itemId, ord
   }
 }
 
-/**
- * Adds "Amazon order <id>" to the eBay order's private note, after the seller's own text and any "ELMS: ordered" mark
- * (Auto Order writes this once it has actually placed the Amazon order). Independent of syncOrderNote/planNote above -
- * a different mark, so both can sit in the same note together. Best effort, like syncOrderNote: never throws.
- * @returns {Promise<{ status: 'written'|'unchanged'|'skipped'|'failed', message?: string }>}
- */
-async function writeAmazonOrderNote(refreshToken, marketplaceId, { orderId, itemId, amazonOrderId }) {
-  if (!refreshToken) return { status: 'skipped', message: 'The eBay store is not connected.' };
-  if (!orderId || !itemId) return { status: 'skipped', message: 'This order has no eBay order number or item number, so its eBay note cannot be found.' };
-  const mark = `Amazon order ${String(amazonOrderId || '').trim()}`;
-  if (!amazonOrderId) return { status: 'skipped', message: 'No Amazon order ID was given.' };
-  try {
-    let found = null;
-    let reason = 'not_found';
-    for (let page = 1; page <= MAX_PAGES && !found; page += 1) {
-      if (!(await reserve('note', 1))) return { status: 'skipped', message: budgetMessage };
-      const { lines, totalPages } = parseSoldList(await callTrading(refreshToken, marketplaceId, 'GetMyeBaySelling', soldListRequest(page)));
-      const picked = pickLine(lines, { orderId, itemId });
-      if (picked.line) found = picked.line;
-      else if (picked.reason !== 'not_found') { reason = picked.reason; break; }
-      if (page >= totalPages) break;
-    }
-    if (!found) {
-      console.warn(`[ebay-note] amazon-order-id: no line for order ${orderId} item ${itemId}: ${reason}`);
-      return { status: 'skipped', message: "eBay's list of orders awaiting shipment has no line for this order, so its note was not changed." };
-    }
-    const existing = String(found.note || '').trim();
-    if (existing.includes(mark)) return { status: 'unchanged', message: 'The note already says it.' };
-    const next = existing ? `${existing} | ${mark}` : mark;
-    const text = next.length <= MAX_NOTE ? next : mark.slice(0, MAX_NOTE);
-    if (!(await reserve('note', 1))) return { status: 'skipped', message: budgetMessage };
-    await callTrading(refreshToken, marketplaceId, 'SetUserNotes', setNoteRequest({ itemId: found.itemId, transactionId: found.transactionId, action: 'AddOrUpdate', text }));
-    return { status: 'written' };
-  } catch (err) {
-    console.warn('[ebay-note] amazon-order-id write failed:', err.message);
-    return failed(err);
-  }
-}
-
-module.exports = { syncOrderNote, writeAmazonOrderNote, planNote, parseSoldList, pickLine, setNoteRequest, soldListRequest, markFor, MAX_NOTE };
+module.exports = { syncOrderNote, planNote, parseSoldList, pickLine, setNoteRequest, soldListRequest, markFor, MAX_NOTE };

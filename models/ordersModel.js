@@ -133,13 +133,6 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     }
   }
 
-  // Auto Order (services/autoOrderService.js): only for an Amazon listing, only once the line is paid, and only for
-  // this user's own supplier-order settings - all checked inside maybeCreateSupplierOrder, which never throws. Required
-  // lazily to avoid a require cycle (autoOrderService itself calls back into this file's linkAmazonOrder).
-  if (listing) {
-    await require('../services/autoOrderService').maybeCreateSupplierOrder({ userId, listing, order: doc, ebayAccountId });
-  }
-
   return serialize(doc);
 }
 
