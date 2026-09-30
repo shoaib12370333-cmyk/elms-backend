@@ -104,6 +104,7 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
   };
 
   let doc = await findExisting();
+  const wasPaid = doc ? doc.ebayPaymentStatus === 'PAID' : false;
   try {
     if (doc) {
       doc.set(fields);
@@ -131,6 +132,26 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
     } else {
       throw err;
     }
+  }
+
+  // Auto "thanks for your order" eBay buyer message (services/autoBuyerMessageService.js): only the moment this line
+  // is first seen as PAID, only when it happened recently (never for a store-connect backlog sync of old, already-paid
+  // orders), only once, and only when the seller switched it on - all checked inside maybeSendThankYouMessage, which
+  // never throws. Required lazily to avoid a require cycle.
+  const justPaid = fields.ebayPaymentStatus === 'PAID' && !wasPaid;
+  if (justPaid) {
+    await require('../services/autoBuyerMessageService').maybeSendThankYouMessage({
+      userId,
+      orderId: doc._id,
+      ebayAccountId: doc.ebayAccountId,
+      buyerUsername: doc.buyerUsername,
+      itemId: doc.legacyItemId,
+      itemTitle: doc.itemTitle,
+      buyerFullName: doc.shippingAddress && doc.shippingAddress.fullName,
+      justPaid: true,
+      paidAt: doc.paidAt,
+      alreadySent: !!doc.thankYouMessageAt,
+    }).catch((err) => console.warn('[auto-message] thank-you trigger failed:', err.message));
   }
 
   return serialize(doc);
@@ -436,6 +457,10 @@ function serialize(doc) {
     delivery_date: obj.deliveryDate || null,
     ebay_note_at: obj.ebayNoteAt || null,
     ebay_note_error: obj.ebayNoteError || null,
+    thank_you_message_at: obj.thankYouMessageAt || null,
+    thank_you_message_error: obj.thankYouMessageError || null,
+    review_message_at: obj.reviewMessageAt || null,
+    review_message_error: obj.reviewMessageError || null,
     sheet_amazon_price: obj.sheetAmazonPrice ?? null, // Net Profit sheet: typed by the seller
     order_earning: obj.orderEarning ?? null, // Net Profit sheet: typed by the seller
     net_profit_typed: obj.netProfit ?? null, // typed in the first version of the sheet

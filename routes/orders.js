@@ -78,6 +78,40 @@ router.put('/ebay-note-setting', requireAuth, async (req, res) => {
 });
 
 /**
+ * GET / PUT /api/orders/auto-message-settings   { thankYou: boolean, reviewRequest: boolean }
+ * The seller's switches for the two automatic eBay buyer messages (services/autoBuyerMessageService.js): a one-time
+ * "thanks for your order" the moment a line is first seen as paid, and a one-time "it shipped, please leave a
+ * review" the moment tracking is first saved. Both off by default - nothing is ever sent, not even a draft, unless
+ * switched on here. Must stay above PUT /:id.
+ */
+router.get('/auto-message-settings', requireAuth, async (req, res) => {
+  try {
+    const user = await require('../models/schemas/User').findById(req.userId).select('autoThankYouMessage autoReviewRequestMessage').lean();
+    res.json({ success: true, thankYou: !!(user && user.autoThankYouMessage), reviewRequest: !!(user && user.autoReviewRequestMessage) });
+  } catch (err) {
+    console.error('auto message settings error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not read these settings.' });
+  }
+});
+router.put('/auto-message-settings', requireAuth, async (req, res) => {
+  const { thankYou, reviewRequest } = req.body || {};
+  if (thankYou !== undefined && typeof thankYou !== 'boolean') return res.status(400).json({ success: false, error: 'thankYou must be true or false.' });
+  if (reviewRequest !== undefined && typeof reviewRequest !== 'boolean') return res.status(400).json({ success: false, error: 'reviewRequest must be true or false.' });
+  try {
+    const set = {};
+    if (thankYou !== undefined) set.autoThankYouMessage = thankYou;
+    if (reviewRequest !== undefined) set.autoReviewRequestMessage = reviewRequest;
+    const User = require('../models/schemas/User');
+    await User.updateOne({ _id: req.userId }, { $set: set });
+    const user = await User.findById(req.userId).select('autoThankYouMessage autoReviewRequestMessage').lean();
+    res.json({ success: true, thankYou: !!user.autoThankYouMessage, reviewRequest: !!user.autoReviewRequestMessage });
+  } catch (err) {
+    console.error('auto message settings error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not save these settings.' });
+  }
+});
+
+/**
  * GET /api/orders/sync-status?accountId=...
  * How the background order sync is going: { status: 'running' | 'done' | 'error', result?: { syncedCount, ordersFromEbay,
  * errors }, error? }, or job null when none was started lately. Must stay above GET /:id.
@@ -334,6 +368,24 @@ router.put('/:id/tracking', requireAuth, async (req, res) => {
   }
 
   const updated = await setTracking(req.userId, req.params.id, converted.trackingNumber, converted.shippingCarrierCode);
+
+  // Auto "it shipped, please leave a review" eBay buyer message: only the first time THIS order gets a tracking
+  // number (any carrier - not tied to 17TRACK's own delivery confirmation), only once, only when the seller switched
+  // it on. Fire-and-forget: the seller's "tracking saved" response should not wait on an eBay Message API round trip.
+  const justShipped = updated && !order.tracking_number && !!converted.trackingNumber;
+  if (justShipped) {
+    require('../services/autoBuyerMessageService').maybeSendReviewRequestMessage({
+      userId: req.userId,
+      orderId: updated.id,
+      ebayAccountId: updated.ebay_account_id,
+      buyerUsername: updated.buyer_username,
+      itemId: updated.legacy_item_id,
+      itemTitle: updated.item_title,
+      buyerFullName: updated.shipping_address && updated.shipping_address.fullName,
+      justShipped: true,
+      alreadySent: !!updated.review_message_at,
+    }).catch((err) => console.warn('[auto-message] review-request trigger failed:', err.message));
+  }
 
   // A buyer-facing code for elmstool.com/track/<code> - never the real tracking number or carrier, so it never
   // says which supplier the order came from. Not fatal: the order is already saved above either way.

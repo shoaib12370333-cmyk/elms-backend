@@ -72,6 +72,10 @@ const orderSchema = new mongoose.Schema(
     deliveryDate: { type: Date, default: null },     // the DELIVERY date the seller gave in "Mark as ordered": when the parcel from the supplier arrives (noon UTC); null = not given
     ebayNoteAt: { type: Date, default: null },       // when "ELMS: ordered ..." was written in the eBay note of this order (null = it is not there)
     ebayNoteError: { type: String, default: null },  // why the eBay note could not be written / removed the last time (null = no problem)
+    thankYouMessageAt: { type: Date, default: null },   // when the auto "thanks for your order" eBay buyer message was sent (services/autoBuyerMessageService.js); null = not sent yet
+    thankYouMessageError: { type: String, default: null }, // why it could not be sent the last time it was tried (null = no problem)
+    reviewMessageAt: { type: Date, default: null },   // when the auto "it shipped, please review us" eBay buyer message was sent; null = not sent yet
+    reviewMessageError: { type: String, default: null }, // why it could not be sent the last time it was tried (null = no problem)
     netProfit: { type: Number, default: null },      // an older version of the Net Profit sheet had the seller type the net profit; kept, and shown until the two figures below are typed
     sheetAmazonPrice: { type: Number, default: null }, // Net Profit sheet: what the order cost on Amazon, typed by the seller (the whole order line); null = not typed
     orderEarning: { type: Number, default: null },   // Net Profit sheet: what eBay pays out for the order ("Order earnings" in Seller Hub), typed by the seller; null = not typed
