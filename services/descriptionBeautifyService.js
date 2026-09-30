@@ -38,16 +38,107 @@ function renderVideo(videoUrl) {
   return `<div style="text-align:center;padding:10px 0;"><a href="${escapeAttr(videoUrl)}" target="_blank" rel="noopener noreferrer">&#9654; Watch the product video</a></div>`;
 }
 
-/** Best-effort textual "is this block probably in the AI's raw answer" checks for the 'ai' kind blocks that have a
- * recognizable instructed heading or markup - content wording varies, so this only catches a block the AI dropped
- * outright, not one it reworded. 'intro' and 'trust_badges' have no instructed heading, so they are never checked. */
-const AI_BLOCK_PRESENT = {
-  bullets: (html) => /key features/i.test(html) || /<li[\s>]/i.test(html),
-  specs: (html) => /specifications/i.test(html) || /<table[\s>]/i.test(html),
-  shipping: (html) => /shipping/i.test(html),
-  returns: (html) => /returns/i.test(html),
-  faq: (html) => /\bfaq\b/i.test(html) || /frequently asked/i.test(html),
+/** True when `phraseSource` appears wrapped in something that reads as a heading (<h1>-<h6>, <b> or <strong>) -
+ * never a plain substring search across the whole answer. A bare, common word from one block's heading (shipping,
+ * returns, specifications...) is very likely to show up by coincidence inside a DIFFERENT block's own prose (a FAQ
+ * answer mentioning "how long does shipping take", a bullet mentioning "full specifications included") even when
+ * that block's real section was dropped outright - a plain html.includes(word) check would wrongly call it
+ * "present" in exactly that case, which is the one thing this whole check exists to catch. */
+function headingPhrasePresent(html, phraseSource) {
+  return new RegExp(`<(?:h[1-6]|b|strong)[^>]*>\\s*(?:<[^>]+>\\s*)*(?:${phraseSource})`, 'i').test(html);
+}
+
+// The exact, multi-word heading phrase each block was actually instructed to use (AI_BLOCK_INSTRUCTIONS above) -
+// distinctive enough that it is very unlikely to appear by coincidence in a different section's own sentence.
+const HEADING_PHRASE_SOURCE = {
+  bullets: '\\bkey features\\b',
+  specs: '\\bspecifications\\b',
+  shipping: 'shipping\\s*(?:&amp;|&|and)\\s*delivery', // &amp; first: the AI may write a literal & or the HTML-escaped entity
+  returns: 'returns?\\s*(?:&amp;|&|and)\\s*warranty',
+  faq: '\\bfaq\\b|frequently asked',
 };
+
+/** For the two blocks the AI is told to give real markup (a <ul> of bullets, a <table> of specs) as well as a
+ * heading: true when there is one with enough children whose NEAREST preceding heading is this block's own (or no
+ * heading precedes it at all) - so a bullet list written under "FAQ", or a table written under "Returns &
+ * Warranty", is never mistaken for the Key Features / Specifications block just because a <ul> or <table> exists
+ * somewhere in the answer. */
+function structuralBlockPresent(html, tagName, childTag, minChildren, ownKey) {
+  const blockRe = new RegExp(`<${tagName}[^>]*>[\\s\\S]*?<\\/${tagName}>`, 'gi');
+  let m;
+  while ((m = blockRe.exec(html))) {
+    const count = (m[0].match(new RegExp(`<${childTag}[\\s>]`, 'gi')) || []).length;
+    if (count < minChildren) continue;
+    const before = html.slice(0, m.index);
+    let nearestKey = null;
+    let nearestAt = -1;
+    for (const [key, src] of Object.entries(HEADING_PHRASE_SOURCE)) {
+      const re = new RegExp(`<(?:h[1-6]|b|strong)[^>]*>\\s*(?:<[^>]+>\\s*)*(?:${src})`, 'gi');
+      let last = -1;
+      let mm;
+      while ((mm = re.exec(before))) last = mm.index;
+      if (last > nearestAt) { nearestAt = last; nearestKey = key; }
+    }
+    if (nearestKey === null || nearestKey === ownKey) return true;
+  }
+  return false;
+}
+
+/** Best-effort textual "is this block probably in the AI's raw answer" checks for the 'ai' kind blocks that have a
+ * recognizable instructed heading - content wording varies, so this only catches a block the AI dropped outright,
+ * not one it reworded. 'intro' and 'trust_badges' have no instructed heading, so they cannot be checked this way -
+ * see headinglessSlotText below for how those two are checked instead. */
+const AI_BLOCK_PRESENT = {
+  bullets: (html) => headingPhrasePresent(html, HEADING_PHRASE_SOURCE.bullets) || structuralBlockPresent(html, 'ul', 'li', 2, 'bullets'),
+  // The prompt asks for a <table>, but the AI occasionally writes a real specifications list as a <ul> instead (under
+  // a heading this heuristic doesn't recognize, e.g. "Product Details") - accepting either markup, still resolved by
+  // its nearest heading (see structuralBlockPresent), trades a little precision for fewer false "left out" warnings
+  // on specs that really are there.
+  specs: (html) => headingPhrasePresent(html, HEADING_PHRASE_SOURCE.specs) || structuralBlockPresent(html, 'table', 'tr', 1, 'specs') || structuralBlockPresent(html, 'ul', 'li', 2, 'specs'),
+  shipping: (html) => headingPhrasePresent(html, HEADING_PHRASE_SOURCE.shipping),
+  returns: (html) => headingPhrasePresent(html, HEADING_PHRASE_SOURCE.returns),
+  faq: (html) => headingPhrasePresent(html, HEADING_PHRASE_SOURCE.faq),
+};
+
+const MIN_HEADINGLESS_TEXT = 40; // roughly "a short sentence" - short of that, there is nothing there worth calling a paragraph
+// trust_badges has no fixed wording of its own (unlike a heading phrase), so presence also asks for a plausible
+// reassurance word - without this, any stray sentence in its slot (including one that is really the neighbouring
+// intro's) would count.
+const TRUST_KEYWORDS = /secure checkout|buyer protection|money[- ]back|satisfaction guarantee|trusted seller|encrypted|verified seller|safe (?:and|&|&amp;) secure|\bguarantee/i;
+
+/** Where each block in `template.blocks` most likely starts in `rawHtml`, in the same order: the index of its own
+ * heading phrase for a headed 'ai' block, the index of its placeholder token for a data block, or null for a
+ * headingless 'ai' block (intro, trust_badges) - those are resolved against their neighbours' positions instead,
+ * by headinglessSlotText below. */
+function blockAnchors(rawHtml, template) {
+  return template.blocks.map((key) => {
+    if (DATA_BLOCK_KEYS.has(key)) {
+      const at = rawHtml.indexOf(PLACEHOLDER[key]);
+      return { key, at: at === -1 ? null : at };
+    }
+    if (HEADING_PHRASE_SOURCE[key]) {
+      const m = new RegExp(`<(?:h[1-6]|b|strong)[^>]*>\\s*(?:<[^>]+>\\s*)*(?:${HEADING_PHRASE_SOURCE[key]})`, 'i').exec(rawHtml);
+      return { key, at: m ? m.index : null };
+    }
+    return { key, at: null };
+  });
+}
+
+/** The plain text (HTML tags and data-block placeholders stripped) between the nearest marker before `index` and
+ * the nearest marker after it, in template order - the best available stand-in for "this headingless block's own
+ * content" when the block itself has no heading or markup to look for. Two headingless blocks sitting right next to
+ * each other (only the 'bold' style pairs intro with trust_badges) cannot be told apart this way: the same text is
+ * offered to both, so a genuinely dropped trust_badges right after a real intro is not caught - a known gap, not a
+ * silent assumption of correctness. */
+function headinglessSlotText(rawHtml, anchors, index) {
+  let from = 0;
+  for (let i = index - 1; i >= 0; i -= 1) { if (anchors[i].at != null) { from = anchors[i].at; break; } }
+  let to = rawHtml.length;
+  for (let i = index + 1; i < anchors.length; i += 1) { if (anchors[i].at != null) { to = anchors[i].at; break; } }
+  if (to <= from) return '';
+  return Object.values(PLACEHOLDER).reduce((acc, p) => acc.split(p).join(' '), rawHtml.slice(from, to))
+    .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 /** Best-effort check that every block the prompt instructed actually shows up in the AI's raw answer, so a block
  * the AI silently dropped - skipped an instructed 'ai' section, or paraphrased away a literal data-block placeholder
@@ -57,7 +148,9 @@ const AI_BLOCK_PRESENT = {
 function findMissingBlocks(rawHtml, template, hasSpecs) {
   const missingBlocks = [];
   const warnings = [];
-  for (const key of template.blocks) {
+  const anchors = blockAnchors(rawHtml, template);
+  for (let index = 0; index < template.blocks.length; index += 1) {
+    const key = template.blocks[index];
     const def = AVAILABLE_BLOCKS.find((b) => b.key === key);
     if (!def) continue;
     if (DATA_BLOCK_KEYS.has(key)) {
@@ -68,8 +161,16 @@ function findMissingBlocks(rawHtml, template, hasSpecs) {
       continue;
     }
     if (key === 'specs' && !hasSpecs) continue; // the AI is told to skip this block entirely when there are no specs to write
-    const isPresent = AI_BLOCK_PRESENT[key];
-    if (isPresent && !isPresent(rawHtml)) {
+    let present;
+    if (key === 'intro') present = headinglessSlotText(rawHtml, anchors, index).length >= MIN_HEADINGLESS_TEXT;
+    else if (key === 'trust_badges') {
+      const text = headinglessSlotText(rawHtml, anchors, index);
+      present = text.length >= MIN_HEADINGLESS_TEXT && TRUST_KEYWORDS.test(text);
+    } else {
+      const isPresent = AI_BLOCK_PRESENT[key];
+      present = !isPresent || isPresent(rawHtml); // a block with no recognizable check of its own is never flagged
+    }
+    if (!present) {
       missingBlocks.push(key);
       warnings.push(`"${def.label}" doesn't seem to be in the AI's answer and may have been left out. Try beautifying again.`);
     }
