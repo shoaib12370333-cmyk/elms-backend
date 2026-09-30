@@ -231,6 +231,9 @@ app.use('/api/seed-admin', seedAdminRoute);
 // above is separate since it needs raw body parsing)
 app.use('/api/payments', paymentsRoute);
 
+// Buy Listings: tiers, checkout, purchase history (paid through the same CashTap webhook mounted above)
+app.use('/api/listing-packs', require('./routes/listingPacks'));
+
 // eBay Marketplace Account Deletion notification endpoint (required by
 // eBay's Developer Program - see routes/ebayAccountDeletion.js for the
 // challenge-response verification and notification handling)
