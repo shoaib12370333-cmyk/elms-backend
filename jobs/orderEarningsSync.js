@@ -4,6 +4,7 @@ const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const { listOrdersNeedingEarnings, setOrderEarningsBulk } = require('../models/ordersModel');
 const { fetchSaleTransactionsForOrder, netEarningFromTransactions } = require('../services/ebayFinancesService');
 const { acquireLock } = require('../services/jobLockService');
+const { isUnrecoverableEbayAuthError } = require('../services/ebayAuthErrorService');
 
 // Tried from the moment an order is PAID - no fixed wait. eBay does not always have a settled Finances
 // transaction for a brand-new sale yet; when it doesn't, netEarningFromTransactions returns null and the order is
@@ -26,15 +27,12 @@ function splitProportionally(totalAmount, lines) {
   return withPrice.map((l) => ({ id: String(l._id), orderEarning: totalAmount * (Number(l.salePrice) / sum) }));
 }
 
-/** A seller who hasn't reconnected eBay since sell.finances was added fails every call the same way - stop after the
- * first such failure for this account instead of repeating the same warning once per pending order. Real eBay Finances
- * calls observed in production return this as an "invalid_scope"-worded message, not consistently as an HTTP 401/403
- * (confirmed 2026-09-29 against real seller accounts), so the message itself is checked too, not just statusCode. */
-function looksLikeMissingScope(err) {
-  if (err.statusCode === 401 || err.statusCode === 403) return true;
-  const msg = String(err.message || '').toLowerCase();
-  return msg.includes('scope') && (msg.includes('invalid') || msg.includes('exceed') || msg.includes('malformed'));
-}
+// A seller who hasn't reconnected eBay since sell.finances was added, or whose refresh token has gone dead/been
+// revoked, fails every call the same way - stop after the first such failure for this account instead of repeating
+// the same warning once per pending order (a real production account was seen hitting eBay's token endpoint once
+// per pending order, every 5 minutes, indefinitely, because this used to only match the "invalid scope" wording -
+// confirmed 2026-09-30; now shared with jobs/orderSync.js via services/ebayAuthErrorService.js).
+const looksLikeMissingScope = isUnrecoverableEbayAuthError;
 
 async function syncOneAccount(account) {
   const refreshToken = await getEbayAccountRefreshToken(account.userId.toString(), account._id.toString());

@@ -116,7 +116,7 @@ async function completeSupplierOrderPlacement(userId, supplierOrderId, { amazonO
       const account = await getEbayAccountById(userId, updated.ebay_account_id);
       const refreshToken = await getEbayAccountRefreshToken(userId, updated.ebay_account_id);
       if (account && refreshToken) {
-        await writeAmazonOrderNote(refreshToken, account.marketplace_id || 'EBAY_US', {
+        await writeAmazonOrderNote(refreshToken, account.marketplaceId || 'EBAY_US', {
           orderId: updated.ebay_order_id,
           itemId: updated.legacy_item_id,
           amazonOrderId,
