@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const cashtap = require('../services/cashtapService');
-const { grantForSession } = require('../services/cashtapPaymentService');
+const { grantForSession, grantForListingPackSession } = require('../services/cashtapPaymentService');
 
 /**
  * POST /api/payments/cashtap-webhook
@@ -40,8 +40,10 @@ router.post('/', async (req, res) => {
         if (err.statusCode === 404) return res.status(200).json({ received: true, ignored: 'unknown session' });
         throw err; // temporary: let CashTap retry
       }
-      const result = await grantForSession(remote);
-      console.log('cashtap webhook: session ' + session.id + ' -> ' + (result.granted ? 'plan given' : result.duplicate ? 'already given' : 'not given (' + (result.reason || result.status) + ')'));
+      // A listing-pack session (Buy Listings) is told apart by its own metadata key, never by shape-guessing the session.
+      const isListingPack = remote && remote.metadata && remote.metadata.elms_kind === 'listing_pack';
+      const result = isListingPack ? await grantForListingPackSession(remote) : await grantForSession(remote);
+      console.log('cashtap webhook: session ' + session.id + ' -> ' + (isListingPack ? (result.granted ? result.pushed + ' listings pushed' : result.duplicate ? 'already pushed' : 'not pushed (' + (result.reason || result.status) + ')') : (result.granted ? 'plan given' : result.duplicate ? 'already given' : 'not given (' + (result.reason || result.status) + ')')));
     } else if (event.type === 'checkout.session.failed' && session) {
       try {
         await require('../services/emailService').sendAdminAlert({

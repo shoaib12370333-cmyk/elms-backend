@@ -132,5 +132,9 @@ listingSchema.index({ status: 1, publishStartedAt: 1 }); // the publish queue lo
 listingSchema.index({ userId: 1, ebayAccountId: 1, cjProductId: 1, cjVariantId: 1 }, { sparse: true });
 // Same duplicate check for AliExpress (findAliexpressListingInStore), sparse for the same reason.
 listingSchema.index({ userId: 1, ebayAccountId: 1, aliexpressProductId: 1, aliexpressSkuId: 1 }, { sparse: true });
+// services/listingCloneService.js candidatePool: the platform-wide "recent, already-categorized Amazon listings" pool that
+// the admin's push-listings tool and the paid Buy Listings tab clone from - scans across every user, not one, so it needs
+// its own index rather than riding on the per-user ones above.
+listingSchema.index({ sourcePlatform: 1, categoryId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Listing', listingSchema);

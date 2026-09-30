@@ -131,4 +131,82 @@ async function confirmSession(sessionId, userId) {
   return grantForSession(session, { expectUserId: userId });
 }
 
-module.exports = { activeProvider, startCheckout, grantForSession, confirmSession, UNDERPAY_TOLERANCE };
+/**
+ * Buying a "Buy Listings" pack. CashTap only, same as the custom plan and yearly plans - there is no Paddle price to sell
+ * this through. Kept apart from startCheckout/grantForSession above (its own metadata key, elms_kind) so a webhook or
+ * return-page check can tell a listing-pack session from a plan session at a glance, and a bug in one never touches the other.
+ */
+async function startListingPackCheckout({ user, tier }) {
+  const session = await cashtap.createSession({
+    amount: tier.priceUsd,
+    lineItems: [{
+      name: tier.name,
+      description: tier.listingCount.toLocaleString('en-US') + ' ready-to-list drafts',
+      quantity: 1,
+      unit_amount: tier.priceUsd,
+    }],
+    customerEmail: user.email || undefined,
+    successUrl: frontendUrl() + '/?payment=cashtap&kind=listing_pack',
+    cancelUrl: frontendUrl() + '/?payment=cancelled',
+    metadata: {
+      elms_kind: 'listing_pack',
+      elms_user_id: String(user.id),
+      elms_tier_id: String(tier.id),
+    },
+  });
+  assertCashtapUrl(session.url);
+  return { sessionId: session.id, url: session.url };
+}
+
+/** @param {object} session the session as returned by CashTap's API (never trust a webhook body for this) */
+async function grantForListingPackSession(session, { expectUserId } = {}) {
+  const { getTierById } = require('../models/listingPackTiersModel');
+  if (!session || session.status !== 'completed') return { status: session ? session.status : 'unknown', granted: false };
+
+  const meta = session.metadata || {};
+  const userId = meta.elms_user_id;
+  const tierId = meta.elms_tier_id;
+  if (!userId || !tierId) {
+    await alertAdmin('CashTap listing-pack payment without an ELMS user', ['Session: ' + session.id, 'Amount: $' + session.amount, 'The payment has no elms_user_id / elms_tier_id, so nothing was pushed. Please check it by hand.']);
+    return { status: 'completed', granted: false, reason: 'no_user' };
+  }
+  if (expectUserId && String(expectUserId) !== String(userId)) return { status: 'completed', granted: false, reason: 'not_yours' };
+
+  const tier = await getTierById(tierId);
+  if (!tier) {
+    await alertAdmin('CashTap payment for a deleted listing-pack tier', ['Session: ' + session.id, 'User id: ' + userId, 'Tier id: ' + tierId, 'Amount: $' + session.amount, 'The tier no longer exists, so nothing was pushed.']);
+    return { status: 'completed', granted: false, reason: 'no_tier' };
+  }
+  if (Math.abs(Number(session.amount) - Number(tier.priceUsd)) > 0.01) {
+    await alertAdmin('CashTap listing-pack payment with an unexpected amount', ['Session: ' + session.id, 'Tier: ' + tier.name + ' ($' + tier.priceUsd + ')', 'Session amount: $' + session.amount, 'Nothing was pushed. Please check it by hand.']);
+    return { status: 'completed', granted: false, reason: 'amount_mismatch' };
+  }
+  const received = session.amount_received == null ? Number(session.amount) : Number(session.amount_received);
+  if (received < Number(session.amount) * (1 - UNDERPAY_TOLERANCE)) {
+    await alertAdmin('CashTap listing-pack payment came in short', ['Session: ' + session.id, 'User id: ' + userId, 'Tier: ' + tier.name + ' ($' + tier.priceUsd + ')', 'Received: $' + received + ' of $' + session.amount, 'More than ' + UNDERPAY_TOLERANCE * 100 + '% short, so nothing was pushed. Decide with the customer / CashTap support and push it by hand if it is fine.']);
+    return { status: 'completed', granted: false, reason: 'underpaid' };
+  }
+
+  const { grantOnce } = require('./listingPackGrantService');
+  const done = await grantOnce({ userId, tier, transactionId: session.id });
+  if (done.status === 'missing') return { status: 'completed', granted: false, reason: 'user_missing' };
+  if (done.status === 'already') return { status: 'completed', granted: false, duplicate: true };
+  return { status: 'completed', granted: true, pushed: done.pushed, requested: done.requested, tierName: tier.name };
+}
+
+/** Return-page check: fetch the session from CashTap, and push the listings if it is paid (idempotent). */
+async function confirmListingPackSession(sessionId, userId) {
+  const session = await cashtap.getSession(sessionId);
+  return grantForListingPackSession(session, { expectUserId: userId });
+}
+
+module.exports = {
+  activeProvider,
+  startCheckout,
+  grantForSession,
+  confirmSession,
+  startListingPackCheckout,
+  grantForListingPackSession,
+  confirmListingPackSession,
+  UNDERPAY_TOLERANCE,
+};
