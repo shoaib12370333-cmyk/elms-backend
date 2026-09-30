@@ -16,6 +16,8 @@ const { createPlan, updatePlan, deletePlan, listAllPlans } = require('../models/
 const { listingStatusBreakdown } = require('../models/listingsModel');
 const { ordersSummary, netProfitSummary } = require('../models/ordersModel');
 const { enrichUsers } = require('../services/adminUserStatsService');
+const { createTier, updateTier, deleteTier, listAllTiers } = require('../models/listingPackTiersModel');
+const { pushRandomListings } = require('../services/listingCloneService');
 const {
   getSettings,
   updateWelcomeBonusSettings,
@@ -202,6 +204,34 @@ router.put('/users/:id/max-ebay-accounts', async (req, res) => {
 });
 
 /**
+ * POST /api/admin/users/:id/push-listings
+ * Body: { count: number }
+ *
+ * Pushes `count` random, ready-to-list drafts (services/listingCloneService.js) straight into this user's Drafts - cloned
+ * from other sellers' already-categorized listings platform-wide, no Easyparser/Canopy call, no credit charged. The free,
+ * admin-only counterpart to the paid "Buy Listings" tab (routes/listingPacks.js), which pushes the same way after a payment.
+ */
+router.post('/users/:id/push-listings', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[a-f0-9]{24}$/i.test(id)) return res.status(404).json({ success: false, error: 'User not found.' });
+  const user = await User.findById(id, { _id: 1 }).lean();
+  if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
+
+  const count = Number(req.body?.count);
+  if (!Number.isInteger(count) || count < 1 || count > 5000) {
+    return res.status(400).json({ success: false, error: 'A whole number of listings from 1 to 5,000 is required.' });
+  }
+
+  try {
+    const result = await pushRandomListings({ targetUserId: id, count });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('admin push-listings error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not push listings right now.' });
+  }
+});
+
+/**
  * GET /api/admin/tickets
  * Returns every support ticket, across all users.
  */
@@ -305,6 +335,51 @@ router.delete('/plans/:id', async (req, res) => {
   if (!deleted) {
     return res.status(404).json({ success: false, error: 'Plan not found.' });
   }
+  res.json({ success: true });
+});
+
+/**
+ * GET /api/admin/listing-pack-tiers
+ * Every "Buy Listings" tier (active and inactive), for the Admin Panel's Plans tab.
+ */
+router.get('/listing-pack-tiers', async (req, res) => {
+  const tiers = await listAllTiers();
+  res.json({ success: true, tiers });
+});
+
+/**
+ * POST /api/admin/listing-pack-tiers
+ * Body: { name, priceUsd, listingCount }
+ * Creates a new "Buy Listings" tier (e.g. "$10 = 1,000 listings"). CashTap only - there is no Paddle price for this.
+ */
+router.post('/listing-pack-tiers', async (req, res) => {
+  const { name, priceUsd, listingCount } = req.body;
+  if (!name || !(Number(priceUsd) > 0) || !(Number(listingCount) > 0)) {
+    return res.status(400).json({ success: false, error: 'A name, a price and a number of listings are required.' });
+  }
+  if (Number(priceUsd) < 0.5) return res.status(400).json({ success: false, error: 'The price must be at least $0.50.' });
+
+  const tier = await createTier({ name, priceUsd: Number(priceUsd), listingCount: Math.round(Number(listingCount)) });
+  res.json({ success: true, tier });
+});
+
+/**
+ * PUT /api/admin/listing-pack-tiers/:id
+ * Body: { name?, priceUsd?, listingCount?, active? }
+ */
+router.put('/listing-pack-tiers/:id', async (req, res) => {
+  const tier = await updateTier(req.params.id, req.body);
+  if (!tier) return res.status(404).json({ success: false, error: 'Tier not found.' });
+  res.json({ success: true, tier });
+});
+
+/**
+ * DELETE /api/admin/listing-pack-tiers/:id
+ * Permanently removes a tier. Does not affect buyers who already bought it.
+ */
+router.delete('/listing-pack-tiers/:id', async (req, res) => {
+  const deleted = await deleteTier(req.params.id);
+  if (!deleted) return res.status(404).json({ success: false, error: 'Tier not found.' });
   res.json({ success: true });
 });
 
