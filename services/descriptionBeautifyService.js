@@ -10,6 +10,7 @@ const DATA_BLOCK_KEYS = new Set(['gallery', 'store_banner', 'size_chart', 'video
 const PLACEHOLDER = { gallery: '{{ELMS_GALLERY}}', store_banner: '{{ELMS_STORE_BANNER}}', size_chart: '{{ELMS_SIZE_CHART}}', video: '{{ELMS_VIDEO}}', custom_html: '{{ELMS_CUSTOM_HTML}}' };
 
 const AI_BLOCK_INSTRUCTIONS = {
+  intro: 'A short (2 to 4 sentence) persuasive paragraph selling the product, written from the facts given - no heading needed. This is the main sales pitch a shopper reads first, not a repeat of the bullets/specs below.',
   bullets: 'A "Key Features" heading, then a <ul> of 3 to 8 <li> bullets, one real feature per line, from the facts given.',
   specs: 'A "Specifications" heading, then an HTML <table> of the given specifications as name/value rows. Leave this whole block out if no specifications were given.',
   shipping: 'A short "Shipping & Delivery" heading with one or two generic sentences - never invent delivery dates, countries or carriers.',
