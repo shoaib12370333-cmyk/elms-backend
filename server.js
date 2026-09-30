@@ -157,9 +157,6 @@ app.use('/api/ebay-accounts', ebayAccountsRoute);
 // Per-user eBay business policy settings
 app.use('/api/seller-settings', sellerSettingsRoute);
 
-// Auto Order: the browser extension that places Amazon orders on the seller's behalf
-app.use('/api/auto-order', require('./routes/autoOrder'));
-
 // Amazon product fetch route
 app.use('/api/fetch-product', fetchProductRoute);
 
