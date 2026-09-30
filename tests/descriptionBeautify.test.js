@@ -122,6 +122,70 @@ const reset = () => { for (const k of Object.keys(saved)) delete saved[k]; spent
   aiAnswer = 'hi';
   await assert.rejects(() => beautifyEbayDescription({ title: 'X', template: {} }), /empty description/);
 
+  // silent-failure guard 3: a bare, common word from another block's heading (shipping, returns) showing up by
+  // coincidence in a DIFFERENT section's own prose - here, the FAQ answers - must never be mistaken for that
+  // block's own heading. The real "Shipping & Delivery" / "Returns & Warranty" sections were never written at all.
+  aiAnswer = '<h2>Key Features</h2><ul><li>Black mesh</li></ul><h2>FAQ</h2><p>Q: How long does shipping take? A: It varies.</p><p>Q: What is your returns process? A: Contact us.</p>';
+  out = await beautifyEbayDescription({
+    title: 'Acme Shoes', bulletPoints: ['Black mesh'],
+    template: { templateId: 'minimal', blocks: ['bullets', 'shipping', 'returns', 'faq'], branding: {} },
+  });
+  assert.deepStrictEqual(out.missingBlocks, ['shipping', 'returns'], 'the bare words inside the FAQ answers are not the real Shipping & Delivery / Returns & Warranty sections, which the AI never wrote');
+  assert.strictEqual(out.warnings.length, 2);
+
+  // silent-failure guard 4: a <ul><li> list belongs to whichever heading it actually sits under - a FAQ formatted
+  // as a bullet list is not the Key Features block the AI dropped, even though a <li> exists somewhere in the answer.
+  aiAnswer = '<h2>FAQ</h2><ul><li>Q: Is this waterproof? A: Yes.</li><li>Q: What size? A: One size.</li></ul>';
+  out = await beautifyEbayDescription({
+    title: 'Acme Shoes', bulletPoints: ['Black mesh'],
+    template: { templateId: 'minimal', blocks: ['bullets', 'faq'], branding: {} },
+  });
+  assert.deepStrictEqual(out.missingBlocks, ['bullets'], 'the FAQ\'s own bullet list is not the Key Features bullets - those were never written');
+
+  // a genuine bullets list written first, with no heading text at all, is still accepted (nothing else claims it)
+  aiAnswer = '<ul><li>Black mesh</li><li>Lightweight</li></ul>';
+  out = await beautifyEbayDescription({
+    title: 'Acme Shoes', bulletPoints: ['Black mesh'],
+    template: { templateId: 'minimal', blocks: ['bullets'], branding: {} },
+  });
+  assert.deepStrictEqual(out.missingBlocks, [], 'a real bullet list with no other section claiming it is still recognized, heading text or not');
+
+  // a genuine specs table right after its own heading is recognized even without the bare word "specifications"
+  // appearing anywhere else, and a table that actually belongs to a different section is not mistaken for it
+  aiAnswer = '<h2>Specifications</h2><table><tr><td>Color</td><td>Black</td></tr></table><h2>Returns &amp; Warranty</h2><table><tr><td>Window</td><td>30 days</td></tr></table>';
+  out = await beautifyEbayDescription({
+    title: 'Acme Shoes', specifications: [{ name: 'Color', value: 'Black' }],
+    template: { templateId: 'minimal', blocks: ['specs', 'returns'], branding: {} },
+  });
+  assert.deepStrictEqual(out.missingBlocks, [], 'the specs table under its own heading, and the returns table under its own heading, are each correctly attributed');
+
+  // 'intro' has no heading of its own (it is the sales pitch a shopper reads first, the prompt tells the AI not to
+  // title it) - it is checked by whether there is a real paragraph of text before the next block's own heading.
+  aiAnswer = '<h2>Key Features</h2><ul><li>Black mesh</li></ul>';
+  out = await beautifyEbayDescription({ title: 'Acme Shoes', bulletPoints: ['Black mesh'], template: { templateId: 'minimal', blocks: ['intro', 'bullets'], branding: {} } });
+  assert.deepStrictEqual(out.missingBlocks, ['intro'], 'the AI jumped straight to Key Features - the sales-pitch paragraph it was told to write first was never there');
+
+  aiAnswer = '<p>This shoe combines comfort and durability for everyday runners who want reliable support.</p><h2>Key Features</h2><ul><li>Black mesh</li></ul>';
+  out = await beautifyEbayDescription({ title: 'Acme Shoes', bulletPoints: ['Black mesh'], template: { templateId: 'minimal', blocks: ['intro', 'bullets'], branding: {} } });
+  assert.deepStrictEqual(out.missingBlocks, [], 'a real sales-pitch paragraph before Key Features is recognized even with no heading of its own');
+
+  // 'trust_badges' has no heading either, and no fixed wording - presence also asks for a plausible reassurance
+  // word, so an unrelated sentence in its slot is not mistaken for it.
+  aiAnswer = '<h2>Key Features</h2><ul><li>Black mesh</li></ul>';
+  out = await beautifyEbayDescription({ title: 'Acme Shoes', bulletPoints: ['Black mesh'], template: { templateId: 'bold', blocks: ['trust_badges', 'bullets'], branding: {} } });
+  assert.deepStrictEqual(out.missingBlocks, ['trust_badges'], 'the AI never wrote a reassurance line at all');
+
+  aiAnswer = '<p>Buyer Protection included with every secure checkout.</p><h2>Key Features</h2><ul><li>Black mesh</li></ul>';
+  out = await beautifyEbayDescription({ title: 'Acme Shoes', bulletPoints: ['Black mesh'], template: { templateId: 'bold', blocks: ['trust_badges', 'bullets'], branding: {} } });
+  assert.deepStrictEqual(out.missingBlocks, [], 'a real reassurance line before Key Features is recognized');
+
+  // specs written as a <ul> under a heading this heuristic doesn't recognize ("Product Details" instead of
+  // "Specifications") is still real content, not a dropped block - a <ul>/<li> list is accepted for specs too,
+  // same as the <table> the prompt actually asked for.
+  aiAnswer = '<h2>Product Details</h2><ul><li>Color: Black</li><li>Weight: 1kg</li></ul>';
+  out = await beautifyEbayDescription({ title: 'Acme Shoes', specifications: [{ name: 'Color', value: 'Black' }], template: { templateId: 'minimal', blocks: ['specs'], branding: {} } });
+  assert.deepStrictEqual(out.missingBlocks, [], 'real specs under an unrecognized heading are still recognized by their own list markup');
+
   // ---------- beautifyDraftDescription: charges credits, saves, mirrors fillDraftAspects ----------
   aiAnswer = '<h2>Key Features</h2><ul><li>Black mesh</li></ul>{{ELMS_GALLERY}}';
   ACTION_COSTS.AI_DESCRIPTION_BEAUTIFY = 2;
@@ -186,6 +250,8 @@ const reset = () => { for (const k of Object.keys(saved)) delete saved[k]; spent
   assert.strictEqual(res.body.filled, 3);
   assert.strictEqual(res.body.creditsUsed, 6);
   assert.strictEqual(res.body.cost, 2);
+  assert.deepStrictEqual(res.body.results[0].missingBlocks, ['intro', 'shipping'], 'the seller\'s default template also asks for a sales-pitch intro and Shipping & Delivery, neither of which the AI answer wrote - the flags must reach the HTTP response, not just the service\'s own return value');
+  assert.strictEqual(res.body.results[0].warnings.length, 2);
   res = await call(listingsRouter, 'post', '/bulk-description-beautify', { ids: [] });
   assert.strictEqual(res.statusCode, 400);
   res = await call(listingsRouter, 'post', '/bulk-description-beautify', { ids: Array.from({ length: 16 }, (_, i) => 'x' + i) });
@@ -206,6 +272,8 @@ const reset = () => { for (const k of Object.keys(saved)) delete saved[k]; spent
   assert.strictEqual(res.body.success, true);
   assert.ok(res.body.text.includes('Key Features'));
   assert.strictEqual(res.body.creditsUsed, 3);
+  assert.deepStrictEqual(res.body.missingBlocks, ['intro', 'shipping'], 'missingBlocks/warnings must reach this route\'s own HTTP response too, not just the service function');
+  assert.strictEqual(res.body.warnings.length, 2);
   assert.ok(!saved.a, 'the single-item route never saves to a listing itself - the editor decides');
   aiEnabled = false;
   res = await call(listOnEbayRouter, 'post', '/beautify-description', { title: 'Acme Shoes' });
