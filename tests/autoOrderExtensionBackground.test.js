@@ -216,5 +216,19 @@ const order = (over = {}) => ({ id: 'so1', ebay_order_id: 'E1', amazon_url: 'htt
   assert.ok(env.fetches.find((c) => c.url.endsWith('/stuck1/failed')), 'the stale job is failed');
   assert.deepStrictEqual(env.tabs.removed, [555]);
 
+  // ---------- a stale job that was sitting on an unapproved Manual mode step names that as the reason (not a
+  // generic "did not finish in time") - this is the common, confusing real case: the seller expects background
+  // automation but Manual mode from an earlier test run is still on, so nothing ever gets a "Do it" ----------
+  env = boot({
+    stored: { active: { orderId: 'stuck2', tabId: 556, order: order({ id: 'stuck2' }), settings: {}, step: 'checkout', manualMode: true, pendingStep: { name: 'click_place_order', description: 'Click "Place your order" - this spends real money.' }, startedAt: Date.now() - 20 * 60 * 1000 } },
+    respond: (c) => (c.url.endsWith('/extension-settings') ? SETTINGS : c.url.endsWith('/auto-order/next') ? { status: 200, body: { success: true, order: null } } : { status: 200, body: { success: true } }),
+  });
+  await env.listeners.alarm({ name: 'auto-order-poll' });
+  const manualStaleCall = env.fetches.find((c) => c.url.endsWith('/stuck2/failed'));
+  assert.ok(manualStaleCall);
+  assert.match(manualStaleCall.body.reason, /Manual mode is on/);
+  assert.match(manualStaleCall.body.reason, /Click "Place your order"/);
+  assert.deepStrictEqual(env.tabs.removed, [556]);
+
   console.log('auto-order extension background tests passed');
 })().catch((err) => { console.error(err); process.exit(1); });

@@ -58,6 +58,7 @@ function renderState(state) {
   $('onToggle').checked = !!state.autoOrderOn;
   $('pauseToggle').checked = !!state.paused;
   $('manualToggle').checked = !!state.manualMode;
+  $('manualWarn').classList.toggle('hidden', !state.manualMode);
   const jobBox = $('jobBox');
   const stopBtn = $('stopNow');
   const pendingBox = $('pendingBox');

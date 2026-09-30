@@ -138,7 +138,13 @@ async function tick() {
 
   if (active) {
     if (Date.now() - (active.startedAt || 0) < STALE_JOB_MS) return; // still working on it
-    await failJob(active, 'The browser automation did not finish in time.');
+    // A generic "did not finish in time" is a mystery to the seller when the real cause is Manual mode sitting on
+    // an unapproved step the whole time (the tab just closes, with no visible reason) - name that specific, common
+    // cause plainly, since it is fixed by a setting, not a bug report.
+    const reason = active.manualMode && active.pendingStep
+      ? `Manual mode is on and "${active.pendingStep.description}" was never approved within ${Math.round(STALE_JOB_MS / 60000)} minutes. Turn Manual mode off in the popup for unattended background use, or approve steps faster.`
+      : 'The browser automation did not finish in time.';
+    await failJob(active, reason);
   }
 
   let next;
