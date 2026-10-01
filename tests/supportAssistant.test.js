@@ -15,7 +15,10 @@ let aiFails = false;
 let lastPrompt = '';
 
 const cacheSet = (rel, exports) => { const p = require.resolve(rel); require(p); Object.assign(require.cache[p].exports, exports); };
-cacheSet('../services/aiService', { askClaude: async ({ prompt }) => { aiCalls += 1; lastPrompt = prompt; if (aiFails) throw new Error('AI down'); return { text: aiAnswer }; } });
+cacheSet('../services/aiService', { askClaude: async ({ prompt }) => { aiCalls += 1; lastPrompt = prompt; if (aiFails) throw new Error('AI down'); return { text: aiAnswer, model: 'claude-test', inputTokens: 40, outputTokens: 15 }; } });
+const usageRows = [];
+const aiUsagePath = require.resolve('../models/schemas/AiUsage');
+require.cache[aiUsagePath] = { id: aiUsagePath, filename: aiUsagePath, loaded: true, exports: { create: (row) => { usageRows.push(row); return Promise.resolve(); } } };
 const stPath = require.resolve('../models/schemas/SupportTicket');
 require.cache[stPath] = { id: stPath, filename: stPath, loaded: true, exports: {
   findById: (id) => ({ lean: async () => (tickets[id] ? JSON.parse(JSON.stringify(tickets[id])) : null) }),
@@ -35,7 +38,7 @@ cacheSet('../services/emailService', {
 const { handleCustomerMessage, requestAdmin, SERIOUS, parseDecision, MAX_AI_REPLIES } = require('../services/supportAssistantService');
 
 const newTicket = (id, over = {}) => { tickets[id] = { _id: id, subject: 'Question', message: 'How do I publish?', source: 'app', userId: 'u1', thread: [], escalated: false, ref: 'abcd1234', ...over }; return id; };
-const reset = () => { sentToCustomer.length = 0; adminAlerts.length = 0; aiCalls = 0; aiFails = false; };
+const reset = () => { sentToCustomer.length = 0; adminAlerts.length = 0; aiCalls = 0; aiFails = false; usageRows.length = 0; };
 const fromList = (id) => tickets[id].thread.map((t) => t.from);
 
 (async () => {
@@ -55,14 +58,17 @@ const fromList = (id) => tickets[id].thread.map((t) => t.from);
   assert.deepStrictEqual(fromList('t1'), ['ai']);
   assert.strictEqual(sentToCustomer.length, 0);
   assert.strictEqual(adminAlerts.length, 0);
+  assert.strictEqual(usageRows.length, 1, 'the AI call is logged (free, but visible in the Admin Panel\'s usage/spend view)');
+  assert.deepStrictEqual(usageRows[0], { userId: 'u1', kind: 'support', ok: true, credits: 0, model: 'claude-test', inputTokens: 40, outputTokens: 15 });
 
-  // 1b. a mail conversation is answered by mail
+  // 1b. a mail conversation is answered by mail; a guest ticket (no ELMS account) logs nothing - there is no userId to log it against
   reset();
   out = await handleCustomerMessage(newTicket('t1b', { source: 'email', fromEmail: 'x@example.com', userId: undefined }));
   assert.strictEqual(out.action, 'answered');
   assert.strictEqual(sentToCustomer.length, 1);
   assert.strictEqual(sentToCustomer[0].to, 'x@example.com');
   assert.strictEqual(sentToCustomer[0].viaEmail, true);
+  assert.strictEqual(usageRows.length, 0, 'no ELMS account on this ticket: nothing to log it against');
 
   // 1c. a follow-up in the chat: the AI sees the conversation, and system notes are not part of it
   reset(); aiAnswer = '{"action":"answer","urgent":false,"reason":"","reply":"Press Retry."}';
@@ -112,6 +118,7 @@ const fromList = (id) => tickets[id].thread.map((t) => t.from);
   assert.strictEqual(out.action, 'escalated');
   assert.strictEqual(tickets.t4.aiStatus, 'error');
   assert.strictEqual(adminAlerts.length, 1);
+  assert.deepStrictEqual(usageRows[0], { userId: 'u1', kind: 'support', ok: false, credits: 0 }, 'a failed call is logged too (ok: false), so it is visible how often the assistant fails');
   reset(); aiAnswer = 'I cannot help';
   out = await handleCustomerMessage(newTicket('t4b'));
   assert.strictEqual(out.action, 'escalated');
