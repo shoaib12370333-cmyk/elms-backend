@@ -11,7 +11,8 @@ const {
   setStockCheckInterval,
   setMaxEbayAccounts,
 } = require('../models/usersModel');
-const { listAllTickets, resolveTicket } = require('../models/supportTicketsModel');
+const { listAllTickets, listTicketsForUser, resolveTicket } = require('../models/supportTicketsModel');
+const { listEbayAccounts } = require('../models/ebayAccountsModel');
 const { createPlan, updatePlan, deletePlan, listAllPlans } = require('../models/plansModel');
 const { listingStatusBreakdown } = require('../models/listingsModel');
 const { ordersSummary, netProfitSummary } = require('../models/ordersModel');
@@ -96,9 +97,11 @@ router.get('/users', async (req, res) => {
  * GET /api/admin/user-lookup?email=someone@example.com
  *
  * One user's whole picture by email, for the Admin Panel's own "User Lookup" page: their profile (plan, credits, eBay
- * stores, suspended/banned), how many listings they have in each status, and their orders + net profit (per currency -
- * a euro and a dollar are never added together), reusing the exact same aggregates the seller's own Orders / Net Profit
- * pages use, so the numbers here always agree with what the seller sees.
+ * stores, suspended/banned, online/last-login), how many listings they have in each status, their orders + net profit
+ * (per currency - a euro and a dollar are never added together), reusing the exact same aggregates the seller's own
+ * Orders / Net Profit pages use so the numbers here always agree with what the seller sees - plus a per-store
+ * breakdown (every eBay account ever connected, even a disconnected one: label, eBay username, marketplace, connected
+ * since, its own listings/orders/revenue/profit) and their support ticket count.
  */
 router.get('/user-lookup', async (req, res) => {
   const email = String(req.query.email || '').trim().toLowerCase();
@@ -108,14 +111,33 @@ router.get('/user-lookup', async (req, res) => {
   if (!found) return res.status(404).json({ success: false, error: 'No ELMS user has that email.' });
   const userId = String(found._id);
 
-  const [{ users: enriched }, listings, orders, netProfit] = await Promise.all([
+  const [{ users: enriched }, listings, orders, netProfit, accounts, tickets] = await Promise.all([
     enrichUsers([await getUserById(userId)]),
     listingStatusBreakdown(userId),
     ordersSummary(userId),
     netProfitSummary(userId),
+    listEbayAccounts(userId),
+    listTicketsForUser(userId),
   ]);
 
-  res.json({ success: true, user: enriched[0], listings, orders, netProfit });
+  const stores = await Promise.all(accounts.map(async (acc) => {
+    const [storeListings, storeOrders] = await Promise.all([
+      listingStatusBreakdown(userId, acc.id),
+      ordersSummary(userId, acc.id),
+    ]);
+    const liveListings = (storeListings.published || 0) + (storeListings.paused || 0) + (storeListings.sold || 0);
+    return { ...acc, listings: storeListings, liveListings, orders: storeOrders };
+  }));
+
+  res.json({
+    success: true,
+    user: enriched[0],
+    listings,
+    orders,
+    netProfit,
+    stores,
+    tickets: { total: tickets.length, open: tickets.filter((t) => t.status !== 'resolved').length },
+  });
 });
 
 /** One CSV cell: quoted when it holds a comma, a quote or a line break. */

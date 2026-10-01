@@ -25,5 +25,11 @@ const { listingStatusBreakdown } = require('../models/listingsModel');
   const empty = await listingStatusBreakdown('b'.repeat(24));
   assert.deepStrictEqual(empty, { draft: 0, publishing: 0, scheduled: 0, published: 0, paused: 0, error: 0, ended: 0, sold: 0 });
 
+  // ---- an optional accountId narrows the $match to one connected eBay store (the Admin Lookup per-store breakdown) ----
+  const ACC = 'c'.repeat(24);
+  await listingStatusBreakdown(ID, ACC);
+  assert.strictEqual(String(lastMatch.userId), ID);
+  assert.strictEqual(String(lastMatch.ebayAccountId), ACC, 'the account id is also cast to a real ObjectId');
+
   console.log('listingStatusBreakdown: all good');
 })().catch((err) => { console.error(err); process.exit(1); });
