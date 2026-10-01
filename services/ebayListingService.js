@@ -665,6 +665,40 @@ async function publishExistingOffer(refreshToken, offerId) {
   );
 }
 
+/** eBay's own "try again, it will probably work" answers - a system hiccup, not a real problem with the listing (same codes publishQueueService.js's isTransientEbayError checks, duplicated here to avoid a circular require with that file). */
+function isTransientEbayError(err) {
+  const id = Number(err?.ebayErrors?.[0]?.errorId);
+  return id === 25001 || [502, 503, 504].includes(Number(err?.statusCode));
+}
+
+/**
+ * Brings an offer back to PUBLISHED before a quantity/price write is trusted to have really reached the live
+ * listing (updateOfferQuantity/updateOfferPrice) - a no-op when it is already published. ebayRequest only retries
+ * GETs on its own; this POST got none at all until this fix, so a plain transient hiccup on eBay's side (not a real
+ * problem with the listing's data) used to fail the whole restock/price-change permanently and look identical to a
+ * genuine "unresolved issue" - logged here (searchable by "[republish]") so the difference is visible in Render's
+ * logs instead of only ever reaching the seller as a generic error message.
+ */
+async function republishIfNeeded(refreshToken, offerId, offerStatus, context) {
+  if (!offerStatus || offerStatus === 'PUBLISHED') return;
+  console.log(`[republish] offer ${offerId} is ${offerStatus} (${context}) - republishing`);
+  try {
+    await publishExistingOffer(refreshToken, offerId);
+    console.log(`[republish] offer ${offerId} republished`);
+  } catch (err) {
+    if (!isTransientEbayError(err)) { console.warn(`[republish] offer ${offerId} failed: ${err.message}`); throw err; }
+    console.warn(`[republish] offer ${offerId} hit a transient eBay error (${err.message}), retrying once`);
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      await publishExistingOffer(refreshToken, offerId);
+      console.log(`[republish] offer ${offerId} republished on retry`);
+    } catch (err2) {
+      console.warn(`[republish] offer ${offerId} failed on retry: ${err2.message}`);
+      throw err2;
+    }
+  }
+}
+
 async function deleteOffer(refreshToken, offerId) {
   if (!offerId) throw new Error('An offerId is required to delete an eBay offer.');
   return ebayRequest(
@@ -982,7 +1016,7 @@ async function updateOfferPrice(
   if (offer?.sku) {
     if (offer.status && offer.status !== 'PUBLISHED') {
       try {
-        await publishExistingOffer(refreshToken, offerId);
+        await republishIfNeeded(refreshToken, offerId, offer.status, 'price update');
       } catch (err) {
         throw new Error(`eBay accepted the new price, but this offer is ${offer.status.toLowerCase()} and could not be republished: ${err.message}`);
       }
@@ -1095,7 +1129,7 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
   if (offer?.sku) {
     if (offer.status && offer.status !== 'PUBLISHED') {
       try {
-        await publishExistingOffer(refreshToken, offerId);
+        await republishIfNeeded(refreshToken, offerId, offer.status, 'quantity update');
       } catch (err) {
         throw new Error(`eBay accepted the new quantity, but this offer is ${offer.status.toLowerCase()} and could not be republished: ${err.message}`);
       }

@@ -294,4 +294,67 @@ async function beautifyManyDraftDescriptions(userId, ids, template, { concurrenc
   return results;
 }
 
-module.exports = { beautifyEbayDescription, beautifyDraftDescription, beautifyManyDraftDescriptions };
+const LIVE_BEAUTIFY_STATUSES = ['published', 'sold']; // still live on eBay; a sold-out listing is "live in principle" (models/schemas/Listing.js) - same definition liveBulkVeroService.js uses
+
+/**
+ * The Live Listings bulk bar's "Beautify descriptions with AI": the same beautifyEbayDescription restructuring
+ * fillDraftAspects' sibling (beautifyDraftDescription) uses, but the new HTML is pushed to eBay with
+ * reviseActiveListing first, and ELMS's own copy is only saved once eBay has taken it.
+ * @returns {Promise<{ id, title, status: 'done'|'skipped'|'failed'|'no_credits', creditsUsed }>}
+ */
+async function beautifyLiveDescription(userId, id, template, d) {
+  const skip = (title, reason) => ({ id, title, status: 'skipped', reason, creditsUsed: 0 });
+  const listing = await d.getListingById(userId, id);
+  if (!listing) return skip(null, 'Not found.');
+  const title = listing.title || listing.sku || id;
+  if (!LIVE_BEAUTIFY_STATUSES.includes(String(listing.status || '').toLowerCase())) return skip(title, 'Only a live (or sold-out) listing can be beautified here. A draft is beautified with Beautify descriptions with AI on the Drafts page.');
+  if (!listing.ebay_offer_id || !listing.sku) return skip(title, 'This listing has no eBay offer to change.');
+  if (!listing.ebay_account_id) return skip(title, 'No eBay account is connected to this listing.');
+
+  const refreshToken = await Promise.resolve(d.getRefreshToken(userId, listing.ebay_account_id)).catch(() => null);
+  if (!refreshToken) return skip(title, 'The connected eBay account is missing its connection. Reconnect it in Settings.');
+
+  const cost = Number(ACTION_COSTS.AI_DESCRIPTION_BEAUTIFY || 0);
+  try {
+    const out = await withCredits(userId, cost, async () => {
+      const ai = await beautifyEbayDescription({
+        title: listing.title, description: listing.description, bulletPoints: listing.bullet_points,
+        specifications: listing.specifications, images: listing.images, template,
+      });
+      await d.reviseActiveListing(refreshToken, {
+        offerId: listing.ebay_offer_id, sku: listing.sku, title: listing.title, description: ai.text,
+        sellPrice: listing.sell_price, priceCurrency: listing.currency, quantity: listing.quantity, categoryId: listing.category_id,
+      });
+      await d.updateListing(userId, id, { description: ai.text, markDraftCustomized: false });
+      return ai;
+    });
+    AiUsage.create({ userId, kind: 'beautify', ok: true, credits: cost, model: out.usage?.model, inputTokens: out.usage?.inputTokens, outputTokens: out.usage?.outputTokens }).catch(() => {});
+    return { id, title, status: 'done', creditsUsed: cost, missingBlocks: out.missingBlocks, warnings: out.warnings };
+  } catch (err) {
+    if (err.outOfCredits) return { id, title, status: 'no_credits', reason: err.message, creditsUsed: 0 };
+    AiUsage.create({ userId, kind: 'beautify', ok: false, credits: 0 }).catch(() => {});
+    console.error('[bulk-live-description-beautify]', id, err.message);
+    return { id, title, status: 'failed', reason: err.message || 'The AI request failed, or eBay did not accept the change.', creditsUsed: 0 };
+  }
+}
+
+/** Beautifies several live listings' descriptions, a few at a time - same worker-pool/no_credits short-circuit as beautifyManyDraftDescriptions. */
+async function beautifyManyLiveDescriptions(userId, ids, template, d, { concurrency = 3 } = {}) {
+  const results = new Array(ids.length);
+  let next = 0;
+  let broke = false;
+  const worker = async () => {
+    while (next < ids.length) {
+      const at = next++;
+      if (broke) { results[at] = { id: ids[at], title: null, status: 'no_credits', reason: 'Not enough credits.', creditsUsed: 0 }; continue; }
+      try { results[at] = await beautifyLiveDescription(userId, ids[at], template, d); } catch (err) {
+        results[at] = { id: ids[at], title: null, status: 'failed', reason: err.message || 'Could not beautify.', creditsUsed: 0 };
+      }
+      if (results[at].status === 'no_credits') broke = true;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, ids.length)) }, worker));
+  return results;
+}
+
+module.exports = { beautifyEbayDescription, beautifyDraftDescription, beautifyManyDraftDescriptions, beautifyLiveDescription, beautifyManyLiveDescriptions };

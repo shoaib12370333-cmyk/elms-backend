@@ -304,8 +304,11 @@ async function getListingById(userId, id) {
  * command, only one of the two requests can win the race.
  */
 async function claimListingForPublishing(userId, id) {
+  // 'ended' is here too: "Relist" (Live Listings' Ended tab) claims an ended listing the same way a draft is
+  // claimed - publishListing is safe to call again for a listing that already has a sku/offer (it finds and
+  // reuses the existing inventory item/offer rather than erroring on a duplicate, see publishQueueService.js).
   const doc = await Listing.findOneAndUpdate(
-    { _id: id, userId, status: { $in: ['draft', 'error'] } },
+    { _id: id, userId, status: { $in: ['draft', 'error', 'ended'] } },
     { $set: { status: 'publishing', publishStartedAt: new Date(), publishLeaseUntil: null, publishCompletedAt: null, errorMessage: null }, $inc: { publishAttempts: 1 } },
     { new: true }
   );
