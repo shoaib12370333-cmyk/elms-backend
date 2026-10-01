@@ -41,6 +41,21 @@ const { fetchSaleTransactionsForOrder, netEarningFromTransactions } = require('.
     return true;
   });
 
+  // ---------- when a signing key is configured, the 3 digital-signature headers are merged in too (services/
+  // ebayDigitalSignatureService.js), signed over the bare path - never the query string ----------
+  delete require.cache[require.resolve('../services/ebayDigitalSignatureService')];
+  stub('../services/ebayDigitalSignatureService', {
+    signedHeaders: async ({ method, path, host }) => ({ 'x-ebay-signature-key': 'JWE', 'signature-input': `sig1=("x-ebay-signature-key" "@method" "@path" "@authority");created=1 (${method} ${path} ${host})`, signature: 'sig1=:abc:' }),
+  });
+  stub('axios', { get: (url, config) => { calls.push({ url, config }); return Promise.resolve({ status: 200, data: { transactions: [] } }); } });
+  delete require.cache[require.resolve('../services/ebayFinancesService')];
+  const svc3 = require('../services/ebayFinancesService');
+  await svc3.fetchSaleTransactionsForOrder('RT1', '12-34567-89012', 'EBAY_GB');
+  const last = calls[calls.length - 1];
+  assert.strictEqual(last.config.headers['x-ebay-signature-key'], 'JWE');
+  assert.strictEqual(last.config.headers.signature, 'sig1=:abc:');
+  assert.ok(last.config.headers['signature-input'].includes('(GET /sell/finances/v1/transaction apiz.ebay.com)'), 'signed with the bare path - no query string - and the real host');
+
   // ---------- netEarningFromTransactions: sums SALE transactions, ignores anything else, null when there is nothing yet ----------
   assert.deepStrictEqual(netEarningFromTransactions([]), null);
   assert.deepStrictEqual(netEarningFromTransactions(null), null);
