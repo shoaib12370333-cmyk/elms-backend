@@ -335,4 +335,4 @@ async function bulkEdit({ userId, ids, changes, dryRun = false }, deps) {
   return { results, summary: { changed: count('changed'), unchanged: count('unchanged'), skipped: count('skipped') } };
 }
 
-module.exports = { bulkEdit, validateChanges, planPrice, mapPool, applyTitleOp, applyTags, titleCase, LIMITS };
+module.exports = { bulkEdit, validateChanges, planDraft, planPrice, mapPool, applyTitleOp, applyTags, titleCase, LIMITS };

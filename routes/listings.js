@@ -70,6 +70,7 @@ const {
 } = require('../models/usersModel');
 const { bulkEdit, validateChanges, mapPool } = require('../services/bulkEditService');
 const { bulkLivePrice } = require('../services/liveBulkPriceService');
+const { bulkLiveEdit } = require('../services/liveBulkEditService');
 const { bulkRestock } = require('../services/liveBulkRestockService');
 const { bulkVeroCleanLive } = require('../services/liveBulkVeroService');
 
@@ -867,6 +868,33 @@ router.post('/bulk-live-price', requireAuth, async (req, res) => {
   } catch (err) {
     if (!err.statusCode || err.statusCode >= 500) console.error('bulk live price error:', err.message);
     res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not change the prices. Please try again.' });
+  }
+});
+
+const MAX_LIVE_EDIT_BATCH = 20; // each changed listing is a full revise (several real eBay round trips) - same modest batch size as Restock/Remove VeRO words
+
+/**
+ * POST /api/listings/bulk-live-edit   { ids: [...], changes: { title?, brand?, quantity?, tags?, stockMonitoring?,
+ *                                        priceMonitoring?, location?, policies? } }
+ *
+ * The Live listings page's "Bulk edit": everything bulkEditService.validateChanges accepts EXCEPT price (that is
+ * "Change price", its own eBay bulk endpoint - services/liveBulkPriceService.js) for many LIVE listings at once.
+ * eBay-facing fields (title, brand, quantity, location, policies) are pushed to eBay first, one revise per listing;
+ * ELMS-only fields (tags, note, monitoring) are just saved. A listing that cannot take a change is skipped with the
+ * reason; nothing is half-done.
+ */
+router.post('/bulk-live-edit', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_LIVE_EDIT_BATCH) return res.status(400).json({ success: false, error: `Please change at most ${MAX_LIVE_EDIT_BATCH} listings at a time.` });
+  if (req.body?.changes?.price !== undefined) return res.status(400).json({ success: false, error: 'Price is changed with Change price on this page, not here.' });
+  try {
+    const changes = await validateChanges(req.body?.changes, { userId: req.userId, getSavedRule: (userId) => getPricingRule(userId) });
+    const out = await bulkLiveEdit({ userId: req.userId, ids, changes }, { getListingsByIds, updateListing, getImportById, getRefreshToken: getEbayAccountRefreshToken });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    if (!err.statusCode || err.statusCode >= 500) console.error('bulk live edit error:', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not edit the listings. Please try again.' });
   }
 });
 
