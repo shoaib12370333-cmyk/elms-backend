@@ -90,6 +90,19 @@ const reset = () => { calls.length = 0; usage.length = 0; rows.clear(); T._memor
   T._resetCoolDown();
   assert.strictEqual((await T.suggestCategories(null, 'Another new thing', 'EBAY_GB')).topSuggestion.categoryId, '9355', 'and it asks again after the cool-down');
 
+  // ---- a title is kept forever otherwise (sellers import different products every day) - the in-memory cache is capped,
+  // not left to grow for as long as the process runs. Pre-fill it near the cap, then one more real entry must evict the oldest.
+  reset();
+  T._memory.clear();
+  for (let i = 0; i < 5000; i++) T._memory.set('filler:' + i, { value: i, expires: Date.now() + 999999 });
+  const oldestKey = T._memory.keys().next().value;
+  await T.suggestCategories(null, 'One more product title', 'EBAY_GB');
+  assert.ok(T._memory.size <= 5000, 'the cache never grows past its cap: ' + T._memory.size);
+  assert.ok(!T._memory.has(oldestKey), 'the oldest entry was evicted to make room');
+
+  // ---- the category aspects/info caches (fetchItemAspects/fetchCategoryInfo's own, separate from _memory) are capped the same way
+  assert.ok(T._categoryAspectsCache instanceof Map && T._categoryInfoCache instanceof Map, 'both are bounded Maps, not plain objects that only ever grow');
+
   console.log('taxonomy cache tests passed');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -50,6 +50,9 @@ const VERIFY_KEY = {
 };
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// A stale entry is only ever found "expired" on read (and overwritten), never actually removed - capped so a long-running
+// process doesn't keep one entry per distinct city/state/country combination forever.
+const CACHE_MAX = 2000;
 const cache = new Map();
 
 // Nominatim's usage policy allows at most one request per second.
@@ -226,6 +229,7 @@ async function generatePostalCode(country, city, state) {
     source: result.source,
   };
   cache.set(cacheKey, { at: Date.now(), value });
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
   return value;
 }
 
@@ -274,4 +278,4 @@ async function resolveLocation(country, postalCode) {
   return out;
 }
 
-module.exports = { generatePostalCode, cleanPostalCode, normalizeCountry, resolveLocation, COUNTRIES };
+module.exports = { generatePostalCode, cleanPostalCode, normalizeCountry, resolveLocation, COUNTRIES, _cache: cache };
