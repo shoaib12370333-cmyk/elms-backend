@@ -105,6 +105,7 @@ async function saveProductAsDraft(userId, product, markupPercent, sourceUrl, req
       ebayAccountId: activeEbayAccount?.id || null,
       marketplaceId: activeEbayAccount?.marketplaceId || null,
       sku,
+      amazonUrl: sourceUrl,
       title: product.title,
       mainImage: (product.images && product.images[0]) || null,
       images: product.images || [], // the whole gallery: the editor lists the draft's own pictures, and only one (the main one) was kept before

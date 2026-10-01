@@ -205,12 +205,15 @@ router.put('/users/:id/max-ebay-accounts', async (req, res) => {
 
 /**
  * POST /api/admin/users/:id/push-listings
- * Body: { count: number }
+ * Body: { count: number, sourceCountry?: string }
  *
  * Pushes `count` random, ready-to-list drafts (services/listingCloneService.js) straight into this user's Drafts - cloned
  * from other sellers' already-categorized listings platform-wide, no Easyparser/Canopy call, no credit charged. The free,
  * admin-only counterpart to the paid "Buy Listings" tab (routes/listingPacks.js), which pushes the same way after a payment.
+ * sourceCountry narrows the pool to products scraped from one Amazon site (e.g. "UK"), so a store set up for one
+ * country's buyers is never pushed another country's products; left out or blank = any site, as before.
  */
+const PUSH_SOURCE_COUNTRIES = ['UK', 'US', 'AU', 'CA', 'DE', 'FR', 'IT', 'ES'];
 router.post('/users/:id/push-listings', async (req, res) => {
   const id = String(req.params.id || '');
   if (!/^[a-f0-9]{24}$/i.test(id)) return res.status(404).json({ success: false, error: 'User not found.' });
@@ -221,9 +224,13 @@ router.post('/users/:id/push-listings', async (req, res) => {
   if (!Number.isInteger(count) || count < 1 || count > 5000) {
     return res.status(400).json({ success: false, error: 'A whole number of listings from 1 to 5,000 is required.' });
   }
+  const sourceCountry = String(req.body?.sourceCountry || '').trim().toUpperCase() || null;
+  if (sourceCountry && !PUSH_SOURCE_COUNTRIES.includes(sourceCountry)) {
+    return res.status(400).json({ success: false, error: 'Unknown source country.' });
+  }
 
   try {
-    const result = await pushRandomListings({ targetUserId: id, count });
+    const result = await pushRandomListings({ targetUserId: id, count, sourceCountry });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('admin push-listings error:', err.message);

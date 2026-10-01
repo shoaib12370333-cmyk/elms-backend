@@ -13,6 +13,7 @@ stub('models/schemas/Listing', {
   find: (query) => ({
     lean: async () => listings.filter((l) => {
       if (query.sourcePlatform !== undefined && l.sourcePlatform !== query.sourcePlatform) return false;
+      if (query.sourceCountry !== undefined && l.sourceCountry !== query.sourceCountry) return false;
       if (query.categoryId && query.categoryId.$ne === null && l.categoryId == null) return false;
       if (query.importId && query.importId.$ne === null && l.importId == null) return false;
       if (query.createdAt && query.createdAt.$gte && l.createdAt < query.createdAt.$gte) return false;
@@ -110,6 +111,7 @@ function baseListing(over) {
   assert.deepStrictEqual(createdImports[createdImports.length - 1].product.images, ['https://m.media-amazon.com/img1.jpg', 'https://m.media-amazon.com/img2.jpg'], 'images come from the raw Amazon CDN data, not a prior owner\'s locally re-hosted copies');
   assert.strictEqual(createdImports[createdImports.length - 1].userId, 'buyer1');
   assert.strictEqual(updatedImages[updatedImages.length - 1].images.length, 2);
+  assert.strictEqual(createdDrafts[createdDrafts.length - 1].amazonUrl, 'https://www.amazon.com/dp/B0AAAAAAAA', 'the clone\'s own draft is told the ORIGINAL Amazon URL, so it gets the right sourceCountry too, not just the right content');
 
   // ---- cloneOneListing: skipped when the target already has this ASIN in an active state ----
   existingByUserSku['buyer2:B0AAAAAAAA'] = { status: 'published' };
@@ -117,6 +119,16 @@ function baseListing(over) {
   result = await svc.cloneOneListing({ _id: 'l1', importId: 'i1', sku: 'B0AAAAAAAA' }, 'buyer2');
   assert.strictEqual(result, null, 'already listed for this buyer: nothing is cloned');
   assert.strictEqual(createdDrafts.length, draftsBefore, 'no draft was created');
+
+  // ---- candidatePool: sourceCountry narrows the pool to one Amazon site, so a UK-focused store is never pushed US products ----
+  listings = [
+    { _id: 'c1', ...baseListing({ sku: 'B0UK000001', importId: 'iu1', userId: 'sellerUK', sourceCountry: 'UK' }) },
+    { _id: 'c2', ...baseListing({ sku: 'B0US000001', importId: 'iu2', userId: 'sellerUS', sourceCountry: 'US' }) },
+  ];
+  const ukOnly = await svc.candidatePool({ sourceCountry: 'UK' });
+  assert.deepStrictEqual(ukOnly.map((r) => r.sku), ['B0UK000001'], 'only the UK-sourced listing comes back');
+  const anyCountry = await svc.candidatePool({});
+  assert.strictEqual(anyCountry.length, 2, 'no sourceCountry given: both sites, as before');
 
   // ---- pushRandomListings: pushes at most `count`, and never a SKU the target already owns (even via a different seller's listing) ----
   createdDrafts = []; createdImports = []; updatedImages = []; existingByUserSku = {};
@@ -135,6 +147,18 @@ function baseListing(over) {
   assert.strictEqual(pushed.poolSize, 2, 'p2 dropped (target already owns that ASIN via p4), p4 dropped (target\'s own listing)');
   assert.strictEqual(pushed.pushed, 2);
   assert.ok(createdDrafts.every((d) => d.sku !== 'B0P00000P2'), 'the already-owned ASIN is never pushed again');
+
+  // ---- pushRandomListings: sourceCountry reaches candidatePool, so a request for one Amazon site never pushes another's product ----
+  createdDrafts = []; existingByUserSku = {};
+  listings = [
+    { _id: 'q1', ...baseListing({ sku: 'B0Q0000UK1', importId: 'iq1', userId: 'sellerUK2', sourceCountry: 'UK' }) },
+    { _id: 'q2', ...baseListing({ sku: 'B0Q0000US1', importId: 'iq2', userId: 'sellerUS2', sourceCountry: 'US' }) },
+  ];
+  imports.iq1 = { amazonUrl: 'https://www.amazon.co.uk/dp/B0Q0000UK1', product: { asin: 'B0Q0000UK1', images: [] } };
+  imports.iq2 = { amazonUrl: 'https://www.amazon.com/dp/B0Q0000US1', product: { asin: 'B0Q0000US1', images: [] } };
+  const pushedUk = await svc.pushRandomListings({ targetUserId: 'target3', count: 5, sourceCountry: 'UK' });
+  assert.strictEqual(pushedUk.poolSize, 1, 'only the UK-sourced one is in the pool');
+  assert.strictEqual(createdDrafts[0].sku, 'B0Q0000UK1');
 
   // ---- pushRandomListings: count 0 / negative does nothing and never touches the database ----
   createdDrafts = [];
