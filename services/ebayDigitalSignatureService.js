@@ -22,6 +22,14 @@ function signingConfigured() {
   return !!(process.env.EBAY_SIGNING_KEY_JWE && process.env.EBAY_SIGNING_KEY_PRIVATE);
 }
 
+// Pasting the setup script's own printed "NAME=value" console line straight into a host's env var Value box - rather
+// than just the part after "=" - is an easy mistake to make, and doubles the variable's own name onto the front of
+// its value. Stripping a leading "EBAY_SIGNING_KEY_X=" (whichever var this is, whitespace/quotes either side) before
+// anything else makes that mistake a no-op instead of a confusing downstream decode failure.
+function stripOwnNamePrefix(raw, varName) {
+  return raw.trim().replace(/^['"]|['"]$/g, '').replace(new RegExp(`^${varName}\\s*=\\s*`), '');
+}
+
 // eBay's createSigningKey response gives privateKey as BARE base64 (confirmed 2026-10-02 against the docs' own
 // sample response and a real key: "MC4CAQAwBQYDK2VwB..." - the fixed PKCS8/Ed25519 DER prefix - with no
 // "-----BEGIN PRIVATE KEY-----" wrapper at all), not a PEM. On top of that, a pasted PEM (if one is ever provided
@@ -32,13 +40,17 @@ function signingConfigured() {
 // var - with or without existing BEGIN/END markers, wherever the newlines did or didn't end up - is robust to all
 // of this at once, instead of guessing which single shape a given value is in.
 function privateKeyPem() {
-  const raw = String(process.env.EBAY_SIGNING_KEY_PRIVATE || '').replace(/\\n/g, '\n');
+  const raw = stripOwnNamePrefix(String(process.env.EBAY_SIGNING_KEY_PRIVATE || '').replace(/\\n/g, '\n'), 'EBAY_SIGNING_KEY_PRIVATE');
   const match = raw.match(/-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----/);
   const label = match ? match[1] : 'PRIVATE KEY'; // eBay's own key is PKCS8, whose standard PEM label is "PRIVATE KEY"
   const body = match ? match[2] : raw;
   const base64 = body.replace(/\s+/g, '');
   const wrapped = base64.match(/.{1,64}/g) || [];
   return `-----BEGIN ${label}-----\n${wrapped.join('\n')}\n-----END ${label}-----\n`;
+}
+
+function signatureKeyJwe() {
+  return stripOwnNamePrefix(String(process.env.EBAY_SIGNING_KEY_JWE || ''), 'EBAY_SIGNING_KEY_JWE');
 }
 
 /**
@@ -57,7 +69,7 @@ async function signedHeaders({ method, path, host }) {
   };
   const headers = {};
   headers['signature-input'] = generateSignatureInput(headers, config);
-  headers['x-ebay-signature-key'] = process.env.EBAY_SIGNING_KEY_JWE;
+  headers['x-ebay-signature-key'] = signatureKeyJwe();
   headers['signature'] = generateSignature(headers, config);
   return headers;
 }
