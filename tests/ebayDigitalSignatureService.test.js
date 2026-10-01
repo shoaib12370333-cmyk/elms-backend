@@ -63,10 +63,14 @@ const { signedHeaders, signingConfigured } = require('../services/ebayDigitalSig
 
   // ---------- real-world mangled pastes (the exact "error:1E08010C:DECODER routines::unsupported" a user hit when
   // Render's env var box collapsed the key) - each must still produce a header whose signature verifies ----------
+  const bareBase64 = privateKey.replace(/-----BEGIN PRIVATE KEY-----|\n-----END PRIVATE KEY-----\n?/g, '').replace(/\n/g, '');
   const mangled = {
     'squished onto one line, no newline anywhere (BEGIN/body/END all glued together)': privateKey.replace(/\n/g, ''),
     'CRLF line endings': privateKey.replace(/\n/g, '\r\n'),
     'extra blank lines and leading/trailing whitespace': '  \n' + privateKey.replace(/\n/g, '\n\n') + '\n  ',
+    // eBay's createSigningKey actually returns privateKey this way - bare base64 DER, no PEM wrapper at all
+    // (confirmed 2026-10-02 against the docs' own sample and a real key: fixed PKCS8/Ed25519 prefix "MC4CAQAwBQYDK2VwB...").
+    'bare base64, no PEM wrapper at all (eBay\'s real response shape)': bareBase64,
   };
   for (const [label, value] of Object.entries(mangled)) {
     process.env.EBAY_SIGNING_KEY_PRIVATE = value;
