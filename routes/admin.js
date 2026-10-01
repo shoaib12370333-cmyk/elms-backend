@@ -630,6 +630,109 @@ router.put('/settings/limits', async (req, res) => {
   }
 });
 
+/**
+ * Admin Panel > Product Catalog: bulk-fetch Amazon products (Easyparser, in the background - see
+ * jobs/adminCatalogProcessor.js) into a shared catalog, taxonomy-tagged for one eBay marketplace, that any seller's
+ * Drafts can be pushed into later (free, models/productCatalogModel.js). Rows expire after Settings > Limits'
+ * catalogRetentionDays (read/written through the existing GET/PUT /settings/limits routes above).
+ */
+const CATALOG_MAX_LINES = 2500; // same order of magnitude as POST /api/fetch-product/bulk-job's own cap
+router.post('/product-catalog/fetch', async (req, res) => {
+  const { isValidAmazonUrl } = require('../services/validationService');
+  const { extractAsinFromUrl, detectCountryFromUrl } = require('../services/canopyAmazonService');
+  const { assertSupportedMarketplace, getMarketplaceConfig } = require('../config/ebayMarketplaces');
+  const { createAdminCatalogJob } = require('../models/adminCatalogJobsModel');
+
+  let marketplaceId;
+  try {
+    marketplaceId = assertSupportedMarketplace(req.body?.marketplaceId);
+  } catch (err) {
+    return res.status(400).json({ success: false, error: err.message });
+  }
+  const fallbackCountry = getMarketplaceConfig(marketplaceId)?.country || 'US';
+
+  const lines = Array.isArray(req.body?.amazonUrls) ? req.body.amazonUrls : [];
+  if (!lines.length) return res.status(400).json({ success: false, error: 'amazonUrls must be a non-empty array (one Amazon URL or ASIN per entry).' });
+  if (lines.length > CATALOG_MAX_LINES) return res.status(400).json({ success: false, error: `Please paste at most ${CATALOG_MAX_LINES} links/ASINs at a time.` });
+
+  const seen = new Set();
+  const items = [];
+  const skipped = [];
+  for (const raw of lines) {
+    const text = String(raw || '').trim();
+    if (!text) continue;
+    let amazonUrl = null;
+    let asin;
+    let country;
+    if (/^[A-Z0-9]{10}$/i.test(text)) {
+      asin = text.toUpperCase();
+      country = fallbackCountry;
+    } else {
+      if (!isValidAmazonUrl(text)) { skipped.push({ input: text, error: 'Not a valid Amazon product URL or 10-character ASIN.' }); continue; }
+      asin = extractAsinFromUrl(text);
+      if (!asin) { skipped.push({ input: text, error: 'Could not find an ASIN in that URL.' }); continue; }
+      amazonUrl = text;
+      country = detectCountryFromUrl(text);
+    }
+    const dedupeKey = country + ':' + asin;
+    if (seen.has(dedupeKey)) continue; // same product pasted twice - one item covers it
+    seen.add(dedupeKey);
+    items.push({ amazonUrl, asin, country, status: 'pending' });
+  }
+  if (!items.length) return res.status(400).json({ success: false, error: 'None of those lines look like a valid Amazon product URL or ASIN.', skipped });
+  if (!process.env.EASYPARSER_API_KEY) return res.status(503).json({ success: false, error: 'Bulk fetching is not configured on the server yet (EASYPARSER_API_KEY is missing).' });
+
+  const job = await createAdminCatalogJob(req.userId, { marketplaceId, items });
+  res.json({ success: true, jobId: job.id, total: job.total, skipped });
+});
+
+/** GET /api/admin/product-catalog/jobs/:id - progress of one fetch run. GET /api/admin/product-catalog/jobs - the most recent runs. */
+router.get('/product-catalog/jobs/:id', async (req, res) => {
+  const { getAdminCatalogJob } = require('../models/adminCatalogJobsModel');
+  const job = await getAdminCatalogJob(req.params.id);
+  if (!job) return res.status(404).json({ success: false, error: 'Job not found.' });
+  res.json({ success: true, job });
+});
+router.get('/product-catalog/jobs', async (req, res) => {
+  const { listAdminCatalogJobs } = require('../models/adminCatalogJobsModel');
+  res.json({ success: true, jobs: await listAdminCatalogJobs() });
+});
+
+/** GET /api/admin/product-catalog?page=&limit= - the catalog table, newest first. */
+router.get('/product-catalog', async (req, res) => {
+  const { listCatalogItems } = require('../models/productCatalogModel');
+  const out = await listCatalogItems({ page: req.query.page, limit: req.query.limit });
+  res.json({ success: true, ...out });
+});
+
+/** DELETE /api/admin/product-catalog/:id - removes one row early (it would otherwise just wait for expiry). */
+router.delete('/product-catalog/:id', async (req, res) => {
+  const { deleteCatalogItem } = require('../models/productCatalogModel');
+  const ok = await deleteCatalogItem(req.params.id);
+  if (!ok) return res.status(404).json({ success: false, error: 'Catalog item not found.' });
+  res.json({ success: true });
+});
+
+/**
+ * POST /api/admin/product-catalog/:id/push   Body: { email }
+ * Pushes one catalog row into that seller's Drafts (models/productCatalogModel.js pushCatalogItemToUserDrafts) -
+ * free, and the row is left in the catalog so it can be pushed to other sellers too, until it expires.
+ */
+router.post('/product-catalog/:id/push', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, error: 'Enter a valid email address.' });
+  const user = await User.findOne({ email }, { _id: 1 }).lean();
+  if (!user) return res.status(404).json({ success: false, error: 'No ELMS user has that email.' });
+
+  const { pushCatalogItemToUserDrafts } = require('../models/productCatalogModel');
+  try {
+    const result = await pushCatalogItemToUserDrafts(req.params.id, String(user._id));
+    res.json({ success: true, draft: result.draft, categoryCarried: result.categoryCarried });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not push this product to that seller\'s Drafts.' });
+  }
+});
+
 /** Announcements (bulk mail). Sent in small batches by jobs/announcementSender.js. */
 router.get('/announcements', async (req, res) => {
   const Announcement = require('../models/schemas/Announcement');

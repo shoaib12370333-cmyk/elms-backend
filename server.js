@@ -47,6 +47,8 @@ const { startSupportInbox } = require('./jobs/supportInbox');
 const { startBulkImportProcessor } = require('./jobs/bulkImportProcessor');
 const { startPlanExpiry } = require('./jobs/planExpiry');
 const { startPublishQueue, runPublishQueue } = require('./jobs/publishQueue');
+const { startAdminCatalogProcessor } = require('./jobs/adminCatalogProcessor');
+const { startCatalogExpiry } = require('./jobs/catalogExpiry');
 
 const app = express();
 app.set('trust proxy', require('./config/trustProxy').trustProxySetting()); // req.ip = the visitor, not Cloudflare / Render's proxy
@@ -292,6 +294,8 @@ app.listen(PORT, () => {
     startAnnouncementSender();
     startSupportInbox();
     startBulkImportProcessor();
+    startAdminCatalogProcessor();
+    startCatalogExpiry();
     startPublishQueue();
     runPublishQueue().catch((err) => console.error('[publish-queue] initial run failed:', err.message));
   });

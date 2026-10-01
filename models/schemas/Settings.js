@@ -59,6 +59,9 @@ const settingsSchema = new mongoose.Schema(
     // before importing that ASIN again spends a fresh provider call - a credit is still
     // charged either way (see routes/fetchProduct.js).
     productCacheDays: { type: Number, default: 7, min: 1, max: 90 },
+    // Admin Panel > Product Catalog: how many days a bulk-fetched product stays in the catalog
+    // before jobs/catalogExpiry.js deletes it (whether or not it was ever pushed to a seller).
+    catalogRetentionDays: { type: Number, default: 14, min: 1, max: 365 },
 
     // Referral programme (Admin -> Referrals). A friend who signs up with someone's code gets referralDiscountPercent off
     // their first referralDiscountUses purchase(s) (for referralDiscountDays days after signing up, 0 = no limit); the person
