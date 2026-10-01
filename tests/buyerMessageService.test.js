@@ -17,7 +17,7 @@ stub('services/ebayMessageService', {
   },
 });
 
-const { sendThankYouMessage, sendShippedReviewMessage, thankYouText, shippedReviewText } = require('../services/buyerMessageService');
+const { sendThankYouMessage, sendShippedReviewMessage, sendOrderedUpdateMessage, sendShippedUpdateMessage, thankYouText, shippedReviewText, orderedUpdateText, shippedUpdateText, fillTemplate } = require('../services/buyerMessageService');
 
 (async () => {
   // ---------- message text: buyer's first name only, item title woven in, never a phone/email/external link ----------
@@ -63,6 +63,45 @@ const { sendThankYouMessage, sendShippedReviewMessage, thankYouText, shippedRevi
   r = await sendThankYouMessage('rt-1', { buyerUsername: 'buyer1', itemId: '1' });
   assert.strictEqual(r.status, 'failed'); assert.match(r.message, /eBay says no/);
   r = await sendShippedReviewMessage('rt-1', { buyerUsername: 'buyer1', itemId: '1' });
+  assert.strictEqual(r.status, 'failed');
+  sendFails = false;
+
+  // ---------- the "ordered"/"shipped" update messages: same default-text shape, same no-contact-info rule ----------
+  assert.match(orderedUpdateText({ buyerName: 'Jane', itemTitle: 'Blue Mug' }), /^Hi Jane, quick update on your order of Blue Mug - we've placed it with our supplier/);
+  assert.match(orderedUpdateText({ buyerName: '', itemTitle: '' }), /^Hi there, quick update on your order - /, 'no saved name/item: a neutral greeting, never blank');
+  assert.match(shippedUpdateText({ buyerName: 'Sam', itemTitle: 'Red Hat' }), /^Hi Sam, good news - your order of Red Hat has shipped and is on its way to you!/);
+  assert.match(shippedUpdateText({ buyerName: 'Sam', itemTitle: '' }), /your order has shipped/, 'no item title: falls back to "order"');
+  assert.doesNotMatch(orderedUpdateText({ buyerName: 'X', itemTitle: 'Y' }), noContactInfo);
+  assert.doesNotMatch(shippedUpdateText({ buyerName: 'X', itemTitle: 'Y' }), noContactInfo);
+
+  // ---------- a custom template (the seller's own wording from Settings) wins over the built-in default, with {{buyer_name}}/{{product_name}} filled in ----------
+  assert.strictEqual(fillTemplate('Hi {{buyer_name}}, about {{product_name}}...', { buyerName: 'Jane Doe', itemTitle: 'Widget' }), 'Hi Jane, about Widget...');
+  assert.strictEqual(fillTemplate('Hi {{BUYER_NAME}}!', { buyerName: 'Sam' }), 'Hi Sam!', 'case-insensitive, matching the Messages page\'s own snippet variables');
+  assert.strictEqual(fillTemplate('No placeholders here.', { buyerName: 'Sam', itemTitle: 'X' }), 'No placeholders here.');
+  assert.strictEqual(fillTemplate('Hi {{buyer_name}}, re {{product_name}}', { buyerName: 'Sam', itemTitle: '' }), 'Hi Sam, re your item', 'no item title: a neutral fallback, never blank');
+  assert.strictEqual(orderedUpdateText({ buyerName: 'Jane', itemTitle: 'Widget', customTemplate: 'Custom: {{buyer_name}} / {{product_name}}' }), 'Custom: Jane / Widget');
+  assert.strictEqual(shippedUpdateText({ buyerName: 'Jane', itemTitle: 'Widget', customTemplate: 'Shipped custom for {{buyer_name}}' }), 'Shipped custom for Jane');
+  assert.match(orderedUpdateText({ buyerName: 'Jane', itemTitle: 'Widget', customTemplate: '' }), /quick update on your order/, 'an empty custom template falls back to the built-in default, not a blank message');
+
+  // ---------- sending: same skip/send/fail contract as the existing two, customTemplate passed straight through ----------
+  sendCalls.length = 0;
+  r = await sendOrderedUpdateMessage(null, { buyerUsername: 'buyer1' });
+  assert.strictEqual(r.status, 'skipped'); assert.strictEqual(sendCalls.length, 0);
+  r = await sendOrderedUpdateMessage('rt-1', { buyerUsername: 'buyer1', itemId: '110001', buyerName: 'Jane', itemTitle: 'Widget' });
+  assert.strictEqual(r.status, 'sent'); assert.match(sendCalls[0].body.content, /quick update on your order of Widget/);
+  sendCalls.length = 0;
+  r = await sendOrderedUpdateMessage('rt-1', { buyerUsername: 'buyer1', buyerName: 'Jane', customTemplate: 'Hi {{buyer_name}}, custom!' });
+  assert.strictEqual(sendCalls[0].body.content, 'Hi Jane, custom!');
+  sendCalls.length = 0;
+  r = await sendShippedUpdateMessage(null, { buyerUsername: 'buyer1' });
+  assert.strictEqual(r.status, 'skipped');
+  r = await sendShippedUpdateMessage('rt-2', { buyerUsername: 'buyer2', buyerName: 'Sam', itemTitle: 'Gadget' });
+  assert.strictEqual(r.status, 'sent'); assert.match(sendCalls[0].body.content, /your order of Gadget has shipped/);
+
+  sendFails = true;
+  r = await sendOrderedUpdateMessage('rt-1', { buyerUsername: 'buyer1' });
+  assert.strictEqual(r.status, 'failed');
+  r = await sendShippedUpdateMessage('rt-1', { buyerUsername: 'buyer1' });
   assert.strictEqual(r.status, 'failed');
 
   console.log('buyer message service tests passed');

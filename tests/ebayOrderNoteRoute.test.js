@@ -16,6 +16,8 @@ let token = 'rt-1';
 const query = (result) => { const q = { select: () => q, lean: async () => result }; return q; };
 let trackingResult = { id: 'o1', ebay_account_id: 'a1', buyer_username: 'buyer1', legacy_item_id: '110001', item_title: 'Widget', shipping_address: { fullName: 'Jane Doe' }, review_message_at: null };
 const reviewCalls = [];
+const orderedMessageCalls = [];
+const shippedMessageCalls = [];
 let markShippedResult = { id: 'o1', ebay_account_id: 'a1', buyer_username: 'buyer1', legacy_item_id: '110001', item_title: 'Widget', shipping_address: { fullName: 'Jane Doe' }, review_message_at: null };
 const markShippedCalls = [];
 const shipCalls = [];
@@ -51,12 +53,16 @@ const fakes = {
     updateOne: async (q, u) => {
       userWrites.push(u.$set);
       if ('ebayOrderNote' in u.$set) switchOn = u.$set.ebayOrderNote;
-      if ('autoThankYouMessage' in u.$set || 'autoReviewRequestMessage' in u.$set) { settingsWrites.push(u.$set); Object.assign(userSettings, u.$set); }
+      if (['autoThankYouMessage', 'autoReviewRequestMessage', 'autoOrderedMessage', 'orderedMessageText', 'autoShippedMessage', 'shippedMessageText'].some((k) => k in u.$set)) { settingsWrites.push(u.$set); Object.assign(userSettings, u.$set); }
     },
   },
   '../services/ebayOrderNoteService': { syncOrderNote: async (t, mp, o) => { syncCalls.push([t, mp, o]); return syncResult; } },
   '../models/trackingLinksModel': { createOrGetForOrder: async () => ({ code: 'tc1' }), getForOrder: async () => null },
-  '../services/autoBuyerMessageService': { maybeSendReviewRequestMessage: async (args) => { reviewCalls.push(args); } },
+  '../services/autoBuyerMessageService': {
+    maybeSendReviewRequestMessage: async (args) => { reviewCalls.push(args); },
+    maybeSendOrderedUpdateMessage: async (args) => { orderedMessageCalls.push(args); },
+    maybeSendShippedUpdateMessage: async (args) => { shippedMessageCalls.push(args); },
+  },
 };
 const origLoad = Module._load;
 Module._load = function (request, parent) {
@@ -144,17 +150,49 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
   res = await ordered({ ordered: true }, 'nope'); assert.strictEqual(res.statusCode, 404);
   markResult = () => ({ error: 'shipped' }); res = await ordered({ ordered: true }); assert.strictEqual(res.statusCode, 409); assert.match(res.body.error, /already shipped/);
 
-  // ---------- the auto buyer message settings: off until the seller turns them on, both independent of each other ----------
-  reset(); userSettings = { autoThankYouMessage: false, autoReviewRequestMessage: false }; settingsWrites.length = 0;
-  res = await call('get', '/auto-message-settings'); assert.deepStrictEqual(res.body, { success: true, thankYou: false, reviewRequest: false });
-  res = await call('put', '/auto-message-settings', { body: { thankYou: 'yes' } }); assert.strictEqual(res.statusCode, 400); assert.strictEqual(settingsWrites.length, 0);
-  res = await call('put', '/auto-message-settings', { body: { thankYou: true } });
-  assert.deepStrictEqual(res.body, { success: true, thankYou: true, reviewRequest: false }); assert.deepStrictEqual(settingsWrites, [{ autoThankYouMessage: true }]);
-  res = await call('get', '/auto-message-settings'); assert.deepStrictEqual(res.body, { success: true, thankYou: true, reviewRequest: false });
-  res = await call('put', '/auto-message-settings', { body: { reviewRequest: true } });
-  assert.deepStrictEqual(res.body, { success: true, thankYou: true, reviewRequest: true }, 'turning one on never disturbs the other');
+  // ---------- POST /:id/ordered also fires the "we've ordered it" auto-message - a fresh transition only, never on Undo or on editing an already-ordered order ----------
+  orderedMessageCalls.length = 0;
+  order = { id: 'o1', ebay_account_id: 'a1', buyer_username: 'buyer1', legacy_item_id: '110001', item_title: 'Widget', shipping_address: { fullName: 'Jane Doe' }, fulfillment_status: 'pending' };
+  markResult = (id, o) => (id === 'o1' ? { order: { id, ebay_account_id: 'a1', buyer_username: 'buyer1', legacy_item_id: '110001', item_title: 'Widget', shipping_address: { fullName: 'Jane Doe' }, fulfillment_status: o.ordered ? 'ordered_from_amazon' : 'pending', ordered_message_at: null } } : { error: 'not_found' });
+  res = await ordered({ ordered: true });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(orderedMessageCalls.length, 1, 'a fresh mark fires it');
+  assert.deepStrictEqual(orderedMessageCalls[0], { userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '110001', itemTitle: 'Widget', buyerFullName: 'Jane Doe', justOrdered: true, alreadySent: false });
 
-  // ---------- PUT /:id/tracking: the auto "shipped, please review" message fires only the FIRST time a tracking number lands on this order ----------
+  orderedMessageCalls.length = 0; order = { ...order, fulfillment_status: 'ordered_from_amazon' };
+  res = await ordered({ ordered: true, buyingPrice: 5 });
+  assert.strictEqual(orderedMessageCalls.length, 0, 'editing an already-ordered order never re-fires it');
+
+  orderedMessageCalls.length = 0;
+  res = await ordered({ ordered: false });
+  assert.strictEqual(orderedMessageCalls.length, 0, 'Undo never fires it');
+
+  // ---------- the auto buyer message settings: off until the seller turns them on, all independent of each other ----------
+  reset(); userSettings = { autoThankYouMessage: false, autoReviewRequestMessage: false, autoOrderedMessage: false, autoShippedMessage: false }; settingsWrites.length = 0;
+  const defaults = { thankYou: false, reviewRequest: false, ordered: false, orderedText: '', shipped: false, shippedText: '' };
+  res = await call('get', '/auto-message-settings'); assert.deepStrictEqual(res.body, { success: true, ...defaults });
+  res = await call('put', '/auto-message-settings', { body: { thankYou: 'yes' } }); assert.strictEqual(res.statusCode, 400); assert.strictEqual(settingsWrites.length, 0);
+  res = await call('put', '/auto-message-settings', { body: { ordered: 'yes' } }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /ordered must be/);
+  res = await call('put', '/auto-message-settings', { body: { shipped: 'yes' } }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /shipped must be/);
+  res = await call('put', '/auto-message-settings', { body: { orderedText: 'a'.repeat(1001) } }); assert.strictEqual(res.statusCode, 400); assert.match(res.body.error, /too long/);
+  res = await call('put', '/auto-message-settings', { body: { thankYou: true } });
+  assert.deepStrictEqual(res.body, { success: true, ...defaults, thankYou: true }); assert.deepStrictEqual(settingsWrites, [{ autoThankYouMessage: true }]);
+  res = await call('get', '/auto-message-settings'); assert.deepStrictEqual(res.body, { success: true, ...defaults, thankYou: true });
+  res = await call('put', '/auto-message-settings', { body: { reviewRequest: true } });
+  assert.deepStrictEqual(res.body, { success: true, ...defaults, thankYou: true, reviewRequest: true }, 'turning one on never disturbs the others');
+
+  // ---------- "ordered"/"shipped": their own switch, plus the seller's own wording (falls back to '' = the built-in default) ----------
+  settingsWrites.length = 0;
+  res = await call('put', '/auto-message-settings', { body: { ordered: true, orderedText: '  Hi {{buyer_name}}, we ordered it!  ' } });
+  assert.deepStrictEqual(res.body, { success: true, ...defaults, thankYou: true, reviewRequest: true, ordered: true, orderedText: 'Hi {{buyer_name}}, we ordered it!' }, 'saved trimmed');
+  assert.deepStrictEqual(settingsWrites[0], { autoOrderedMessage: true, orderedMessageText: 'Hi {{buyer_name}}, we ordered it!' });
+  res = await call('put', '/auto-message-settings', { body: { orderedText: '   ' } });
+  assert.strictEqual(res.body.orderedText, '', 'blank text clears it back to the built-in default'); assert.strictEqual(settingsWrites[1].orderedMessageText, null);
+  res = await call('put', '/auto-message-settings', { body: { shipped: true, shippedText: 'Shipped!' } });
+  assert.strictEqual(res.body.shipped, true); assert.strictEqual(res.body.shippedText, 'Shipped!');
+  assert.strictEqual(res.body.ordered, true, 'setting shipped never disturbs ordered'); assert.strictEqual(res.body.orderedText, '');
+
+  // ---------- PUT /:id/tracking: the auto "shipped, please review" message fires only the FIRST time a tracking number lands on this order - and so does the new, separate "it shipped" update ----------
   reset(); order = { id: 'o1', ebay_order_id: '11-12345-67890', legacy_item_id: '110001', ebay_account_id: 'a1', marketplace_id: 'EBAY_GB', tracking_number: null };
   res = await call('put', '/:id/tracking', { params: { id: 'o1' }, body: { trackingNumber: 'TRACK123', shippingCarrier: 'usps' } });
   assert.strictEqual(res.statusCode, 200); assert.strictEqual(reviewCalls.length, 1, 'first time this order ever got a tracking number');
@@ -162,19 +200,26 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
     userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '110001', itemTitle: 'Widget',
     buyerFullName: 'Jane Doe', justShipped: true, alreadySent: false,
   });
+  assert.strictEqual(shippedMessageCalls.length, 1, 'the new "it shipped" update fires alongside the review request, not instead of it');
+  assert.deepStrictEqual(shippedMessageCalls[0], {
+    userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '110001', itemTitle: 'Widget',
+    buyerFullName: 'Jane Doe', justShipped: true, alreadySent: false,
+  });
 
-  // ---------- the order already had a tracking number before this call: never fires again (correcting a typo, re-saving, etc.) ----------
-  reviewCalls.length = 0;
+  // ---------- the order already had a tracking number before this call: neither fires again (correcting a typo, re-saving, etc.) ----------
+  reviewCalls.length = 0; shippedMessageCalls.length = 0;
   order = { ...order, tracking_number: 'OLDTRACK' };
   res = await call('put', '/:id/tracking', { params: { id: 'o1' }, body: { trackingNumber: 'TRACK999' } });
   assert.strictEqual(res.statusCode, 200); assert.strictEqual(reviewCalls.length, 0, 'this order was already shipped once - a corrected tracking number is not a fresh "just shipped" moment');
+  assert.strictEqual(shippedMessageCalls.length, 0);
 
-  // ---------- the review message was already sent for this order: the trigger still fires (it is a fresh transition here) but says so ----------
-  reviewCalls.length = 0;
+  // ---------- the review message was already sent for this order, but not the shipped-update one: each tracks its own "already sent" independently ----------
+  reviewCalls.length = 0; shippedMessageCalls.length = 0;
   order = { ...order, tracking_number: null };
-  trackingResult = { ...trackingResult, review_message_at: '2026-09-27T10:00:00Z' };
+  trackingResult = { ...trackingResult, review_message_at: '2026-09-27T10:00:00Z', shipped_message_at: null };
   await call('put', '/:id/tracking', { params: { id: 'o1' }, body: { trackingNumber: 'TRACK1' } });
   assert.strictEqual(reviewCalls[0].alreadySent, true, 'autoBuyerMessageService is told - it is the one that must not resend, not this route');
+  assert.strictEqual(shippedMessageCalls[0].alreadySent, false, 'a separate field (shipped_message_at) - sending the review message does not count as sending this one');
   trackingResult = { ...trackingResult, review_message_at: null };
 
   // ---------- POST /:id/mark-shipped: shipped on eBay with NO tracking number at all ----------
@@ -182,7 +227,7 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
   res = await markShipped('nope'); assert.strictEqual(res.statusCode, 404); assert.strictEqual(markShippedCalls.length, 0, 'not the seller\'s order');
 
   // a fully-linked order: pushed to eBay with just the line item, no tracking number/carrier at all
-  shipCalls.length = 0; reviewCalls.length = 0; markShippedCalls.length = 0;
+  shipCalls.length = 0; reviewCalls.length = 0; shippedMessageCalls.length = 0; markShippedCalls.length = 0;
   order = { id: 'o1', ebay_order_id: '11-12345-67890', ebay_line_item_id: 'li-1', legacy_item_id: '110001', ebay_account_id: 'a1', marketplace_id: 'EBAY_GB', quantity: 2, buyer_username: 'buyer1', shipping_address: { fullName: 'Jane Doe' } };
   res = await markShipped();
   assert.strictEqual(res.body.success, true); assert.strictEqual(res.body.ebayNotified, true); assert.strictEqual(res.body.ebayError, null);
@@ -190,6 +235,8 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
   assert.deepStrictEqual(shipCalls[0], ['rt-1', '11-12345-67890', 'li-1', 2], 'only the line item and quantity - no trackingNumber/carrier argument at all');
   assert.strictEqual(reviewCalls.length, 1, 'first time this order is shipped: the auto review-request trigger fires, same as a tracking number landing');
   assert.deepStrictEqual(reviewCalls[0], { userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '110001', itemTitle: 'Widget', buyerFullName: 'Jane Doe', justShipped: true, alreadySent: false });
+  assert.strictEqual(shippedMessageCalls.length, 1, 'the no-tracking ship path fires the shipped-update trigger too');
+  assert.deepStrictEqual(shippedMessageCalls[0], { userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '110001', itemTitle: 'Widget', buyerFullName: 'Jane Doe', justShipped: true, alreadySent: false });
 
   // already shipped before this call: the ELMS-side update still happens, but it is not a fresh "just shipped" moment
   reviewCalls.length = 0; order = { ...order, fulfillment_status: 'shipped' };

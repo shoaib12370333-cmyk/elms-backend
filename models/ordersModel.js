@@ -488,6 +488,10 @@ function serialize(doc) {
     thank_you_message_error: obj.thankYouMessageError || null,
     review_message_at: obj.reviewMessageAt || null,
     review_message_error: obj.reviewMessageError || null,
+    ordered_message_at: obj.orderedMessageAt || null,
+    ordered_message_error: obj.orderedMessageError || null,
+    shipped_message_at: obj.shippedMessageAt || null,
+    shipped_message_error: obj.shippedMessageError || null,
     sheet_amazon_price: obj.sheetAmazonPrice ?? null, // Net Profit sheet: typed by the seller
     order_earning: obj.orderEarning ?? null, // Net Profit sheet: typed by the seller
     net_profit_typed: obj.netProfit ?? null, // typed in the first version of the sheet
