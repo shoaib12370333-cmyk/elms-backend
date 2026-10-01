@@ -21,10 +21,15 @@ stub('models/adminCatalogJobsModel', {
 });
 let pushCalls = [];
 let pushBehavior = async () => ({ draft: { id: 'D1' }, categoryCarried: true });
+let lastListQuery = null;
+let bulkPushCalls = [];
+let bulkPushBehavior = async () => ({ results: [], summary: { pushed: 0, alreadyHave: 0, failed: 0, notFound: 0 } });
 stub('models/productCatalogModel', {
-  listCatalogItems: async ({ page, limit }) => ({ items: [], total: 0, page: Number(page) || 1, pages: 1, limitSeen: limit }),
+  listCatalogItems: async ({ page, limit, marketplaceId }) => { lastListQuery = { page, limit, marketplaceId }; return { items: [], total: 0, page: Number(page) || 1, pages: 1, limitSeen: limit }; },
+  listMarketplaceCounts: async () => [{ marketplaceId: 'EBAY_GB', count: 1 }, { marketplaceId: 'EBAY_US', count: 2 }],
   deleteCatalogItem: async (id) => id === 'EXISTS',
   pushCatalogItemToUserDrafts: async (id, userId) => { pushCalls.push({ id, userId }); return pushBehavior(); },
+  pushCatalogItemsToUserDrafts: async (ids, userId) => { bulkPushCalls.push({ ids, userId }); return bulkPushBehavior(); },
 });
 
 const adminRoutes = require('../routes/admin');
@@ -62,10 +67,17 @@ const call = async (method, p, req) => { const res = fakeRes(); await handler(me
   res = await call('get', '/product-catalog/jobs', {});
   assert.strictEqual(res.body.jobs.length, 1);
 
-  // ---------- GET catalog list: page/limit passed through ----------
+  // ---------- GET catalog list: page/limit/marketplaceId passed through ----------
   res = await call('get', '/product-catalog', { query: { page: '2', limit: '50' } });
   assert.strictEqual(res.body.page, 2);
   assert.strictEqual(res.body.limitSeen, '50');
+  assert.strictEqual(lastListQuery.marketplaceId, undefined, 'no marketplace filter: every section\'s own call passes none');
+  res = await call('get', '/product-catalog', { query: { marketplaceId: 'EBAY_GB' } });
+  assert.strictEqual(lastListQuery.marketplaceId, 'EBAY_GB');
+
+  // ---------- GET marketplace counts: the Admin Panel's per-marketplace sections ----------
+  res = await call('get', '/product-catalog/marketplaces', {});
+  assert.deepStrictEqual(res.body.marketplaces, [{ marketplaceId: 'EBAY_GB', count: 1 }, { marketplaceId: 'EBAY_US', count: 2 }]);
 
   // ---------- DELETE: 404 when it is already gone ----------
   res = await call('delete', '/product-catalog/:id', { params: { id: 'EXISTS' } });
@@ -90,6 +102,24 @@ const call = async (method, p, req) => { const res = fakeRes(); await handler(me
   res = await call('post', '/product-catalog/:id/push', { params: { id: 'C1' }, body: { email: 'seller@example.com' } });
   assert.strictEqual(res.statusCode, 409);
   assert.match(res.body.error, /already exists/);
+
+  // ---------- POST push-bulk: validation, then a real call delegates ids + the resolved userId ----------
+  res = await call('post', '/product-catalog/push-bulk', { body: { ids: ['C1', 'C2'], email: 'not-an-email' } });
+  assert.strictEqual(res.statusCode, 400);
+  res = await call('post', '/product-catalog/push-bulk', { body: { ids: [], email: 'seller@example.com' } });
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.error, /non-empty array/);
+  res = await call('post', '/product-catalog/push-bulk', { body: { ids: Array.from({ length: 201 }, (_, i) => 'C' + i), email: 'seller@example.com' } });
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.error, /at most 200/);
+  res = await call('post', '/product-catalog/push-bulk', { body: { ids: ['C1', 'C2'], email: 'stranger@example.com' } });
+  assert.strictEqual(res.statusCode, 404);
+  assert.strictEqual(bulkPushCalls.length, 0);
+  bulkPushBehavior = async () => ({ results: [{ id: 'C1', status: 'pushed' }, { id: 'C2', status: 'already_have', reason: 'Already in Drafts.' }], summary: { pushed: 1, alreadyHave: 1, failed: 0, notFound: 0 } });
+  res = await call('post', '/product-catalog/push-bulk', { body: { ids: ['C1', 'C2', 'C1'], email: 'seller@example.com' } });
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(bulkPushCalls[0], { ids: ['C1', 'C2'], userId: 'seller1' }, 'the same id twice is sent once' );
+  assert.deepStrictEqual(res.body.summary, { pushed: 1, alreadyHave: 1, failed: 0, notFound: 0 });
 
   console.log('admin catalog routes tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
