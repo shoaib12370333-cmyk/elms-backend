@@ -22,10 +22,20 @@ function signingConfigured() {
   return !!(process.env.EBAY_SIGNING_KEY_JWE && process.env.EBAY_SIGNING_KEY_PRIVATE);
 }
 
-// Render (and most hosts) accept a real multi-line value for an env var, but tolerate a literal "\n"-escaped one too,
-// in case the key was ever pasted somewhere that collapses real newlines.
+// A pasted PEM commonly arrives mangled - a host's env var box collapsing it to one line (BEGIN/END markers glued
+// directly onto the base64 body with no newline at all), a literal "\n" escape instead of a real newline, or
+// Windows CRLF - and Node's crypto rejects all of those with the unhelpful "error:1E08010C:DECODER
+// routines::unsupported" rather than anything mentioning a newline. Rebuilding the PEM from scratch (whatever is
+// between the BEGIN/END markers, wherever the newlines did or didn't end up) is robust to every one of these at
+// once, instead of guessing which single mangling actually happened.
 function privateKeyPem() {
-  return String(process.env.EBAY_SIGNING_KEY_PRIVATE || '').replace(/\\n/g, '\n');
+  const raw = String(process.env.EBAY_SIGNING_KEY_PRIVATE || '').replace(/\\n/g, '\n');
+  const match = raw.match(/-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----/);
+  if (!match) return raw; // unrecognized shape - pass through as-is, let crypto.sign's own error surface
+  const [, label, body] = match;
+  const base64 = body.replace(/\s+/g, '');
+  const wrapped = base64.match(/.{1,64}/g) || [];
+  return `-----BEGIN ${label}-----\n${wrapped.join('\n')}\n-----END ${label}-----\n`;
 }
 
 /**
