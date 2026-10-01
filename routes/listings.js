@@ -71,6 +71,7 @@ const {
 const { bulkEdit, validateChanges, mapPool } = require('../services/bulkEditService');
 const { bulkLivePrice } = require('../services/liveBulkPriceService');
 const { bulkRestock } = require('../services/liveBulkRestockService');
+const { bulkVeroCleanLive } = require('../services/liveBulkVeroService');
 
 const { ACTION_COSTS } = require('../config/actionCosts');
 
@@ -889,6 +890,30 @@ router.post('/bulk-restock', requireAuth, async (req, res) => {
   } catch (err) {
     if (!err.statusCode || err.statusCode >= 500) console.error('bulk restock error:', err.message);
     res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not restock the listings. Please try again.' });
+  }
+});
+
+const MAX_BULK_VERO = 20; // each listing is an AI call plus a real eBay revise (two round trips) - same modest batch size as restock
+
+/**
+ * POST /api/listings/bulk-vero-clean   { ids: [...] }
+ *
+ * Live Listings page: takes the seller's own saved VeRO words out of the title, description and item specifics of
+ * every selected live (or sold-out) listing with AI, and pushes the cleaned result to eBay (services/ebayListingService.js
+ * reviseActiveListing) - unlike the Drafts bulk VeRO button, which only ever saves ELMS's own copy. A listing with no
+ * VeRO words, no eBay offer, not enough credits, or whose eBay update fails is skipped with the reason, never reported
+ * as cleaned when it was not; a spent credit is refunded for every one that does not end up actually changed on eBay.
+ */
+router.post('/bulk-vero-clean', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_BULK_VERO) return res.status(400).json({ success: false, error: `Please clean at most ${MAX_BULK_VERO} listings per request - the app sends a larger selection in several requests.` });
+  try {
+    const out = await bulkVeroCleanLive({ userId: req.userId, ids }, { getListingsByIds, updateListing, getRefreshToken: getEbayAccountRefreshToken });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    if (!err.statusCode || err.statusCode >= 500) console.error('bulk vero clean error:', err.message);
+    res.status(err.statusCode || 500).json({ success: false, error: err.statusCode && err.statusCode < 500 ? err.message : 'Could not remove the VeRO words. Please try again.' });
   }
 });
 
