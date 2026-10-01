@@ -45,9 +45,11 @@ router.get('/public-plans', async (req, res) => {
  */
 router.get('/plans', requireAuth, async (req, res) => {
   const provider = cashtapPayments.activeProvider();
-  // Yearly plans and the custom plan are CashTap-only (Paddle prices are fixed inside Paddle).
-  const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId).map((p) => (provider === 'cashtap' ? p : { ...p, yearlyPriceUsd: null }))
-    .map((p) => ({ ...p, paddleAvailable: provider === 'cashtap' && paddleConfigured() && !!p.paddlePriceId }));
+  // The custom plan is CashTap-only (its yearly discount has no meaning for Paddle). A plan's yearly term is sellable
+  // through Paddle only when the admin gave it its own paddleYearlyPriceId - otherwise it is hidden when Paddle is the
+  // only provider (nothing could sell it), same as before.
+  const plans = (await listActivePlans()).filter((p) => provider === 'cashtap' || p.paddlePriceId).map((p) => (provider === 'cashtap' || p.paddleYearlyPriceId ? p : { ...p, yearlyPriceUsd: null }))
+    .map((p) => ({ ...p, paddleAvailable: provider === 'cashtap' && paddleConfigured() && !!p.paddlePriceId, paddleYearlyAvailable: provider === 'cashtap' && paddleConfigured() && !!p.paddleYearlyPriceId }));
   const custom = provider === 'cashtap' ? await getCustomPlanSettings() : null;
   const me = await getUserById(req.userId).catch(() => null);
   const extra = {
@@ -160,7 +162,9 @@ router.post('/checkout', requireAuth, async (req, res) => {
   if (provider === 'paddle' && req.body.voucherId) {
     return res.status(400).json({ success: false, error: 'A voucher can only be used when paying with Cash App.' });
   }
-  if ((wantsCustom || String(req.body.billing || '') === 'yearly') && provider !== 'cashtap') {
+  // The custom plan's yearly discount is worked out for CashTap only; a standard plan's yearly term can go through
+  // Paddle too, but only once the admin gave it its own paddleYearlyPriceId (checked below, with the monthly one).
+  if (wantsCustom && provider !== 'cashtap') {
     return res.status(400).json({ success: false, error: 'This option is not available right now.' });
   }
   try {
@@ -179,9 +183,11 @@ router.post('/checkout', requireAuth, async (req, res) => {
       const { sessionId, url } = await cashtapPayments.startCheckout({ user, plan: offer, discount, voucher });
       return res.json({ success: true, provider, sessionId, url, discountPercent: discount ? discount.percent : 0, voucherApplied: !!voucher });
     }
-    if (!plan.paddlePriceId) return res.status(404).json({ success: false, error: 'This plan is not available.' });
+    const billing = String(req.body.billing || '').toLowerCase() === 'yearly' ? 'yearly' : 'monthly';
+    const paddlePriceId = billing === 'yearly' ? plan.paddleYearlyPriceId : plan.paddlePriceId;
+    if (!paddlePriceId) return res.status(404).json({ success: false, error: 'This plan is not available.' });
     const { transactionId } = await createTransaction({
-      paddlePriceId: plan.paddlePriceId,
+      paddlePriceId,
       userId: req.userId,
       userEmail: user.email,
     });

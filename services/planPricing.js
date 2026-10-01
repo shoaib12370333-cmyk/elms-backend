@@ -32,7 +32,7 @@ function planOffer(plan, billingInput) {
   if (billing === 'yearly') {
     const yearly = Number(plan.yearlyPriceUsd);
     if (!(yearly > 0)) throw fail('This plan has no yearly option.');
-    return { id: plan.id, name: plan.name + ' (yearly)', priceUsd: round2(yearly), credits: Math.round(plan.credits * 12), maxEbayAccounts: plan.maxEbayAccounts || null, billing, termMonths: 12, paddlePriceId: null, custom: false };
+    return { id: plan.id, name: plan.name + ' (yearly)', priceUsd: round2(yearly), credits: Math.round(plan.credits * 12), maxEbayAccounts: plan.maxEbayAccounts || null, billing, termMonths: 12, paddlePriceId: plan.paddleYearlyPriceId || null, custom: false };
   }
   return { id: plan.id, name: plan.name + ' (monthly)', priceUsd: round2(plan.priceUsd), credits: Math.round(plan.credits), maxEbayAccounts: plan.maxEbayAccounts || null, billing, termMonths: 1, paddlePriceId: plan.paddlePriceId || null, custom: false };
 }

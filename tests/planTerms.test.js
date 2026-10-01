@@ -11,8 +11,15 @@ let o = P.planOffer(plan, 'monthly');
 assert.deepStrictEqual([o.priceUsd, o.credits, o.termMonths, o.name], [120, 6000, 1, 'Pro (monthly)']);
 o = P.planOffer(plan, 'yearly');
 assert.deepStrictEqual([o.priceUsd, o.credits, o.termMonths, o.name, o.maxEbayAccounts], [1200, 72000, 12, 'Pro (yearly)', 2]);
+assert.strictEqual(o.paddlePriceId, null, 'no yearly Paddle price id on this plan');
 assert.throws(() => P.planOffer({ ...plan, yearlyPriceUsd: null }, 'yearly'), /no yearly option/);
 assert.strictEqual(P.planOffer(plan, undefined).billing, 'monthly');
+
+// ---- monthly and yearly are two SEPARATE Paddle prices - each term's offer carries only its own
+o = P.planOffer({ ...plan, paddlePriceId: 'pri_month', paddleYearlyPriceId: 'pri_year' }, 'monthly');
+assert.strictEqual(o.paddlePriceId, 'pri_month');
+o = P.planOffer({ ...plan, paddlePriceId: 'pri_month', paddleYearlyPriceId: 'pri_year' }, 'yearly');
+assert.strictEqual(o.paddlePriceId, 'pri_year');
 
 // ---- the custom plan: 120 USD = 6000 credits (50 per dollar), 80..2000, an extra store costs extra, a year is 12 months minus the discount
 const s = { enabled: true, minUsd: 80, maxUsd: 2000, creditsPerUsd: 50, yearlyDiscountPercent: 10, includedStores: 1, extraStoreMonthlyUsd: 20, maxExtraStores: 20 };
