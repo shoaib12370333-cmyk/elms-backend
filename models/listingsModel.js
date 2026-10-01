@@ -487,9 +487,15 @@ async function countListingsByStatus(userId, status, accountId = null) {
 // lookup below always shows every status, including one that currently has zero listings.
 const LISTING_STATUSES = ['draft', 'publishing', 'scheduled', 'published', 'paused', 'error', 'ended', 'sold'];
 
-/** How many of one user's listings are in each status, in one aggregate - for the Admin Panel's User Lookup page. */
-async function listingStatusBreakdown(userId) {
-  const rows = await Listing.aggregate([{ $match: { userId: new mongoose.Types.ObjectId(String(userId)) } }, { $group: { _id: '$status', count: { $sum: 1 } } }]);
+/**
+ * How many of one user's listings are in each status, in one aggregate - for the Admin Panel's User Lookup page.
+ * An optional accountId narrows this to one connected eBay store (the same page's per-store breakdown), rather than
+ * the user's listings across every store.
+ */
+async function listingStatusBreakdown(userId, accountId = null) {
+  const match = { userId: new mongoose.Types.ObjectId(String(userId)) };
+  if (accountId) match.ebayAccountId = new mongoose.Types.ObjectId(String(accountId));
+  const rows = await Listing.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 } } }]);
   const by = new Map(rows.map((r) => [r._id, r.count]));
   const counts = {};
   LISTING_STATUSES.forEach((s) => { counts[s] = by.get(s) || 0; });
