@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { getAccessToken } = require('./ebayAuthService');
 const { EBAY_FINANCES_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnvironment');
+const { signedHeaders } = require('./ebayDigitalSignatureService');
 
 /**
  * eBay's Sell Finances API (developer.ebay.com/develop/api/sell/finances_api) - what a sold order actually earns after
@@ -17,17 +18,26 @@ const { EBAY_FINANCES_BASE_URL: EBAY_BASE_URL } = require('../config/ebayEnviron
  * getOrderEarnings (the endpoint that would hand back a ready-made "net earning" figure directly) is NOT used here: per
  * the docs, it needs a separate eBay-approved "application growth check" and is limited to US/China/Hong Kong sellers
  * with a USD payout - not generally available. getTransactions (this file) needs no special access.
+ *
+ * ALSO needs a digital signature (services/ebayDigitalSignatureService.js) on every call, when made on behalf of an
+ * EU/UK-domiciled seller - "All methods in the Finances API" are in scope (confirmed 2026-10-02: a real UK seller's
+ * calls failed with eBay's error 215001 "Missing x-ebay-signature-key header" until this was added). eBay ignores the
+ * signature for a seller it is not required for, so it is added to every call here, not just ones we can tell are
+ * EU/UK - see that file for the one-time key setup this needs (scripts/createEbaySigningKey.js).
  */
 
 /** Unlike Fulfillment API calls (services/ebayOrdersService.js), Finances requires X-EBAY-C-MARKETPLACE-ID on every call. */
 async function ebayFinancesGet(refreshToken, path, marketplaceId) {
   const accessToken = await getAccessToken(refreshToken);
+  const host = new URL(EBAY_BASE_URL).host;
+  const barePath = path.split('?')[0]; // the signature covers @path only, never the query string
   try {
     const response = await axios.get(`${EBAY_BASE_URL}${path}`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
         'X-EBAY-C-MARKETPLACE-ID': marketplaceId || 'EBAY_US',
+        ...(await signedHeaders({ method: 'GET', path: barePath, host })),
       },
       timeout: 20000,
       validateStatus: (s) => s === 200 || s === 204,
