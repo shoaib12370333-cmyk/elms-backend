@@ -183,24 +183,29 @@ function normalizeOrderLineItems(rawOrder) {
 }
 
 /**
- * Attaches a tracking number to an order line item on eBay, marking it as
- * shipped from the buyer's perspective. Called when the seller enters a
- * tracking number in ELMS after shipping the item from Amazon.
+ * Marks an order line item as shipped on eBay, from the buyer's perspective. Called when the seller enters a
+ * tracking number in ELMS after shipping the item from Amazon - or, with trackingNumber left out, when they just
+ * want to mark it shipped with no tracking number at all (eBay's Fulfillment API accepts a shipping fulfillment
+ * with only lineItems/shippedDate; shipmentTrackingNumber/shippingCarrierCode are optional, and a carrier code with
+ * no tracking number to go with it would be meaningless, so both are left out together).
  *
  * @param {string} refreshToken
  * @param {string} ebayOrderId
  * @param {string} ebayLineItemId
  * @param {number} quantity
- * @param {string} trackingNumber
- * @param {string} shippingCarrier - eBay's carrier code, e.g. "USPS", "FEDEX", "UPS"
+ * @param {string} [trackingNumber]
+ * @param {string} [shippingCarrier] - eBay's carrier code, e.g. "USPS", "FEDEX", "UPS"
  */
 async function createShippingFulfillment(refreshToken, ebayOrderId, ebayLineItemId, quantity, trackingNumber, shippingCarrier) {
-  return ebayPost(refreshToken, `/sell/fulfillment/v1/order/${encodeURIComponent(ebayOrderId)}/shipping_fulfillment`, {
+  const body = {
     lineItems: [{ lineItemId: ebayLineItemId, quantity: quantity || 1 }],
     shippedDate: new Date().toISOString(),
-    shippingCarrierCode: shippingCarrier || 'OTHER',
-    trackingNumber,
-  });
+  };
+  if (trackingNumber) {
+    body.trackingNumber = trackingNumber;
+    body.shippingCarrierCode = shippingCarrier || 'OTHER';
+  }
+  return ebayPost(refreshToken, `/sell/fulfillment/v1/order/${encodeURIComponent(ebayOrderId)}/shipping_fulfillment`, body);
 }
 
 module.exports = { fetchOrders, fetchOrderById, normalizeOrderLineItems, createShippingFulfillment };

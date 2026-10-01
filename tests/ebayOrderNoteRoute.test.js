@@ -16,6 +16,10 @@ let token = 'rt-1';
 const query = (result) => { const q = { select: () => q, lean: async () => result }; return q; };
 let trackingResult = { id: 'o1', ebay_account_id: 'a1', buyer_username: 'buyer1', legacy_item_id: '110001', item_title: 'Widget', shipping_address: { fullName: 'Jane Doe' }, review_message_at: null };
 const reviewCalls = [];
+let markShippedResult = { id: 'o1', ebay_account_id: 'a1', buyer_username: 'buyer1', legacy_item_id: '110001', item_title: 'Widget', shipping_address: { fullName: 'Jane Doe' }, review_message_at: null };
+const markShippedCalls = [];
+const shipCalls = [];
+let shipShouldThrow = null;
 let userSettings = { autoThankYouMessage: false, autoReviewRequestMessage: false };
 const settingsWrites = [];
 const fakes = {
@@ -33,9 +37,10 @@ const fakes = {
     ordersSummary: async () => ({}), listOrders: async () => [], updateFulfillmentStatus: async () => null, upsertOrder: async () => null, setTracking: async () => trackingResult, linkAmazonOrder: async () => null, setSellerNote: async () => null, setBuyPrice: async () => null, linkOrderToListing: async () => null,
     getOrderById: async (u, id) => (id === 'o1' ? order : null),
     markOrdered: async (u, id, o) => { marks.push([id, o]); return markResult(id, o); },
+    markShippedNoTracking: async (u, id) => { markShippedCalls.push([u, id]); return id === 'o1' ? markShippedResult : null; },
     setEbayNoteState: async (u, id, state) => { states.push([id, state]); return { ...order, ebay_note_at: state.written === true ? '2026-09-27T10:00:00Z' : null, ebay_note_error: state.error }; },
   },
-  '../services/ebayOrdersService': { fetchOrderById: async () => null, normalizeOrderLineItems: () => [], createShippingFulfillment: async () => null },
+  '../services/ebayOrdersService': { fetchOrderById: async () => null, normalizeOrderLineItems: () => [], createShippingFulfillment: async (...args) => { shipCalls.push(args); if (shipShouldThrow) throw new Error(shipShouldThrow); return null; } },
   '../services/orderSyncService': { syncAccountOrders: async () => ({}) },
   '../services/orderImageService': { backfillOrderImagesForUser: () => {}, fillMissingOrderImages: async () => {} },
   '../routes/fetchProduct': { fetchAndSaveDraft: async () => null },
@@ -171,6 +176,36 @@ const reset = () => { states.length = 0; syncCalls.length = 0; syncResult = { st
   await call('put', '/:id/tracking', { params: { id: 'o1' }, body: { trackingNumber: 'TRACK1' } });
   assert.strictEqual(reviewCalls[0].alreadySent, true, 'autoBuyerMessageService is told - it is the one that must not resend, not this route');
   trackingResult = { ...trackingResult, review_message_at: null };
+
+  // ---------- POST /:id/mark-shipped: shipped on eBay with NO tracking number at all ----------
+  const markShipped = (id = 'o1') => call('post', '/:id/mark-shipped', { params: { id } });
+  res = await markShipped('nope'); assert.strictEqual(res.statusCode, 404); assert.strictEqual(markShippedCalls.length, 0, 'not the seller\'s order');
+
+  // a fully-linked order: pushed to eBay with just the line item, no tracking number/carrier at all
+  shipCalls.length = 0; reviewCalls.length = 0; markShippedCalls.length = 0;
+  order = { id: 'o1', ebay_order_id: '11-12345-67890', ebay_line_item_id: 'li-1', legacy_item_id: '110001', ebay_account_id: 'a1', marketplace_id: 'EBAY_GB', quantity: 2, buyer_username: 'buyer1', shipping_address: { fullName: 'Jane Doe' } };
+  res = await markShipped();
+  assert.strictEqual(res.body.success, true); assert.strictEqual(res.body.ebayNotified, true); assert.strictEqual(res.body.ebayError, null);
+  assert.deepStrictEqual(markShippedCalls[0], ['u1', 'o1']);
+  assert.deepStrictEqual(shipCalls[0], ['rt-1', '11-12345-67890', 'li-1', 2], 'only the line item and quantity - no trackingNumber/carrier argument at all');
+  assert.strictEqual(reviewCalls.length, 1, 'first time this order is shipped: the auto review-request trigger fires, same as a tracking number landing');
+  assert.deepStrictEqual(reviewCalls[0], { userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '110001', itemTitle: 'Widget', buyerFullName: 'Jane Doe', justShipped: true, alreadySent: false });
+
+  // already shipped before this call: the ELMS-side update still happens, but it is not a fresh "just shipped" moment
+  reviewCalls.length = 0; order = { ...order, fulfillment_status: 'shipped' };
+  res = await markShipped(); assert.strictEqual(res.statusCode, 200); assert.strictEqual(reviewCalls.length, 0);
+
+  // eBay's push fails: ELMS is still marked shipped, the reason is reported, the route does not fail
+  shipShouldThrow = 'eBay rejected the fulfillment.'; order = { ...order, fulfillment_status: 'pending' };
+  res = await markShipped();
+  assert.strictEqual(res.statusCode, 200); assert.strictEqual(res.body.ebayNotified, false); assert.strictEqual(res.body.ebayError, 'eBay rejected the fulfillment.');
+  assert.strictEqual(markShippedCalls.length, 3, 'ELMS is marked shipped regardless of whether eBay could be reached');
+  shipShouldThrow = null;
+
+  // not linked to an eBay account: ELMS-only, eBay is never called, and that is not treated as an error
+  shipCalls.length = 0; order = { id: 'o1', ebay_order_id: null, ebay_account_id: null, quantity: 1 };
+  res = await markShipped();
+  assert.strictEqual(res.body.ebayNotified, false); assert.strictEqual(res.body.ebayError, null); assert.strictEqual(shipCalls.length, 0);
 
   Module._load = origLoad;
   console.log('ebay order note route tests passed');
