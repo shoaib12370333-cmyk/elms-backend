@@ -1,7 +1,7 @@
 const Order = require('./../models/schemas/Order');
 const User = require('./../models/schemas/User');
 const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
-const { sendThankYouMessage, sendShippedReviewMessage } = require('./buyerMessageService');
+const { sendThankYouMessage, sendShippedReviewMessage, sendOrderedUpdateMessage, sendShippedUpdateMessage } = require('./buyerMessageService');
 
 // A backlog sync (a store just connected, or a first-ever poll) can hand upsertOrder a line item that is already
 // PAID with an old paidAt - that is not a live "just got paid" moment, so it must never trigger a thank-you message.
@@ -53,4 +53,42 @@ async function maybeSendReviewRequestMessage({ userId, orderId, ebayAccountId, b
   }
 }
 
-module.exports = { maybeSendThankYouMessage, maybeSendReviewRequestMessage };
+/**
+ * Sends the one-time "we've ordered it" eBay buyer message the moment the seller marks an order as ordered (never on
+ * Undo, never on re-editing the date/price of an already-ordered order - justOrdered must be a fresh transition).
+ * Only when the seller switched the setting on, and with their own wording if they typed one. Best effort: never throws.
+ */
+async function maybeSendOrderedUpdateMessage({ userId, orderId, ebayAccountId, buyerUsername, itemId, itemTitle, buyerFullName, justOrdered, alreadySent }) {
+  if (!justOrdered || alreadySent) return;
+  try {
+    const user = await User.findById(userId).select('autoOrderedMessage orderedMessageText').lean();
+    if (!user || !user.autoOrderedMessage) return;
+    const refreshToken = ebayAccountId ? await getEbayAccountRefreshToken(userId, ebayAccountId) : null;
+    const result = await sendOrderedUpdateMessage(refreshToken, { buyerUsername, itemId, buyerName: buyerFullName, itemTitle, customTemplate: user.orderedMessageText });
+    await recordResult(orderId, result, 'orderedMessageAt', 'orderedMessageError');
+  } catch (err) {
+    console.warn('[auto-message] ordered-update failed:', err.message);
+    await Order.updateOne({ _id: orderId }, { $set: { orderedMessageError: err.message } }).catch(() => {});
+  }
+}
+
+/**
+ * Sends the one-time "it has shipped" eBay buyer message the moment an order is marked shipped (with or without a
+ * tracking number) - separate from maybeSendReviewRequestMessage above (which specifically asks for a review), so a
+ * seller can have either, both, or neither on. Only when the seller switched this one on. Best effort: never throws.
+ */
+async function maybeSendShippedUpdateMessage({ userId, orderId, ebayAccountId, buyerUsername, itemId, itemTitle, buyerFullName, justShipped, alreadySent }) {
+  if (!justShipped || alreadySent) return;
+  try {
+    const user = await User.findById(userId).select('autoShippedMessage shippedMessageText').lean();
+    if (!user || !user.autoShippedMessage) return;
+    const refreshToken = ebayAccountId ? await getEbayAccountRefreshToken(userId, ebayAccountId) : null;
+    const result = await sendShippedUpdateMessage(refreshToken, { buyerUsername, itemId, buyerName: buyerFullName, itemTitle, customTemplate: user.shippedMessageText });
+    await recordResult(orderId, result, 'shippedMessageAt', 'shippedMessageError');
+  } catch (err) {
+    console.warn('[auto-message] shipped-update failed:', err.message);
+    await Order.updateOne({ _id: orderId }, { $set: { shippedMessageError: err.message } }).catch(() => {});
+  }
+}
+
+module.exports = { maybeSendThankYouMessage, maybeSendReviewRequestMessage, maybeSendOrderedUpdateMessage, maybeSendShippedUpdateMessage };

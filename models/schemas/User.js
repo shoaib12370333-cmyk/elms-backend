@@ -76,10 +76,14 @@ const userSchema = new mongoose.Schema(
     // "Mark as ordered" in Orders also writes "ELMS: ordered <date>" in the private note of the eBay order (services/ebayOrderNoteService.js). Off until the seller switches it on.
     ebayOrderNote: { type: Boolean, default: false },
 
-    // Automatic eBay buyer messages (services/autoBuyerMessageService.js, services/buyerMessageService.js) - both off
+    // Automatic eBay buyer messages (services/autoBuyerMessageService.js, services/buyerMessageService.js) - all off
     // until the seller switches them on in Settings. Each is sent at most once per order line.
     autoThankYouMessage: { type: Boolean, default: false }, // sent the moment an order line is first seen as paid
     autoReviewRequestMessage: { type: Boolean, default: false }, // sent the moment tracking is first saved (any carrier)
+    autoOrderedMessage: { type: Boolean, default: false }, // sent the moment the seller marks an order as "ordered" (bought from the supplier)
+    orderedMessageText: { type: String, default: null }, // the seller's own wording for the above; null = use the built-in default (buyerMessageService.js orderedUpdateText). Supports {{buyer_name}}/{{product_name}}.
+    autoShippedMessage: { type: Boolean, default: false }, // sent the moment an order is marked shipped (with or without a tracking number) - separate from autoReviewRequestMessage, which specifically asks for a review
+    shippedMessageText: { type: String, default: null }, // the seller's own wording for the above; null = use the built-in default. Supports {{buyer_name}}/{{product_name}}.
 
     // CJdropshipping connection (services/cjAdapter.js, models/usersModel.js getCjCredentials/setCjCredentials). The seller's own
     // API key and the access/refresh tokens CJ issues for it are encrypted at rest (services/cryptoService) and never sent to

@@ -76,6 +76,10 @@ const orderSchema = new mongoose.Schema(
     thankYouMessageError: { type: String, default: null }, // why it could not be sent the last time it was tried (null = no problem)
     reviewMessageAt: { type: Date, default: null },   // when the auto "it shipped, please review us" eBay buyer message was sent; null = not sent yet
     reviewMessageError: { type: String, default: null }, // why it could not be sent the last time it was tried (null = no problem)
+    orderedMessageAt: { type: Date, default: null },  // when the auto "we've ordered it, on its way to us" eBay buyer message was sent (fires on "Mark as ordered"); null = not sent yet
+    orderedMessageError: { type: String, default: null }, // why it could not be sent the last time it was tried (null = no problem)
+    shippedMessageAt: { type: Date, default: null },  // when the auto "it has shipped" eBay buyer message was sent (fires on "Mark as shipped", with or without tracking - separate from reviewMessageAt above, which is specifically a review request); null = not sent yet
+    shippedMessageError: { type: String, default: null }, // why it could not be sent the last time it was tried (null = no problem)
     netProfit: { type: Number, default: null },      // an older version of the Net Profit sheet had the seller type the net profit; kept, and shown until the two figures below are typed
     sheetAmazonPrice: { type: Number, default: null }, // Net Profit sheet: what the order cost on Amazon, typed by the seller (the whole order line); null = not typed
     orderEarning: { type: Number, default: null },   // Net Profit sheet: what eBay pays out for the order ("Order earnings" in Seller Hub), typed by the seller; null = not typed

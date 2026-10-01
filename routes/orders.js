@@ -78,33 +78,62 @@ router.put('/ebay-note-setting', requireAuth, async (req, res) => {
 });
 
 /**
- * GET / PUT /api/orders/auto-message-settings   { thankYou: boolean, reviewRequest: boolean }
- * The seller's switches for the two automatic eBay buyer messages (services/autoBuyerMessageService.js): a one-time
- * "thanks for your order" the moment a line is first seen as paid, and a one-time "it shipped, please leave a
- * review" the moment tracking is first saved. Both off by default - nothing is ever sent, not even a draft, unless
- * switched on here. Must stay above PUT /:id.
+ * GET / PUT /api/orders/auto-message-settings   { thankYou, reviewRequest, ordered, orderedText, shipped, shippedText }
+ * The seller's switches for the four automatic eBay buyer messages (services/autoBuyerMessageService.js): a one-time
+ * "thanks for your order" the moment a line is first seen as paid, a one-time "it shipped, please leave a review"
+ * the moment tracking is first saved, a one-time "we've ordered it, on its way to us" the moment the seller marks an
+ * order as ordered, and a one-time "it has shipped" the moment an order is marked shipped (with or without
+ * tracking). All off by default - nothing is ever sent, not even a draft, unless switched on here. "ordered"/
+ * "shipped" can have the seller's own wording (orderedText/shippedText, supports {{buyer_name}}/{{product_name}}) -
+ * empty/omitted falls back to the built-in default text (buyerMessageService.js). Must stay above PUT /:id.
  */
 router.get('/auto-message-settings', requireAuth, async (req, res) => {
   try {
-    const user = await require('../models/schemas/User').findById(req.userId).select('autoThankYouMessage autoReviewRequestMessage').lean();
-    res.json({ success: true, thankYou: !!(user && user.autoThankYouMessage), reviewRequest: !!(user && user.autoReviewRequestMessage) });
+    const user = await require('../models/schemas/User').findById(req.userId).select('autoThankYouMessage autoReviewRequestMessage autoOrderedMessage orderedMessageText autoShippedMessage shippedMessageText').lean();
+    res.json({
+      success: true,
+      thankYou: !!(user && user.autoThankYouMessage),
+      reviewRequest: !!(user && user.autoReviewRequestMessage),
+      ordered: !!(user && user.autoOrderedMessage),
+      orderedText: (user && user.orderedMessageText) || '',
+      shipped: !!(user && user.autoShippedMessage),
+      shippedText: (user && user.shippedMessageText) || '',
+    });
   } catch (err) {
     console.error('auto message settings error:', err.message);
     res.status(500).json({ success: false, error: 'Could not read these settings.' });
   }
 });
 router.put('/auto-message-settings', requireAuth, async (req, res) => {
-  const { thankYou, reviewRequest } = req.body || {};
+  const { thankYou, reviewRequest, ordered, orderedText, shipped, shippedText } = req.body || {};
   if (thankYou !== undefined && typeof thankYou !== 'boolean') return res.status(400).json({ success: false, error: 'thankYou must be true or false.' });
   if (reviewRequest !== undefined && typeof reviewRequest !== 'boolean') return res.status(400).json({ success: false, error: 'reviewRequest must be true or false.' });
+  if (ordered !== undefined && typeof ordered !== 'boolean') return res.status(400).json({ success: false, error: 'ordered must be true or false.' });
+  if (shipped !== undefined && typeof shipped !== 'boolean') return res.status(400).json({ success: false, error: 'shipped must be true or false.' });
+  if (orderedText !== undefined && typeof orderedText !== 'string') return res.status(400).json({ success: false, error: 'orderedText must be text.' });
+  if (shippedText !== undefined && typeof shippedText !== 'string') return res.status(400).json({ success: false, error: 'shippedText must be text.' });
+  if (typeof orderedText === 'string' && orderedText.length > 1000) return res.status(400).json({ success: false, error: 'That message is too long (1000 characters max).' });
+  if (typeof shippedText === 'string' && shippedText.length > 1000) return res.status(400).json({ success: false, error: 'That message is too long (1000 characters max).' });
   try {
     const set = {};
     if (thankYou !== undefined) set.autoThankYouMessage = thankYou;
     if (reviewRequest !== undefined) set.autoReviewRequestMessage = reviewRequest;
+    if (ordered !== undefined) set.autoOrderedMessage = ordered;
+    if (shipped !== undefined) set.autoShippedMessage = shipped;
+    if (orderedText !== undefined) set.orderedMessageText = orderedText.trim() || null;
+    if (shippedText !== undefined) set.shippedMessageText = shippedText.trim() || null;
     const User = require('../models/schemas/User');
     await User.updateOne({ _id: req.userId }, { $set: set });
-    const user = await User.findById(req.userId).select('autoThankYouMessage autoReviewRequestMessage').lean();
-    res.json({ success: true, thankYou: !!user.autoThankYouMessage, reviewRequest: !!user.autoReviewRequestMessage });
+    const user = await User.findById(req.userId).select('autoThankYouMessage autoReviewRequestMessage autoOrderedMessage orderedMessageText autoShippedMessage shippedMessageText').lean();
+    res.json({
+      success: true,
+      thankYou: !!user.autoThankYouMessage,
+      reviewRequest: !!user.autoReviewRequestMessage,
+      ordered: !!user.autoOrderedMessage,
+      orderedText: user.orderedMessageText || '',
+      shipped: !!user.autoShippedMessage,
+      shippedText: user.shippedMessageText || '',
+    });
   } catch (err) {
     console.error('auto message settings error:', err.message);
     res.status(500).json({ success: false, error: 'Could not save these settings.' });
@@ -231,9 +260,27 @@ router.post('/:id/ordered', requireAuth, async (req, res) => {
   if (typeof buying === 'number' && (buying < 0 || buying > 1e9)) return res.status(400).json({ success: false, error: 'Enter the buying price as a number, 0 or more.' });
   if (typeof earning === 'number' && Math.abs(earning) > 1e9) return res.status(400).json({ success: false, error: 'That order earning is too large.' });
   try {
+    const before = await getOrderById(req.userId, req.params.id);
     const out = await markOrdered(req.userId, req.params.id, { ordered: body.ordered, deliveryDate, buyingPrice: buying, orderEarning: earning });
     if (out.error === 'not_found') return res.status(404).json({ success: false, error: 'Order not found.' });
     if (out.error === 'shipped') return res.status(409).json({ success: false, error: 'This order is already shipped, so it cannot be marked as not ordered / ordered any more.' });
+
+    // Fresh transition only - never on Undo, and never on re-editing the date/price of an order already marked ordered.
+    const justOrdered = body.ordered && before && before.fulfillment_status !== 'ordered_from_amazon';
+    if (justOrdered) {
+      require('../services/autoBuyerMessageService').maybeSendOrderedUpdateMessage({
+        userId: req.userId,
+        orderId: out.order.id,
+        ebayAccountId: out.order.ebay_account_id,
+        buyerUsername: out.order.buyer_username,
+        itemId: out.order.legacy_item_id,
+        itemTitle: out.order.item_title,
+        buyerFullName: out.order.shipping_address && out.order.shipping_address.fullName,
+        justOrdered: true,
+        alreadySent: !!out.order.ordered_message_at,
+      }).catch((err) => console.warn('[auto-message] ordered-update trigger failed:', err.message));
+    }
+
     res.json({ success: true, order: out.order });
   } catch (err) {
     console.error('mark ordered error:', err.message);
@@ -374,7 +421,8 @@ router.put('/:id/tracking', requireAuth, async (req, res) => {
   // it on. Fire-and-forget: the seller's "tracking saved" response should not wait on an eBay Message API round trip.
   const justShipped = updated && !order.tracking_number && !!converted.trackingNumber;
   if (justShipped) {
-    require('../services/autoBuyerMessageService').maybeSendReviewRequestMessage({
+    const autoMessages = require('../services/autoBuyerMessageService');
+    const payload = {
       userId: req.userId,
       orderId: updated.id,
       ebayAccountId: updated.ebay_account_id,
@@ -383,8 +431,9 @@ router.put('/:id/tracking', requireAuth, async (req, res) => {
       itemTitle: updated.item_title,
       buyerFullName: updated.shipping_address && updated.shipping_address.fullName,
       justShipped: true,
-      alreadySent: !!updated.review_message_at,
-    }).catch((err) => console.warn('[auto-message] review-request trigger failed:', err.message));
+    };
+    autoMessages.maybeSendReviewRequestMessage({ ...payload, alreadySent: !!updated.review_message_at }).catch((err) => console.warn('[auto-message] review-request trigger failed:', err.message));
+    autoMessages.maybeSendShippedUpdateMessage({ ...payload, alreadySent: !!updated.shipped_message_at }).catch((err) => console.warn('[auto-message] shipped-update trigger failed:', err.message));
   }
 
   // A buyer-facing code for elmstool.com/track/<code> - never the real tracking number or carrier, so it never
@@ -431,7 +480,8 @@ router.post('/:id/mark-shipped', requireAuth, async (req, res) => {
 
   const justShipped = updated && !['shipped', 'delivered'].includes(order.fulfillment_status);
   if (justShipped) {
-    require('../services/autoBuyerMessageService').maybeSendReviewRequestMessage({
+    const autoMessages = require('../services/autoBuyerMessageService');
+    const payload = {
       userId: req.userId,
       orderId: updated.id,
       ebayAccountId: updated.ebay_account_id,
@@ -440,8 +490,9 @@ router.post('/:id/mark-shipped', requireAuth, async (req, res) => {
       itemTitle: updated.item_title,
       buyerFullName: updated.shipping_address && updated.shipping_address.fullName,
       justShipped: true,
-      alreadySent: !!updated.review_message_at,
-    }).catch((err) => console.warn('[auto-message] review-request trigger failed:', err.message));
+    };
+    autoMessages.maybeSendReviewRequestMessage({ ...payload, alreadySent: !!updated.review_message_at }).catch((err) => console.warn('[auto-message] review-request trigger failed:', err.message));
+    autoMessages.maybeSendShippedUpdateMessage({ ...payload, alreadySent: !!updated.shipped_message_at }).catch((err) => console.warn('[auto-message] shipped-update trigger failed:', err.message));
   }
 
   res.json({ success: true, order: updated, ebayNotified, ebayError });

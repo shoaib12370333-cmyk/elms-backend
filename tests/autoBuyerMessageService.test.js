@@ -6,10 +6,10 @@ const assert = require('assert');
 const path = require('path');
 const stub = (rel, exports) => { const p = require.resolve(path.join('..', rel)); require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
 
-let userDoc = { autoThankYouMessage: false, autoReviewRequestMessage: false };
+let userDoc = { autoThankYouMessage: false, autoReviewRequestMessage: false, autoOrderedMessage: false, orderedMessageText: null, autoShippedMessage: false, shippedMessageText: null };
 let tokenFor = async () => 'rt-1';
 const updates = [];
-const sendCalls = { thankYou: [], review: [] };
+const sendCalls = { thankYou: [], review: [], ordered: [], shipped: [] };
 let sendResult = { status: 'sent' };
 
 stub('models/schemas/User', { findById: () => ({ select: () => ({ lean: async () => userDoc }) }) });
@@ -18,12 +18,16 @@ stub('models/ebayAccountsModel', { getEbayAccountRefreshToken: (...a) => tokenFo
 stub('services/buyerMessageService', {
   sendThankYouMessage: async (rt, args) => { sendCalls.thankYou.push({ rt, args }); return sendResult; },
   sendShippedReviewMessage: async (rt, args) => { sendCalls.review.push({ rt, args }); return sendResult; },
+  sendOrderedUpdateMessage: async (rt, args) => { sendCalls.ordered.push({ rt, args }); return sendResult; },
+  sendShippedUpdateMessage: async (rt, args) => { sendCalls.shipped.push({ rt, args }); return sendResult; },
 });
 
-const { maybeSendThankYouMessage, maybeSendReviewRequestMessage } = require('../services/autoBuyerMessageService');
+const { maybeSendThankYouMessage, maybeSendReviewRequestMessage, maybeSendOrderedUpdateMessage, maybeSendShippedUpdateMessage } = require('../services/autoBuyerMessageService');
 const reset = () => {
-  updates.length = 0; sendCalls.thankYou.length = 0; sendCalls.review.length = 0;
-  sendResult = { status: 'sent' }; userDoc = { autoThankYouMessage: false, autoReviewRequestMessage: false }; tokenFor = async () => 'rt-1';
+  updates.length = 0; sendCalls.thankYou.length = 0; sendCalls.review.length = 0; sendCalls.ordered.length = 0; sendCalls.shipped.length = 0;
+  sendResult = { status: 'sent' };
+  userDoc = { autoThankYouMessage: false, autoReviewRequestMessage: false, autoOrderedMessage: false, orderedMessageText: null, autoShippedMessage: false, shippedMessageText: null };
+  tokenFor = async () => 'rt-1';
 };
 const base = { userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 'buyer1', itemId: '1', itemTitle: 'X', buyerFullName: 'Jane Doe' };
 
@@ -93,6 +97,54 @@ const base = { userId: 'u1', orderId: 'o1', ebayAccountId: 'a1', buyerUsername: 
   reset(); userDoc.autoReviewRequestMessage = true;
   await maybeSendReviewRequestMessage({ ...base, justShipped: true, alreadySent: true });
   assert.strictEqual(sendCalls.review.length, 0, 'already sent once');
+
+  // ---------- ordered-update: fires on a fresh "mark as ordered", not on Undo/edit, not when the setting is off, not twice ----------
+  reset(); userDoc.autoOrderedMessage = true;
+  await maybeSendOrderedUpdateMessage({ ...base, justOrdered: true, alreadySent: false });
+  assert.strictEqual(sendCalls.ordered.length, 1);
+  assert.strictEqual(sendCalls.ordered[0].args.customTemplate, null, 'no custom wording saved: the default is used (customTemplate null)');
+  assert.ok(updates[0].set.orderedMessageAt instanceof Date);
+
+  reset(); userDoc.autoOrderedMessage = false;
+  await maybeSendOrderedUpdateMessage({ ...base, justOrdered: true, alreadySent: false });
+  assert.strictEqual(sendCalls.ordered.length, 0, 'setting off');
+
+  reset(); userDoc.autoOrderedMessage = true;
+  await maybeSendOrderedUpdateMessage({ ...base, justOrdered: false, alreadySent: false });
+  assert.strictEqual(sendCalls.ordered.length, 0, 'not a fresh "mark as ordered" (an Undo, or editing an already-ordered order)');
+
+  reset(); userDoc.autoOrderedMessage = true;
+  await maybeSendOrderedUpdateMessage({ ...base, justOrdered: true, alreadySent: true });
+  assert.strictEqual(sendCalls.ordered.length, 0, 'already sent once');
+
+  // the seller's own wording is threaded straight through to the lower-level send call
+  reset(); userDoc.autoOrderedMessage = true; userDoc.orderedMessageText = 'Hi {{buyer_name}}, custom ordered text';
+  await maybeSendOrderedUpdateMessage({ ...base, justOrdered: true, alreadySent: false });
+  assert.strictEqual(sendCalls.ordered[0].args.customTemplate, 'Hi {{buyer_name}}, custom ordered text');
+
+  // ---------- shipped-update: same gating, completely independent of the review-request toggle/field ----------
+  reset(); userDoc.autoShippedMessage = true;
+  await maybeSendShippedUpdateMessage({ ...base, justShipped: true, alreadySent: false });
+  assert.strictEqual(sendCalls.shipped.length, 1);
+  assert.ok(updates[0].set.shippedMessageAt instanceof Date);
+
+  reset(); userDoc.autoShippedMessage = false;
+  await maybeSendShippedUpdateMessage({ ...base, justShipped: true, alreadySent: false });
+  assert.strictEqual(sendCalls.shipped.length, 0, 'setting off');
+
+  reset(); userDoc.autoShippedMessage = true;
+  await maybeSendShippedUpdateMessage({ ...base, justShipped: true, alreadySent: true });
+  assert.strictEqual(sendCalls.shipped.length, 0, 'already sent once');
+
+  reset(); userDoc.autoShippedMessage = true; userDoc.shippedMessageText = 'Custom shipped text';
+  await maybeSendShippedUpdateMessage({ ...base, justShipped: true, alreadySent: false });
+  assert.strictEqual(sendCalls.shipped[0].args.customTemplate, 'Custom shipped text');
+
+  // turning review-request on never turns on (or sends) the shipped-update message, and vice versa - two separate fields
+  reset(); userDoc.autoReviewRequestMessage = true; userDoc.autoShippedMessage = false;
+  await maybeSendReviewRequestMessage({ ...base, justShipped: true, alreadySent: false });
+  await maybeSendShippedUpdateMessage({ ...base, justShipped: true, alreadySent: false });
+  assert.strictEqual(sendCalls.review.length, 1); assert.strictEqual(sendCalls.shipped.length, 0);
 
   console.log('auto buyer message service tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
