@@ -61,6 +61,19 @@ const { signedHeaders, signingConfigured } = require('../services/ebayDigitalSig
   const headers2 = await signedHeaders({ method: 'GET', path: '/sell/finances/v1/transaction', host: 'apiz.ebay.com' });
   assert.strictEqual(await sdk.validateSignatureHeader(headers2, verifyConfig), true);
 
+  // ---------- real-world mangled pastes (the exact "error:1E08010C:DECODER routines::unsupported" a user hit when
+  // Render's env var box collapsed the key) - each must still produce a header whose signature verifies ----------
+  const mangled = {
+    'squished onto one line, no newline anywhere (BEGIN/body/END all glued together)': privateKey.replace(/\n/g, ''),
+    'CRLF line endings': privateKey.replace(/\n/g, '\r\n'),
+    'extra blank lines and leading/trailing whitespace': '  \n' + privateKey.replace(/\n/g, '\n\n') + '\n  ',
+  };
+  for (const [label, value] of Object.entries(mangled)) {
+    process.env.EBAY_SIGNING_KEY_PRIVATE = value;
+    const h = await signedHeaders({ method: 'GET', path: '/sell/finances/v1/transaction', host: 'apiz.ebay.com' });
+    assert.strictEqual(await sdk.validateSignatureHeader(h, verifyConfig), true, label);
+  }
+
   if (savedJwe === undefined) delete process.env.EBAY_SIGNING_KEY_JWE; else process.env.EBAY_SIGNING_KEY_JWE = savedJwe;
   if (savedPrivate === undefined) delete process.env.EBAY_SIGNING_KEY_PRIVATE; else process.env.EBAY_SIGNING_KEY_PRIVATE = savedPrivate;
 
