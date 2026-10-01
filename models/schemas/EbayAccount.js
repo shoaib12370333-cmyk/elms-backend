@@ -31,6 +31,12 @@ const ebayAccountSchema = new mongoose.Schema(
     returnPolicyId: { type: String, default: null },
     marketplaceId: { type: String, default: 'EBAY_US' },
 
+    // Set when jobs/orderEarningsSync.js hits an unrecoverable auth error for this account (most often: the account
+    // was connected before the sell.finances scope was added, so its stored consent does not cover it) - null once a
+    // sync run completes without that error again (e.g. after the seller reconnects). Shown in Settings so a silent,
+    // permanently-stuck "Order earning" column has a visible, actionable reason instead of just a server log line.
+    financesSyncError: { type: String, default: null },
+
     // Product (item) location for listings published through this account.
     productLocationMode: { type: String, enum: ['merchant', 'custom'], default: 'merchant' },
     customPostalCode: { type: String, default: null },

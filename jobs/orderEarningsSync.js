@@ -48,6 +48,7 @@ async function syncOneAccount(account) {
   }
 
   const updates = [];
+  let scopeError = null;
   for (const [ebayOrderId, lines] of byOrder) {
     try {
       const transactions = await fetchSaleTransactionsForOrder(refreshToken, ebayOrderId, account.marketplaceId);
@@ -56,11 +57,18 @@ async function syncOneAccount(account) {
       updates.push(...splitProportionally(earning.amount, lines));
     } catch (err) {
       if (looksLikeMissingScope(err)) {
+        scopeError = err.message;
         console.warn(`[order-earnings] ${account.ebayUserId}: ${err.message} - likely needs to reconnect eBay for the new Finances permission. Skipping this account for now.`);
         break;
       }
       console.warn(`[order-earnings] ${account.ebayUserId} order ${ebayOrderId}: ${err.message}`);
     }
+  }
+  // Surfaced in Settings (ebayAccountsModel.js serialize) so a permanently-stuck account is visible, not just logged.
+  if (scopeError) {
+    await EbayAccount.updateOne({ _id: account._id }, { $set: { financesSyncError: scopeError } }).catch(() => {});
+  } else if (account.financesSyncError) {
+    await EbayAccount.updateOne({ _id: account._id }, { $set: { financesSyncError: null } }).catch(() => {});
   }
   if (!updates.length) return { updated: 0 };
   const updated = await setOrderEarningsBulk(updates);

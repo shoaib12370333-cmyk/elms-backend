@@ -278,6 +278,7 @@ function serialize(doc) {
     customPostalCode: obj.customPostalCode,
     customCountryCode: obj.customCountryCode,
     isActive: obj.isActive,
+    financesSyncError: obj.financesSyncError || null,
     connected: !obj.disconnectedAt,
     disconnectedAt: obj.disconnectedAt || null,
     createdAt: obj.createdAt,
