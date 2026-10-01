@@ -78,6 +78,15 @@ const { signedHeaders, signingConfigured } = require('../services/ebayDigitalSig
     assert.strictEqual(await sdk.validateSignatureHeader(h, verifyConfig), true, label);
   }
 
+  // ---------- pasting the setup script's own printed "NAME=value" console line straight into Render's Value box
+  // doubles the variable's own name onto the front of its value - a real, easy mistake to make copying console
+  // output. Both vars must survive it. ----------
+  process.env.EBAY_SIGNING_KEY_PRIVATE = 'EBAY_SIGNING_KEY_PRIVATE=' + bareBase64;
+  process.env.EBAY_SIGNING_KEY_JWE = 'EBAY_SIGNING_KEY_JWE=' + jwe;
+  const headers3 = await signedHeaders({ method: 'GET', path: '/sell/finances/v1/transaction', host: 'apiz.ebay.com' });
+  assert.strictEqual(headers3['x-ebay-signature-key'], jwe, 'the doubled "EBAY_SIGNING_KEY_JWE=" prefix is stripped back off');
+  assert.strictEqual(await sdk.validateSignatureHeader(headers3, verifyConfig), true);
+
   if (savedJwe === undefined) delete process.env.EBAY_SIGNING_KEY_JWE; else process.env.EBAY_SIGNING_KEY_JWE = savedJwe;
   if (savedPrivate === undefined) delete process.env.EBAY_SIGNING_KEY_PRIVATE; else process.env.EBAY_SIGNING_KEY_PRIVATE = savedPrivate;
 
