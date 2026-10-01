@@ -121,5 +121,37 @@ const { runOrderEarningsSync, splitProportionally } = require('../jobs/orderEarn
   assert.strictEqual(callsInvalidToken, 1, 'a dead refresh token also stops the rest of this account\'s orders on the first failure');
   assert.strictEqual(bulkCalls.flat().length, 0);
 
+  // ---------- a plain, non-scope-shaped error (not 401/403, no scope/token wording) that fails EVERY pending order
+  // this run is also surfaced - not just the missing-scope case - since from the seller's side both look identical:
+  // the column simply never fills in, forever, with nothing to see but a server log line ----------
+  pendingByAccount = { acc1: [
+    { _id: 'l12', ebayOrderId: 'O11', salePrice: 9 },
+    { _id: 'l13', ebayOrderId: 'O12', salePrice: 9 },
+  ] };
+  nextTransactions = async () => { const e = new Error('Invalid marketplace id.'); e.statusCode = 400; throw e; };
+  updateOneCalls.length = 0; bulkCalls.length = 0;
+  await runOrderEarningsSync();
+  assert.strictEqual(updateOneCalls.length, 1);
+  assert.strictEqual(updateOneCalls[0].update.$set.financesSyncError, 'Invalid marketplace id.');
+  assert.strictEqual(accounts[0].financesSyncError, 'Invalid marketplace id.');
+
+  // ---------- a PARTIAL failure (one order errors, another still comes back fine) is left alone - not every order
+  // failed, so this is treated as normal rather than flagged as a stuck account ----------
+  let partialCall = 0;
+  pendingByAccount = { acc1: [
+    { _id: 'l14', ebayOrderId: 'O13', salePrice: 9 },
+    { _id: 'l15', ebayOrderId: 'O14', salePrice: 9 },
+  ] };
+  nextTransactions = async () => {
+    partialCall++;
+    if (partialCall === 1) { const e = new Error('Temporary eBay hiccup'); e.statusCode = 500; throw e; }
+    return [{ transactionType: 'SALE', amount: { value: '9.00', currency: 'GBP' } }];
+  };
+  updateOneCalls.length = 0; bulkCalls.length = 0;
+  await runOrderEarningsSync();
+  assert.strictEqual(bulkCalls.flat().length, 1, 'the order that did come back fine is still saved');
+  assert.strictEqual(updateOneCalls.length, 0, 'one order out of two failing is not enough to flag the whole account');
+  assert.strictEqual(accounts[0].financesSyncError, 'Invalid marketplace id.', 'the stale flag from the fully-failed run above is left as is, since this run did not fully succeed either');
+
   console.log('order earnings sync tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });

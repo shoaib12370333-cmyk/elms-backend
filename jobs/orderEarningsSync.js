@@ -48,7 +48,8 @@ async function syncOneAccount(account) {
   }
 
   const updates = [];
-  let scopeError = null;
+  let errorCount = 0;
+  let lastError = null;
   for (const [ebayOrderId, lines] of byOrder) {
     try {
       const transactions = await fetchSaleTransactionsForOrder(refreshToken, ebayOrderId, account.marketplaceId);
@@ -56,8 +57,9 @@ async function syncOneAccount(account) {
       if (!earning) continue; // not settled on eBay's side yet - try again next run
       updates.push(...splitProportionally(earning.amount, lines));
     } catch (err) {
+      errorCount += 1;
+      lastError = err.message;
       if (looksLikeMissingScope(err)) {
-        scopeError = err.message;
         console.warn(`[order-earnings] ${account.ebayUserId}: ${err.message} - likely needs to reconnect eBay for the new Finances permission. Skipping this account for now.`);
         break;
       }
@@ -65,9 +67,14 @@ async function syncOneAccount(account) {
     }
   }
   // Surfaced in Settings (ebayAccountsModel.js serialize) so a permanently-stuck account is visible, not just logged.
-  if (scopeError) {
-    await EbayAccount.updateOne({ _id: account._id }, { $set: { financesSyncError: scopeError } }).catch(() => {});
-  } else if (account.financesSyncError) {
+  // Not just the missing-scope case (above): ANY error that stops every single order this run from getting an
+  // earning - a wrong/stale marketplaceId on the account, a malformed request, whatever eBay actually says - would
+  // otherwise retry silently forever with nothing to see but a server log line. A run where at least one order came
+  // back fine (even if another failed) is left alone: that is normal, partial, and not worth a scary warning.
+  const allFailed = errorCount > 0 && !updates.length;
+  if (allFailed) {
+    if (account.financesSyncError !== lastError) await EbayAccount.updateOne({ _id: account._id }, { $set: { financesSyncError: lastError } }).catch(() => {});
+  } else if (errorCount === 0 && account.financesSyncError) {
     await EbayAccount.updateOne({ _id: account._id }, { $set: { financesSyncError: null } }).catch(() => {});
   }
   if (!updates.length) return { updated: 0 };
