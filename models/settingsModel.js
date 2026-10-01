@@ -188,8 +188,8 @@ async function updateCustomPlanSettings(input = {}) {
   return next;
 }
 
-const LIMIT_DEFAULTS = { netProfitFreeLines: 1000, bulkImportMax: 25, bulkJobMax: 2500, mailBatchSize: 20, mailDailyCap: 200, productCacheDays: 7 };
-const LIMIT_RANGES = { netProfitFreeLines: [1, 100000], bulkImportMax: [1, 50], bulkJobMax: [1, 2500], mailBatchSize: [1, 100], mailDailyCap: [1, 100000], productCacheDays: [1, 90] };
+const LIMIT_DEFAULTS = { netProfitFreeLines: 1000, bulkImportMax: 25, bulkJobMax: 2500, mailBatchSize: 20, mailDailyCap: 200, productCacheDays: 7, catalogRetentionDays: 14 };
+const LIMIT_RANGES = { netProfitFreeLines: [1, 100000], bulkImportMax: [1, 50], bulkJobMax: [1, 2500], mailBatchSize: [1, 100], mailDailyCap: [1, 100000], productCacheDays: [1, 90], catalogRetentionDays: [1, 365] };
 
 async function getLimits() {
   const doc = await Settings.findOne({ key: 'global' }).lean();
