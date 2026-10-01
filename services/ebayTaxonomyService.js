@@ -6,7 +6,10 @@ const { getMarketplaceConfig, assertSupportedMarketplace } = require('../config/
 // Category tree IDs rarely (if ever) change for a given marketplace, so we
 // cache them in memory once fetched instead of calling getDefaultCategoryTreeId
 // before every single suggestion request.
-const categoryAspectsCache = {};
+// Keyed by category id (bounded by eBay's own category tree per marketplace, but never shrinks on its own - capped
+// the same way as `memory` above).
+const CATEGORY_CACHE_MAX = 5000;
+const categoryAspectsCache = new Map();
 
 // ---------- fewer calls to eBay ----------
 // eBay counts every Taxonomy call against the application's daily limit (5,000 by default, all sellers together). What comes back hardly
@@ -22,9 +25,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const TTL = { tree: 30 * DAY_MS, aspects: 7 * DAY_MS, info: 7 * DAY_MS, suggest: 14 * DAY_MS };
 const MEMORY_MS = 6 * 60 * 60 * 1000;
 const MAX_ROW_CHARS = 3000000;
+// One key per distinct product title (suggest:) or category (aspects:/info:) ever looked up - with sellers importing
+// different products every day this would otherwise grow for as long as the process runs. A stale entry is only ever
+// found "expired" on read (and overwritten), never actually removed, so the cap below is what keeps memory bounded.
+const MEMORY_MAX = 5000;
 const memory = new Map();
 const inflight = new Map();
 const dbReady = () => !!(mongoose.connection && mongoose.connection.readyState === 1);
+
+function rememberValue(key, value, ttlMs) {
+  memory.set(key, { value, expires: Date.now() + Math.min(ttlMs, MEMORY_MS) });
+  if (memory.size > MEMORY_MAX) memory.delete(memory.keys().next().value);
+}
 
 async function remember(key, ttlMs, load, { encode = (v) => v, decode = (v) => v } = {}) {
   const hit = memory.get(key);
@@ -36,13 +48,13 @@ async function remember(key, ttlMs, load, { encode = (v) => v, decode = (v) => v
         const row = await TaxonomyCache.findOne({ key, expireAt: { $gt: new Date() } }).lean();
         if (row) {
           const value = decode(row.data);
-          memory.set(key, { value, expires: Date.now() + Math.min(ttlMs, MEMORY_MS) });
+          rememberValue(key, value, ttlMs);
           return value;
         }
       } catch (_) { /* the database is only a help: ask eBay */ }
     }
     const value = await load();
-    memory.set(key, { value, expires: Date.now() + Math.min(ttlMs, MEMORY_MS) });
+    rememberValue(key, value, ttlMs);
     if (dbReady()) {
       try {
         const data = encode(value);
@@ -202,7 +214,7 @@ async function fetchItemAspects(refreshToken, categoryId, marketplaceId = 'EBAY_
   if (!categoryId) throw new Error('A categoryId is required.');
   const treeId = await getCategoryTreeId(refreshToken, marketplaceId);
   const cacheKey = `${marketplaceId}:${treeId}:${categoryId}`;
-  if (categoryAspectsCache[cacheKey]) return categoryAspectsCache[cacheKey];
+  if (categoryAspectsCache.has(cacheKey)) return categoryAspectsCache.get(cacheKey);
 
   const data = await ebayGet(refreshToken,
     `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(treeId)}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`,
@@ -229,11 +241,12 @@ async function fetchItemAspects(refreshToken, categoryId, marketplaceId = 'EBAY_
   }).filter(a => a.name) : [];
 
   const result = { categoryId: String(categoryId), categoryTreeId: String(treeId), aspects };
-  categoryAspectsCache[cacheKey] = result;
+  categoryAspectsCache.set(cacheKey, result);
+  if (categoryAspectsCache.size > CATEGORY_CACHE_MAX) categoryAspectsCache.delete(categoryAspectsCache.keys().next().value);
   return result;
 }
 
-const categoryInfoCache = {};
+const categoryInfoCache = new Map();
 
 /**
  * Name and leaf-status of one category on a marketplace's tree. eBay only accepts listings in a LEAF
@@ -245,7 +258,7 @@ async function fetchCategoryInfo(refreshToken, categoryId, marketplaceId = 'EBAY
   if (!categoryId) throw new Error('A categoryId is required.');
   const treeId = await getCategoryTreeId(refreshToken, marketplaceId);
   const cacheKey = `${marketplaceId}:${treeId}:${categoryId}`;
-  if (categoryInfoCache[cacheKey]) return categoryInfoCache[cacheKey];
+  if (categoryInfoCache.has(cacheKey)) return categoryInfoCache.get(cacheKey);
 
   const data = await ebayGet(refreshToken,
     `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(treeId)}/get_category_subtree?category_id=${encodeURIComponent(categoryId)}`,
@@ -259,7 +272,8 @@ async function fetchCategoryInfo(refreshToken, categoryId, marketplaceId = 'EBAY
     isLeaf: node.leafCategoryTreeNode === true || children.length === 0,
     childNames: children.map((c) => c.category?.categoryName).filter(Boolean).slice(0, 6),
   };
-  categoryInfoCache[cacheKey] = info;
+  categoryInfoCache.set(cacheKey, info);
+  if (categoryInfoCache.size > CATEGORY_CACHE_MAX) categoryInfoCache.delete(categoryInfoCache.keys().next().value);
   return info;
 }
 
@@ -288,4 +302,8 @@ async function getCategoryInfo(refreshToken, categoryId, marketplaceId = 'EBAY_U
   return remember('info:' + marketplaceId + ':' + treeId + ':' + categoryId, TTL.info, () => fetchCategoryInfo(refreshToken, categoryId, marketplaceId));
 }
 
-module.exports = { suggestCategories, getItemAspectsForCategory, getCategoryInfo, buildCategoryQuery, _memory: memory, _resetCoolDown: () => { coolDownUntil = 0; } };
+module.exports = {
+  suggestCategories, getItemAspectsForCategory, getCategoryInfo, buildCategoryQuery,
+  _memory: memory, _categoryAspectsCache: categoryAspectsCache, _categoryInfoCache: categoryInfoCache,
+  _resetCoolDown: () => { coolDownUntil = 0; },
+};

@@ -1112,6 +1112,7 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
 
 const policyCostTypeCache = new Map();
 const POLICY_CACHE_MS = 10 * 60 * 1000;
+const POLICY_CACHE_MAX = 2000;
 
 /**
  * Does this fulfillment policy use CALCULATED shipping (weight/size based)? Such a policy makes eBay
@@ -1131,6 +1132,7 @@ async function fulfillmentPolicyUsesCalculatedShipping(refreshToken, fulfillment
     const options = Array.isArray(policy?.shippingOptions) ? policy.shippingOptions : [];
     const value = options.some((o) => String(o.costType).toUpperCase() === 'CALCULATED');
     policyCostTypeCache.set(key, { value, at: Date.now() });
+    if (policyCostTypeCache.size > POLICY_CACHE_MAX) policyCostTypeCache.delete(policyCostTypeCache.keys().next().value);
     return value;
   } catch (err) {
     console.warn('fulfillment policy lookup failed:', err.message);
@@ -1403,4 +1405,5 @@ module.exports = {
   createOrGetCustomLocation,
   fulfillmentPolicyUsesCalculatedShipping,
   VERIFY_RETRY,
+  _policyCostTypeCache: policyCostTypeCache,
 };
