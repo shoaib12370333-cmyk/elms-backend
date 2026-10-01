@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { ordersSummary, listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing } = require('../models/ordersModel');
+const { ordersSummary, listOrders, updateFulfillmentStatus, upsertOrder, getOrderById, setTracking, markShippedNoTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing } = require('../models/ordersModel');
 const { listEbayAccounts, getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { fetchOrderById, normalizeOrderLineItems, createShippingFulfillment } = require('../services/ebayOrdersService');
@@ -398,6 +398,53 @@ router.put('/:id/tracking', requireAuth, async (req, res) => {
   }
 
   res.json({ success: true, order: updated, trackingConversion: converted, ebayNotified, ebayError, trackingCode });
+});
+
+/**
+ * POST /api/orders/:id/mark-shipped
+ * Marks an order as shipped on eBay with NO tracking number - for a seller who ships it themselves and has no
+ * tracking number to enter (or doesn't have one yet but needs to beat eBay's ship-by deadline). Pushes a shipping
+ * fulfillment to eBay with just the line item and today's date (services/ebayOrdersService.js createShippingFulfillment
+ * omits trackingNumber/shippingCarrierCode entirely when none is given - eBay's API accepts that). A tracking number
+ * can still be added afterwards through PUT /:id/tracking, exactly as if it had been entered from the start.
+ */
+router.post('/:id/mark-shipped', requireAuth, async (req, res) => {
+  const order = await getOrderById(req.userId, req.params.id);
+  if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
+
+  let ebayNotified = false;
+  let ebayError = null;
+  if (order.ebay_order_id && order.ebay_line_item_id && order.ebay_account_id) {
+    try {
+      const refreshToken = await getEbayAccountRefreshToken(req.userId, order.ebay_account_id);
+      if (refreshToken) {
+        await createShippingFulfillment(refreshToken, order.ebay_order_id, order.ebay_line_item_id, order.quantity);
+        ebayNotified = true;
+      }
+    } catch (err) {
+      ebayError = err.message;
+      console.warn('Could not mark order as shipped on eBay (no tracking):', err.message);
+    }
+  }
+
+  const updated = await markShippedNoTracking(req.userId, req.params.id);
+
+  const justShipped = updated && !['shipped', 'delivered'].includes(order.fulfillment_status);
+  if (justShipped) {
+    require('../services/autoBuyerMessageService').maybeSendReviewRequestMessage({
+      userId: req.userId,
+      orderId: updated.id,
+      ebayAccountId: updated.ebay_account_id,
+      buyerUsername: updated.buyer_username,
+      itemId: updated.legacy_item_id,
+      itemTitle: updated.item_title,
+      buyerFullName: updated.shipping_address && updated.shipping_address.fullName,
+      justShipped: true,
+      alreadySent: !!updated.review_message_at,
+    }).catch((err) => console.warn('[auto-message] review-request trigger failed:', err.message));
+  }
+
+  res.json({ success: true, order: updated, ebayNotified, ebayError });
 });
 
 /**

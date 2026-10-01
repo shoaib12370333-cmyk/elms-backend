@@ -309,6 +309,18 @@ async function setTracking(userId, id, trackingNumber, shippingCarrier) {
   return doc ? serialize(doc) : null;
 }
 
+/**
+ * Marks an order as shipped WITHOUT a tracking number - eBay's Fulfillment API accepts a shipping fulfillment with
+ * just lineItems/shippedDate (see services/ebayOrdersService.js createShippingFulfillment), for sellers who ship
+ * themselves and have no tracking number to enter, or don't want to wait for one before eBay's ship-by deadline.
+ * Never writes trackingNumber/shippingCarrier - an order marked this way, then later given a real tracking number
+ * via setTracking, still goes through the normal "add tracking" flow with no special-casing needed.
+ */
+async function markShippedNoTracking(userId, id) {
+  const doc = await Order.findOneAndUpdate({ _id: id, userId }, { fulfillmentStatus: 'shipped' }, { new: true });
+  return doc ? serialize(doc) : null;
+}
+
 async function linkAmazonOrder(userId, id, amazonOrderId, fulfillmentStatus = 'ordered_from_amazon') {
   const value = String(amazonOrderId || '').trim();
   if (!value) throw new Error('An Amazon order ID is required.');
@@ -646,4 +658,4 @@ async function setOrderEarningsBulk(updates) {
   return result.modifiedCount || 0;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, _summaryCache: summaryCache };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, _summaryCache: summaryCache };
