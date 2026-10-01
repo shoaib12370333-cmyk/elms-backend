@@ -3,11 +3,12 @@ const { checkAvailabilityByAsin, detectCountryFromUrl } = require('../services/c
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
 const { sourceCurrency } = require('../config/amazonDomains');
 const { convertAmount } = require('../services/currencyService');
-const { withdrawListing, updateOfferPrice, updateOfferQuantity } = require('../services/ebayListingService');
+const { withdrawListing, updateOfferPrice, updateOfferQuantity, isAccountBlockedError } = require('../services/ebayListingService');
 const { getSavedMargin, repriceFor } = require('../services/repricingService');
 const { listPublishedListings, markEnded, updateListing } = require('../models/listingsModel');
 const { updateImportPrice } = require('../models/importsModel');
 const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
+const { createSystemNotification } = require('../models/systemNotificationsModel');
 const { acquireLock } = require('../services/jobLockService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const cjAdapter = require('../services/cjAdapter');
@@ -30,6 +31,24 @@ function supplierCountryOf(listing) {
 }
 
 /**
+ * eBay blocking the whole account (see services/ebayListingService.js isAccountBlockedError) would otherwise fail
+ * the SAME way for every published listing's withdraw/quantity/price write, every run, with nothing but a
+ * console.error the seller never sees (compare services/publishQueueService.js, which tells the seller in-app the
+ * moment a manual publish fails). `state` is one plain object per call to runStockCheckForUser, so this still fires
+ * only once per day per user no matter how many listings or writes hit it in that one run.
+ */
+async function notifyAccountBlockedOnce(user, err, state) {
+  if (state.notified || !isAccountBlockedError(err)) return;
+  state.notified = true;
+  await createSystemNotification(user.id, {
+    type: 'ebay_account_blocked',
+    level: 'error',
+    title: 'eBay has paused this store',
+    message: err.message,
+  }).catch(() => {});
+}
+
+/**
  * Checks stock for one user's published listings, ending any that have gone
  * out of stock on Amazon. Spends credits per ACTION_COSTS.STOCK_MONITORING
  * per listing checked (admins are never charged). Stops early if the user
@@ -44,6 +63,7 @@ async function runStockCheckForUser(user) {
   }
 
   console.log(`[stock-monitor] ${user.email}: checking stock for ${publishedListings.length} listing(s)...`);
+  const blockState = { notified: false };
 
   for (const listing of publishedListings) {
     // Both monitors switched off for this product in the listing editor: skip it (and save the credit).
@@ -52,7 +72,7 @@ async function runStockCheckForUser(user) {
     // CJdropshipping listings never touch Canopy/checkAvailabilityByAsin (Amazon-only): they go through their own function,
     // which uses only services/cjAdapter.js and its own credit key (ACTION_COSTS.CJ_STOCK_MONITORING).
     if (listing.source_platform === 'cj') {
-      const keepGoing = await checkCjListing(user, listing);
+      const keepGoing = await checkCjListing(user, listing, blockState);
       if (!keepGoing) break;
       continue;
     }
@@ -105,6 +125,7 @@ async function runStockCheckForUser(user) {
           await withdrawListing(refreshToken, listing.ebay_offer_id);
         } catch (withdrawErr) {
           console.error(`[stock-monitor] Could not withdraw eBay listing ${listing.sku}; leaving it published for retry: ${withdrawErr.message}`);
+          await notifyAccountBlockedOnce(user, withdrawErr, blockState);
           continue;
         }
 
@@ -125,13 +146,13 @@ async function runStockCheckForUser(user) {
       // not an exact supplier quantity. This avoids inventing a supplier
       // quantity and reduces overselling risk. Once an exact quantity source
       // is available, this can be replaced with the real quantity.
-      if (listing.stock_monitoring !== false) await syncStockQuantity(user, listing, availability);
+      if (listing.stock_monitoring !== false) await syncStockQuantity(user, listing, availability, blockState);
 
       // Still in stock - check whether Amazon's price moved, and keep the
       // eBay price in sync (see syncPriceIfChanged below). This reuses the
       // availability response above, so it's not a second Canopy call and
       // not a second credit charge (ACTION_COSTS.PRICE_MONITORING is 0).
-      if (listing.price_monitoring !== false) await syncPriceIfChanged(user, listing, availability);
+      if (listing.price_monitoring !== false) await syncPriceIfChanged(user, listing, availability, blockState);
     } catch (err) {
       // A failed check (rate limit, network issue, etc.) should not end the
       // listing - we just log it and try again on the next scheduled run.
@@ -151,7 +172,7 @@ async function runStockCheckForUser(user) {
  * quantity that is not the safe quantity. This keeps unnecessary listing
  * revisions low.
  */
-async function syncStockQuantity(user, listing, availability) {
+async function syncStockQuantity(user, listing, availability, blockState) {
   if (!availability?.inStock || !listing.ebay_offer_id) return;
 
   const safeQuantity = 1;
@@ -191,6 +212,7 @@ async function syncStockQuantity(user, listing, availability) {
     // Do not record a successful sync when eBay rejected/timed out. The
     // unchanged state makes the next scheduled run retry automatically.
     console.error(`[stock-monitor] Could not sync eBay quantity for ${listing.sku}: ${err.message}`);
+    await notifyAccountBlockedOnce(user, err, blockState);
   }
 }
 
@@ -206,7 +228,7 @@ async function syncStockQuantity(user, listing, availability) {
  * check regardless of whether the eBay price actually moved, so the next
  * check compares against the immediately previous Amazon price.
  */
-async function syncPriceIfChanged(user, listing, availability) {
+async function syncPriceIfChanged(user, listing, availability, blockState) {
   const newAmazonPrice = Number(availability.price);
   if (!Number.isFinite(newAmazonPrice) || newAmazonPrice <= 0) return;
 
@@ -290,6 +312,7 @@ async function syncPriceIfChanged(user, listing, availability) {
     console.log(`[price-monitor] ${listing.sku}: Amazon ${oldAmazonPrice} -> ${newAmazonPrice}, eBay ${listing.sell_price} -> ${newSellPrice}, ${repriced.rule ? 'by the pricing rule' : 'fixed margin ' + effectiveMargin}.`);
   } catch (err) {
     console.error(`[price-monitor] Could not update eBay price for ${listing.sku}: ${err.message}`);
+    await notifyAccountBlockedOnce(user, err, blockState);
   } finally {
     if (listing.import_id) await updateImportPrice(user.id, listing.import_id, newAmazonPrice).catch(() => {});
   }
@@ -318,7 +341,7 @@ function cjPrimaryWarehouse(variant) {
  * the CJ counterpart of the Amazon in-stock/price branch above, using only services/cjAdapter.js.
  * @returns {Promise<boolean>} false when the user is out of credits (the caller stops checking this user's remaining listings)
  */
-async function checkCjListing(user, listing) {
+async function checkCjListing(user, listing, blockState) {
   if (!listing.cj_product_id || !listing.cj_variant_id) {
     console.warn(`[cj-stock-monitor] Listing ${listing.id} (SKU ${listing.sku}) has no CJ ids, skipping.`);
     return true;
@@ -360,6 +383,7 @@ async function checkCjListing(user, listing) {
         await withdrawListing(refreshToken, listing.ebay_offer_id);
       } catch (withdrawErr) {
         console.error(`[cj-stock-monitor] Could not withdraw eBay listing ${listing.sku}; leaving it published for retry: ${withdrawErr.message}`);
+        await notifyAccountBlockedOnce(user, withdrawErr, blockState);
         return true;
       }
       await updateListing(user.id, listing.id, { amazonInStock: false, lastStockSyncedAt: new Date(), lastStockCheckedAt: new Date(), markDraftCustomized: false });
@@ -368,8 +392,8 @@ async function checkCjListing(user, listing) {
       return true;
     }
 
-    if (listing.stock_monitoring !== false) await syncCjStockQuantity(user, listing, inventory);
-    if (listing.price_monitoring !== false) await syncCjPriceIfChanged(user, listing, variant);
+    if (listing.stock_monitoring !== false) await syncCjStockQuantity(user, listing, inventory, blockState);
+    if (listing.price_monitoring !== false) await syncCjPriceIfChanged(user, listing, variant, blockState);
     return true;
   } catch (err) {
     console.error(`[cj-stock-monitor] Could not check stock for ${listing.sku}: ${err.message}`);
@@ -378,7 +402,7 @@ async function checkCjListing(user, listing) {
 }
 
 /** Keeps eBay's quantity equal to CJ's real inventory (unlike Amazon, CJ gives an exact number, not just in/out of stock) - capped at 999 defensively, so a warehouse count in the tens of thousands never gets sent to eBay as-is. */
-async function syncCjStockQuantity(user, listing, inventory) {
+async function syncCjStockQuantity(user, listing, inventory, blockState) {
   if (!listing.ebay_offer_id) return;
   const safeQuantity = Math.min(inventory, 999);
   if (listing.amazon_in_stock === true && Number(listing.quantity) === safeQuantity) {
@@ -396,6 +420,7 @@ async function syncCjStockQuantity(user, listing, inventory) {
     console.log(`[cj-stock-monitor] ${listing.sku}: CJ has ${inventory} in stock; eBay quantity synchronized to ${safeQuantity}.`);
   } catch (err) {
     console.error(`[cj-stock-monitor] Could not sync eBay quantity for ${listing.sku}: ${err.message}`);
+    await notifyAccountBlockedOnce(user, err, blockState);
   }
 }
 
@@ -405,7 +430,7 @@ async function syncCjStockQuantity(user, listing, inventory) {
  * but the source cost also includes CJ's own shipping quote (Listing.cjShippingCost - models/listingsModel.js
  * listingProfitAmount), requoted here so it never goes stale.
  */
-async function syncCjPriceIfChanged(user, listing, variant) {
+async function syncCjPriceIfChanged(user, listing, variant, blockState) {
   const newSourcePrice = Number(variant.variantSellPrice);
   if (!Number.isFinite(newSourcePrice) || newSourcePrice <= 0) return;
 
@@ -476,6 +501,7 @@ async function syncCjPriceIfChanged(user, listing, variant) {
     console.log(`[cj-price-monitor] ${listing.sku}: CJ ${oldSourcePrice} -> ${newSourcePrice} (shipping ${oldShippingCost} -> ${newShippingCost ?? 'unknown'}), eBay ${listing.sell_price} -> ${repriced.sellPrice}.`);
   } catch (err) {
     console.error(`[cj-price-monitor] Could not update eBay price for ${listing.sku}: ${err.message}`);
+    await notifyAccountBlockedOnce(user, err, blockState);
   }
 }
 

@@ -65,6 +65,20 @@ function friendlyReasonFor(ebayErrors) {
 }
 
 /**
+ * True when a caught error's ebayErrors (see ebayRequest's catch below - every eBay call attaches these) carry
+ * SSR_BlockListing_ListingRevokedStatus: eBay has blocked the whole account from creating or revising ANY listing,
+ * not just this one. A caller that writes to several listings in one run (the stock/price monitor, see
+ * jobs/stockMonitor.js) uses this to tell "the account itself is blocked" apart from an ordinary per-listing
+ * failure, so it notifies the seller once instead of logging the same account-wide problem to the server (which
+ * the seller never sees) once per listing, every run, for as long as the block lasts.
+ */
+function isAccountBlockedError(err) {
+  const ebayErrors = err?.ebayErrors;
+  if (!Array.isArray(ebayErrors)) return false;
+  return ebayErrors.some((e) => (Array.isArray(e?.parameters) ? e.parameters : []).some((p) => /^SSR_BlockListing_ListingRevokedStatus/i.test(String(p?.value ?? ''))));
+}
+
+/**
  * A small helper that sends an authenticated request to eBay (on behalf of
  * a specific user's refresh token) and turns eBay-style error objects into
  * a readable message.
@@ -1375,6 +1389,7 @@ module.exports = {
   buildListingBodies,
   describeEbayError,
   friendlyReasonFor,
+  isAccountBlockedError,
   ebayRequest,
   buildAspects,
   publishExistingOffer,
