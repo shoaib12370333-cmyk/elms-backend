@@ -13,7 +13,7 @@ let responder = null; // (config) => never returns; throws an axios-shaped error
 const axiosPath = require.resolve('axios');
 require.cache[axiosPath] = { id: axiosPath, filename: axiosPath, loaded: true, exports: async (config) => responder(config) };
 
-const { ebayRequest, friendlyReasonFor } = require('../services/ebayListingService');
+const { ebayRequest, friendlyReasonFor, isAccountBlockedError } = require('../services/ebayListingService');
 
 const ebayError = (errorId, message, parameterValues) => ({
   response: {
@@ -61,6 +61,28 @@ const ebayError = (errorId, message, parameterValues) => ({
   assert.strictEqual(friendlyReasonFor([{ parameters: [{ name: '0', value: 'kyc_dsareq_something' }] }]), KNOWN(), 'match is case-insensitive');
 
   function KNOWN() { return friendlyReasonFor([{ parameters: [{ name: '0', value: 'KYC_DSAReq_EUB2C_SYI' }] }]); }
+
+  // ---------- isAccountBlockedError(): tells "the whole account is blocked" apart from any other eBay error
+  // (jobs/stockMonitor.js uses this to notify the seller once per run instead of once per listing/write) ----------
+  responder = async () => { throw ebayError(25019, 'Cannot revise listing...', ['x', 'x', 'SSR_BlockListing_ListingRevokedStatus', '1291773']); };
+  await assert.rejects(() => ebayRequest('rt', 'GET', '/x'), (err) => {
+    assert.strictEqual(isAccountBlockedError(err), true);
+    return true;
+  });
+  responder = async () => { throw ebayError(25019, 'Cannot revise listing...', ['We still need to verify your details...', 'We still need to verify your details...', 'KYC_DSAReq_EUB2C_SYI', '1305595']); };
+  await assert.rejects(() => ebayRequest('rt', 'GET', '/x'), (err) => {
+    assert.strictEqual(isAccountBlockedError(err), false, 'a different known reason code is not the account-block one');
+    return true;
+  });
+  responder = async () => { throw ebayError(21916984, 'A category ID is invalid.', ['categoryId', '999999']); };
+  await assert.rejects(() => ebayRequest('rt', 'GET', '/x'), (err) => {
+    assert.strictEqual(isAccountBlockedError(err), false, 'an unrelated eBay error is not the account-block one');
+    return true;
+  });
+  assert.strictEqual(isAccountBlockedError(undefined), false);
+  assert.strictEqual(isAccountBlockedError(new Error('plain error, no ebayErrors at all')), false);
+  assert.strictEqual(isAccountBlockedError({ ebayErrors: [] }), false);
+  assert.strictEqual(isAccountBlockedError({ ebayErrors: [{ parameters: [] }] }), false);
 
   console.log('eBay friendly error messages: all good');
   process.exit(0);

@@ -22,6 +22,7 @@ const fakes = {
     withdrawListing: async (t, offer) => { withdrawn.push(offer); },
     updateOfferPrice: async (t, offer, price) => { priced.push([offer, price]); },
     updateOfferQuantity: async () => {},
+    isAccountBlockedError: () => false,
   },
   '../models/listingsModel': {
     listPublishedListings: async () => listings,
