@@ -287,13 +287,15 @@ router.get('/plans', async (req, res) => {
 
 /**
  * POST /api/admin/plans
- * Body: { name, priceUsd, credits, paddlePriceId }
+ * Body: { name, priceUsd, credits, paddlePriceId, yearlyPriceUsd, paddleYearlyPriceId }
  *
  * Creates a new credit plan, linked to a Paddle price ID (from the Paddle
  * dashboard: Catalog > Products > your product > the price you created).
+ * The yearly term is a SEPARATE Paddle price (Paddle has no "same price, billed yearly" option), so
+ * paddleYearlyPriceId is its own field, independent of the monthly paddlePriceId.
  */
 router.post('/plans', async (req, res) => {
-  const { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, yearlyPriceUsd } = req.body;
+  const { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, yearlyPriceUsd, paddleYearlyPriceId } = req.body;
 
   if (!name || !(Number(priceUsd) > 0) || !(Number(credits) > 0)) {
     return res.status(400).json({ success: false, error: 'A name, a price and the number of credits are required.' });
@@ -308,13 +310,14 @@ router.post('/plans', async (req, res) => {
     paddlePriceId: paddlePriceId || null,
     maxEbayAccounts: Number(maxEbayAccounts) > 0 ? Number(maxEbayAccounts) : null,
     yearlyPriceUsd,
+    paddleYearlyPriceId,
   });
   res.json({ success: true, plan });
 });
 
 /**
  * PUT /api/admin/plans/:id
- * Body: { name?, priceUsd?, credits?, paddlePriceId?, active? }
+ * Body: { name?, priceUsd?, credits?, paddlePriceId?, yearlyPriceUsd?, paddleYearlyPriceId?, active? }
  *
  * Updates an existing plan. Only provided fields are changed.
  */

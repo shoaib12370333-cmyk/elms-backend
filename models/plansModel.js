@@ -3,8 +3,8 @@ const Plan = require('./schemas/Plan');
 /**
  * Admin-only: creates a new credit plan, linked to a Paddle price ID.
  */
-async function createPlan({ name, priceUsd, credits, paddlePriceId, maxEbayAccounts, yearlyPriceUsd }) {
-  const doc = await Plan.create({ name, priceUsd, credits, paddlePriceId: paddlePriceId || null, maxEbayAccounts: maxEbayAccounts || null, yearlyPriceUsd: Number(yearlyPriceUsd) > 0 ? Number(yearlyPriceUsd) : null });
+async function createPlan({ name, priceUsd, credits, paddlePriceId, maxEbayAccounts, yearlyPriceUsd, paddleYearlyPriceId }) {
+  const doc = await Plan.create({ name, priceUsd, credits, paddlePriceId: paddlePriceId || null, maxEbayAccounts: maxEbayAccounts || null, yearlyPriceUsd: Number(yearlyPriceUsd) > 0 ? Number(yearlyPriceUsd) : null, paddleYearlyPriceId: paddleYearlyPriceId || null });
   return serialize(doc);
 }
 
@@ -12,7 +12,7 @@ async function createPlan({ name, priceUsd, credits, paddlePriceId, maxEbayAccou
  * Admin-only: updates an existing plan's fields. Only provided (non-undefined)
  * fields are changed.
  */
-async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, active, yearlyPriceUsd }) {
+async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, maxEbayAccounts, active, yearlyPriceUsd, paddleYearlyPriceId }) {
   const update = {};
   if (name !== undefined) update.name = name;
   if (priceUsd !== undefined) update.priceUsd = priceUsd;
@@ -21,6 +21,7 @@ async function updatePlan(id, { name, priceUsd, credits, paddlePriceId, maxEbayA
   if (maxEbayAccounts !== undefined) update.maxEbayAccounts = Number(maxEbayAccounts) > 0 ? Number(maxEbayAccounts) : null;
   if (active !== undefined) update.active = active;
   if (yearlyPriceUsd !== undefined) update.yearlyPriceUsd = Number(yearlyPriceUsd) > 0 ? Number(yearlyPriceUsd) : null; // empty switches the yearly option off
+  if (paddleYearlyPriceId !== undefined) update.paddleYearlyPriceId = paddleYearlyPriceId || null;
 
   const doc = await Plan.findByIdAndUpdate(id, update, { new: true });
   return doc ? serialize(doc) : null;
@@ -61,11 +62,11 @@ async function getPlanById(id) {
 }
 
 /**
- * Looks up a plan by its Paddle price ID - used by the payment webhook to
- * figure out which plan (and how many credits) a completed transaction corresponds to.
+ * Looks up a plan by its Paddle price ID (monthly OR yearly - they are two separate Paddle prices) - used by the
+ * payment webhook to figure out which plan, and which term, a completed transaction corresponds to.
  */
 async function getPlanByPaddlePriceId(paddlePriceId) {
-  const doc = await Plan.findOne({ paddlePriceId });
+  const doc = await Plan.findOne({ $or: [{ paddlePriceId }, { paddleYearlyPriceId: paddlePriceId }] });
   return doc ? serialize(doc) : null;
 }
 
@@ -79,6 +80,7 @@ function serialize(doc) {
     paddlePriceId: obj.paddlePriceId || null,
     maxEbayAccounts: obj.maxEbayAccounts || null,
     yearlyPriceUsd: obj.yearlyPriceUsd > 0 ? obj.yearlyPriceUsd : null,
+    paddleYearlyPriceId: obj.paddleYearlyPriceId || null,
     active: obj.active,
   };
 }

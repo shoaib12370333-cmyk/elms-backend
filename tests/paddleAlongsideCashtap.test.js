@@ -9,6 +9,7 @@ const calls = { paddle: [], cashtap: [] };
 const plans = [
   { id: 'p1', name: 'Starter', priceUsd: 10, credits: 500, paddlePriceId: null, active: true },
   { id: 'p2', name: 'Pro', priceUsd: 30, credits: 2000, paddlePriceId: 'pri_123', active: true },
+  { id: 'p3', name: 'Max', priceUsd: 60, credits: 5000, paddlePriceId: 'pri_max', yearlyPriceUsd: 600, paddleYearlyPriceId: 'pri_max_year', active: true },
 ];
 stub('middleware/requireAuth', { requireAuth: (req, res, next) => next() });
 stub('models/plansModel', { listActivePlans: async () => plans, getPlanById: async (id) => plans.find((p) => p.id === id) || null });
@@ -47,10 +48,12 @@ const call = async (handler, req) => {
   assert.strictEqual(res.statusCode, 400);
   assert.strictEqual(calls.paddle.length, 0);
 
-  // Paddle set up: only the plan with a Paddle price id can be paid by card
+  // Paddle set up: only the plan with a Paddle price id can be paid by card, and only a plan with its OWN yearly
+  // Paddle price id can be paid by card for the yearly term.
   process.env.PADDLE_API_KEY = 'k'; process.env.PADDLE_WEBHOOK_SECRET = 's';
   res = await call(plansRoute, {});
-  assert.deepStrictEqual(res.body.plans.map((p) => p.paddleAvailable), [false, true]);
+  assert.deepStrictEqual(res.body.plans.map((p) => p.paddleAvailable), [false, true, true]);
+  assert.deepStrictEqual(res.body.plans.map((p) => p.paddleYearlyAvailable), [false, false, true]);
   assert.strictEqual(res.body.provider, 'cashtap', 'Cash App stays the main checkout');
   res = await call(publicPlans, {});
   assert.strictEqual(res.body.card, true);
@@ -68,12 +71,20 @@ const call = async (handler, req) => {
   res = await call(checkout, { body: { planId: 'p1', provider: 'paddle' } });
   assert.strictEqual(res.statusCode, 404, 'a plan with no Paddle price');
   res = await call(checkout, { body: { planId: 'p2', provider: 'paddle', billing: 'yearly' } });
-  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(res.statusCode, 404, 'this plan has a monthly Paddle price but no yearly one');
   res = await call(checkout, { body: { provider: 'paddle', custom: { amountUsd: 100 } } });
-  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(res.statusCode, 400, 'the custom plan stays Cash App only');
   res = await call(checkout, { body: { planId: 'p2', provider: 'paddle', voucherId: 'v1' } });
   assert.strictEqual(res.statusCode, 400);
   assert.strictEqual(calls.paddle.length, before);
+
+  // a plan with its own yearly Paddle price id CAN be paid by card for the yearly term
+  res = await call(checkout, { body: { planId: 'p3', provider: 'paddle', billing: 'yearly' } });
+  assert.deepStrictEqual([res.body.success, res.body.provider, res.body.transactionId], [true, 'paddle', 'txn_1']);
+  assert.strictEqual(calls.paddle.at(-1).paddlePriceId, 'pri_max_year');
+  // the same plan's monthly term still uses its monthly Paddle price id
+  res = await call(checkout, { body: { planId: 'p3', provider: 'paddle' } });
+  assert.strictEqual(calls.paddle.at(-1).paddlePriceId, 'pri_max');
 
   // the old all-Paddle mode still works
   provider = 'paddle';

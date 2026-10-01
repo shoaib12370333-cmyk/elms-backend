@@ -11,6 +11,9 @@ const planSchema = new mongoose.Schema(
     maxEbayAccounts: { type: Number, default: null },
     // Yearly price (12 months of credits at once). Empty = the plan has no yearly option; giving it a price switches the option on.
     yearlyPriceUsd: { type: Number, default: null },
+    // The yearly term's OWN Paddle price id - Paddle needs a separate price object per billing period, so the monthly
+    // paddlePriceId above cannot be reused here. Empty = the yearly term cannot be bought through Paddle (CashTap only).
+    paddleYearlyPriceId: { type: String, default: null },
     active: { type: Boolean, default: true }, // inactive plans are hidden from the Pricing page
   },
   { timestamps: true }

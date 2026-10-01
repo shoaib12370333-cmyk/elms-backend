@@ -53,8 +53,13 @@ router.post('/', async (req, res) => {
         return res.status(200).json({ received: true });
       }
 
+      // Paddle itself is the renewal mechanism (a recurring price re-bills and re-fires this webhook on its own), so a
+      // Paddle grant - unlike a CashTap monthly/yearly term - has never carried a local expiry here; it just credits
+      // once per transaction. Monthly and yearly are two separate Paddle prices on the same plan: which one matched
+      // decides whether this transaction is worth one month's credits or twelve.
       const plan = paddlePriceId ? await getPlanByPaddlePriceId(paddlePriceId) : null;
-      const creditsGranted = plan?.credits;
+      const billing = plan && plan.paddleYearlyPriceId === paddlePriceId ? 'yearly' : 'monthly';
+      const creditsGranted = plan ? (billing === 'yearly' ? Math.round(plan.credits * 12) : plan.credits) : null;
 
       if (!creditsGranted) {
         // Also not retryable by Paddle - this is a configuration issue on
@@ -67,14 +72,15 @@ router.post('/', async (req, res) => {
         return res.status(200).json({ received: true });
       }
 
+      const grantPlan = billing === 'yearly' ? { ...plan, credits: creditsGranted } : plan;
       const priceUsd = transaction.details?.totals?.total
         ? Number(transaction.details.totals.total) / 100
-        : plan.priceUsd;
+        : (billing === 'yearly' ? plan.yearlyPriceUsd : plan.priceUsd);
 
       // A repeated transaction is answered as done (duplicate) and nothing is given twice.
       const done = await fulfillPurchase({
         userId: elmsUserId,
-        plan,
+        plan: grantPlan,
         provider: 'paddle',
         transactionId: transaction.id,
         priceUsd,
