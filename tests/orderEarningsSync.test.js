@@ -4,8 +4,17 @@
 const assert = require('assert');
 const stub = (specifier, exports) => { const p = require.resolve(specifier); require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
 
-const accounts = [{ _id: 'acc1', userId: 'u1', ebayUserId: 'seller1', marketplaceId: 'EBAY_US' }];
-stub('../models/schemas/EbayAccount', { find: async () => accounts });
+const accounts = [{ _id: 'acc1', userId: 'u1', ebayUserId: 'seller1', marketplaceId: 'EBAY_US', financesSyncError: null }];
+const updateOneCalls = [];
+stub('../models/schemas/EbayAccount', {
+  find: async () => accounts,
+  updateOne: async (filter, update) => {
+    updateOneCalls.push({ filter, update });
+    const acc = accounts.find((a) => a._id === filter._id);
+    if (acc && update.$set && 'financesSyncError' in update.$set) acc.financesSyncError = update.$set.financesSyncError;
+    return { acknowledged: true };
+  },
+});
 stub('../models/ebayAccountsModel', { getEbayAccountRefreshToken: async () => 'RT1' });
 stub('../services/jobLockService', { acquireLock: async () => true });
 
@@ -66,10 +75,25 @@ const { runOrderEarningsSync, splitProportionally } = require('../jobs/orderEarn
   ] };
   let calls403 = 0;
   nextTransactions = async () => { calls403++; const e = new Error('Insufficient permissions to fulfill the request.'); e.statusCode = 403; throw e; };
-  financesCalls.length = 0; bulkCalls.length = 0;
+  financesCalls.length = 0; bulkCalls.length = 0; updateOneCalls.length = 0;
   await runOrderEarningsSync(); // must not throw
   assert.strictEqual(calls403, 1, 'the second order of the same account is never even tried once the first fails with 403');
   assert.strictEqual(bulkCalls.flat().length, 0);
+
+  // ---------- that failure is also saved on the account itself, so Settings can show a reason instead of staying silent ----------
+  assert.strictEqual(updateOneCalls.length, 1);
+  assert.deepStrictEqual(updateOneCalls[0].filter, { _id: 'acc1' });
+  assert.strictEqual(updateOneCalls[0].update.$set.financesSyncError, 'Insufficient permissions to fulfill the request.');
+  assert.strictEqual(accounts[0].financesSyncError, 'Insufficient permissions to fulfill the request.');
+
+  // ---------- once the account reconnects and a run succeeds again, the stuck flag is cleared back to null ----------
+  pendingByAccount = { acc1: [{ _id: 'l11', ebayOrderId: 'O10', salePrice: 9 }] };
+  nextTransactions = async () => [{ transactionType: 'SALE', amount: { value: '9.00', currency: 'USD' } }];
+  updateOneCalls.length = 0;
+  await runOrderEarningsSync();
+  assert.strictEqual(updateOneCalls.length, 1);
+  assert.strictEqual(updateOneCalls[0].update.$set.financesSyncError, null);
+  assert.strictEqual(accounts[0].financesSyncError, null);
 
   // ---------- the same short-circuit for a real eBay "invalid_scope"-worded error whose statusCode is NOT 401/403 ----------
   pendingByAccount = { acc1: [
