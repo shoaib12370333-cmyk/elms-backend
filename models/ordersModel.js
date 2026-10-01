@@ -321,6 +321,21 @@ async function markShippedNoTracking(userId, id) {
   return doc ? serialize(doc) : null;
 }
 
+/**
+ * Auto-marks "shipped" orders as "delivered" once eBay's own estimated delivery date (estDeliveryMax) has passed -
+ * the same local-only status change the manual "Mark delivered" button already makes (eBay has no seller-side "mark
+ * delivered" call of its own; delivery is eBay's own inference from carrier data - this only keeps ELMS's status
+ * current so sellers don't have to do it by hand). Orders with no estimated delivery date at all are left alone -
+ * they still need the manual button. Called from jobs/orderAutoDeliver.js; returns how many were updated.
+ */
+async function autoMarkDelivered(now) {
+  const result = await Order.updateMany(
+    { fulfillmentStatus: 'shipped', estDeliveryMax: { $ne: null, $lte: now } },
+    { $set: { fulfillmentStatus: 'delivered' } }
+  );
+  return result.modifiedCount || 0;
+}
+
 async function linkAmazonOrder(userId, id, amazonOrderId, fulfillmentStatus = 'ordered_from_amazon') {
   const value = String(amazonOrderId || '').trim();
   if (!value) throw new Error('An Amazon order ID is required.');
@@ -658,4 +673,4 @@ async function setOrderEarningsBulk(updates) {
   return result.modifiedCount || 0;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, _summaryCache: summaryCache };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, autoMarkDelivered, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, _summaryCache: summaryCache };
