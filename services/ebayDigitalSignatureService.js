@@ -22,17 +22,20 @@ function signingConfigured() {
   return !!(process.env.EBAY_SIGNING_KEY_JWE && process.env.EBAY_SIGNING_KEY_PRIVATE);
 }
 
-// A pasted PEM commonly arrives mangled - a host's env var box collapsing it to one line (BEGIN/END markers glued
-// directly onto the base64 body with no newline at all), a literal "\n" escape instead of a real newline, or
-// Windows CRLF - and Node's crypto rejects all of those with the unhelpful "error:1E08010C:DECODER
-// routines::unsupported" rather than anything mentioning a newline. Rebuilding the PEM from scratch (whatever is
-// between the BEGIN/END markers, wherever the newlines did or didn't end up) is robust to every one of these at
-// once, instead of guessing which single mangling actually happened.
+// eBay's createSigningKey response gives privateKey as BARE base64 (confirmed 2026-10-02 against the docs' own
+// sample response and a real key: "MC4CAQAwBQYDK2VwB..." - the fixed PKCS8/Ed25519 DER prefix - with no
+// "-----BEGIN PRIVATE KEY-----" wrapper at all), not a PEM. On top of that, a pasted PEM (if one is ever provided
+// instead) commonly arrives mangled anyway - a host's env var box collapsing it to one line (BEGIN/END markers
+// glued directly onto the base64 body), a literal "\n" escape instead of a real newline, or Windows CRLF - and
+// Node's crypto rejects any of this with the unhelpful "error:1E08010C:DECODER routines::unsupported" rather than
+// anything mentioning a newline or a missing header. Rebuilding a clean PEM from whatever is actually in the env
+// var - with or without existing BEGIN/END markers, wherever the newlines did or didn't end up - is robust to all
+// of this at once, instead of guessing which single shape a given value is in.
 function privateKeyPem() {
   const raw = String(process.env.EBAY_SIGNING_KEY_PRIVATE || '').replace(/\\n/g, '\n');
   const match = raw.match(/-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----/);
-  if (!match) return raw; // unrecognized shape - pass through as-is, let crypto.sign's own error surface
-  const [, label, body] = match;
+  const label = match ? match[1] : 'PRIVATE KEY'; // eBay's own key is PKCS8, whose standard PEM label is "PRIVATE KEY"
+  const body = match ? match[2] : raw;
   const base64 = body.replace(/\s+/g, '');
   const wrapped = base64.match(/.{1,64}/g) || [];
   return `-----BEGIN ${label}-----\n${wrapped.join('\n')}\n-----END ${label}-----\n`;
