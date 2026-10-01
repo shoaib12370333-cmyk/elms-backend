@@ -50,6 +50,7 @@ S.deps.revise = async (token, args) => {
 
 const live = (n, over = {}) => ({
   id: 'L' + n, title: 'Nike Running Shoes ' + n, description: 'Genuine Nike shoes, size ' + n,
+  bullet_points: [], specifications: [],
   sku: 'B0' + n, status: 'published', ebay_offer_id: 'O' + n, ebay_account_id: 'A1',
   sell_price: 29.99, currency: 'USD', quantity: 3, category_id: '15709', ebay_aspects: { Brand: ['Nike'] },
   ...over,
@@ -58,11 +59,11 @@ const reset = (count = 3) => {
   rows = {}; for (let i = 1; i <= count; i++) rows['L' + i] = live(i);
   revises.length = 0; reviseFail = new Set(); tokens = { A1: 'tok1', A2: null }; updates.length = 0;
   balance = 100; spends.length = 0; refunds.length = 0; cleanCalls.length = 0; aiOn = true; words = ['nike'];
-  cleanResult = { data: { title: 'Running Shoes', description: 'Genuine running shoes', aspects: { Brand: ['Unbranded'] }, removed: ['nike'] }, usage: { model: 'x', inputTokens: 1, outputTokens: 1 } };
+  cleanResult = { data: { title: 'Running Shoes', description: 'Genuine running shoes', bulletPoints: [], specifications: [], aspects: { Brand: ['Unbranded'] }, removed: ['nike'] }, usage: { model: 'x', inputTokens: 1, outputTokens: 1 } };
 };
 const deps = {
   getListingsByIds: async (u, ids) => new Map(ids.filter((id) => rows[id]).map((id) => [id, JSON.parse(JSON.stringify(rows[id]))])),
-  updateListing: async (u, id, fields) => { updates.push({ id, fields }); if (rows[id]) Object.assign(rows[id], { title: fields.title, description: fields.description, ebay_aspects: fields.ebayAspects }); return rows[id] || null; },
+  updateListing: async (u, id, fields) => { updates.push({ id, fields }); if (rows[id]) Object.assign(rows[id], { title: fields.title, description: fields.description, bullet_points: fields.bulletPoints, specifications: fields.specifications, ebay_aspects: fields.ebayAspects }); return rows[id] || null; },
   getRefreshToken: async (u, account) => tokens[account],
 };
 const run = async (ids) => S.bulkVeroCleanLive({ userId: 'u1', ids }, deps);
@@ -130,6 +131,30 @@ const run = async (ids) => S.bulkVeroCleanLive({ userId: 'u1', ids }, deps);
   assert.match(out.results[0].reason, /only a protected word/);
   assert.strictEqual(revises.length, 0);
   assert.strictEqual(balance, 100);
+
+  // ---------- a VeRO word hiding only in bullet points or specifications is no longer wrongly marked "clean": before
+  // this fix, the live clean action never looked at or saved those two fields, so a listing whose only VeRO word was
+  // there kept counting as a VeRO listing forever, no matter how many times it was "cleaned" ----------
+  reset(1);
+  rows.L1.title = 'Running shoes'; rows.L1.description = 'Comfortable running shoes'; rows.L1.ebay_aspects = {};
+  rows.L1.bullet_points = ['Genuine Nike quality', 'Breathable mesh'];
+  rows.L1.specifications = [{ name: 'Brand', value: 'Nike' }];
+  cleanResult = {
+    data: {
+      title: 'Running shoes', description: 'Comfortable running shoes', aspects: {},
+      bulletPoints: ['Genuine quality', 'Breathable mesh'], specifications: [{ name: 'Brand', value: 'Unbranded' }],
+      removed: ['nike'],
+    },
+    usage: { model: 'x', inputTokens: 1, outputTokens: 1 },
+  };
+  out = await run(['L1']);
+  assert.deepStrictEqual(out.summary, { changed: 1, clean: 0, skipped: 0, failed: 0, no_credits: 0 }, 'a word hiding only in bullet points/specifications is still found, not skipped as already clean');
+  assert.deepStrictEqual(cleanCalls[0].bulletPoints, ['Genuine Nike quality', 'Breathable mesh'], 'bullet points are sent to the AI cleaner too');
+  assert.deepStrictEqual(cleanCalls[0].specifications, [{ name: 'Brand', value: 'Nike' }], 'specification rows are sent too');
+  assert.deepStrictEqual(updates[0].fields.bulletPoints, ['Genuine quality', 'Breathable mesh'], 'the cleaned bullet points are saved to ELMS\'s own copy');
+  assert.deepStrictEqual(updates[0].fields.specifications, [{ name: 'Brand', value: 'Unbranded' }], 'the cleaned specification rows are saved to ELMS\'s own copy');
+  assert.strictEqual(revises[0].args.bulletPoints, undefined, 'bullet points/specifications are never pushed to eBay on their own - eBay has no such field');
+  assert.strictEqual(revises[0].args.specifications, undefined);
 
   // ---------- eBay refuses one listing: skipped with eBay's own words, the credit is refunded, others still go through ----------
   reset(3); reviseFail = new Set(['O2']);

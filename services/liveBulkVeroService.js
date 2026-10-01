@@ -2,6 +2,11 @@
  * Removes the seller's own VeRO (trademark/brand) words from many LIVE listings at once, and pushes each cleaned
  * title/description/item-specifics to eBay (services/ebayListingService.js reviseActiveListing) - unlike the Drafts
  * bulk VeRO button, which only ever saves ELMS's own copy (a draft has nothing live on eBay yet to update).
+ *
+ * Bullet points and specification rows are also cleaned and saved to ELMS's own copy, even though neither is ever
+ * sent to eBay on its own (eBay has no such field - they only ever fed the AI description/aspects at import time).
+ * They still count toward whether a listing shows the VeRO badge (models/listingsModel.js scanVero), so leaving them
+ * dirty meant a listing could be "cleaned" here over and over and never leave the VeRO count.
  */
 const { createMatcher } = require('./veroService');
 const { getVeroWordsOf } = require('./veroSettingsService');
@@ -66,7 +71,7 @@ async function bulkVeroCleanLive({ userId, ids }, d) {
     if (!l.ebay_offer_id || !l.sku) return mark('skipped', 'This listing has no eBay offer to update.');
     if (!l.ebay_account_id) return mark('skipped', 'No eBay account is connected to this listing.');
 
-    const scan = vero.scanListing({ title: l.title, description: l.description, aspects: l.ebay_aspects });
+    const scan = vero.scanListing({ title: l.title, description: l.description, bulletPoints: l.bullet_points, specifications: l.specifications, aspects: l.ebay_aspects });
     if (!scan.terms.length) return mark('clean', 'No VeRO words found.');
 
     const refreshToken = await tokenFor(l.ebay_account_id);
@@ -76,7 +81,7 @@ async function bulkVeroCleanLive({ userId, ids }, d) {
 
     let cleaned;
     try {
-      cleaned = await cleanVeroTerms({ title: l.title, description: l.description, aspects: l.ebay_aspects || {} }, words);
+      cleaned = await cleanVeroTerms({ title: l.title, description: l.description, bulletPoints: l.bullet_points, specifications: l.specifications, aspects: l.ebay_aspects || {} }, words);
     } catch (err) {
       await refundCredit(userId, cost);
       AiUsage.create({ userId, kind: 'vero', ok: false, credits: 0 }).catch(() => {});
@@ -106,7 +111,7 @@ async function bulkVeroCleanLive({ userId, ids }, d) {
       await refundCredit(userId, cost);
       return mark('failed', err.message || 'eBay did not accept the cleaned listing.');
     }
-    await d.updateListing(userId, id, { title: data.title, description: data.description, ebayAspects: { ...(l.ebay_aspects || {}), ...aspects } });
+    await d.updateListing(userId, id, { title: data.title, description: data.description, bulletPoints: data.bulletPoints, specifications: data.specifications, ebayAspects: { ...(l.ebay_aspects || {}), ...aspects } });
     results[index] = { id, title: data.title, status: 'changed', removed: data.removed || [] };
   });
 
