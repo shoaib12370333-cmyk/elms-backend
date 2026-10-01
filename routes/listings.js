@@ -1095,6 +1095,63 @@ router.post('/bulk-description-beautify', requireAuth, async (req, res) => {
   }
 });
 
+const MAX_LIVE_AI_BATCH = 15; // an AI call plus a real eBay revise per listing - same order of cost as the live VeRO-clean/Bulk edit actions
+
+/**
+ * POST /api/listings/bulk-live-aspects   { ids: [...] }
+ * The Live Listings bulk bar's "Fill specifics with AI": the live-pushing counterpart of POST /bulk-aspects above.
+ */
+router.post('/bulk-live-aspects', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_LIVE_AI_BATCH) return res.status(400).json({ success: false, error: `Please fill at most ${MAX_LIVE_AI_BATCH} listings per request - the app sends a larger selection in several requests.` });
+  try {
+    const { getAiSettings } = require('../models/settingsModel');
+    if (!(await getAiSettings()).aiAspectsEnabled) return res.status(403).json({ success: false, error: 'This AI feature is turned off by the administrator.' });
+    const { fillManyLiveAspects } = require('../services/listingAspectFillService');
+    const results = await fillManyLiveAspects(req.userId, ids, { getListingById, updateListing, reviseActiveListing, getRefreshToken: getEbayAccountRefreshToken });
+    res.json({
+      success: true,
+      results,
+      filled: results.filter((r) => r.status === 'filled').length,
+      creditsUsed: results.reduce((sum, r) => sum + (r.creditsUsed || 0), 0),
+      cost: Number(ACTION_COSTS.AI_ASPECTS || 0),
+    });
+  } catch (err) {
+    console.error('bulk live aspects error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not fill the item specifics. Please try again.' });
+  }
+});
+
+/**
+ * POST /api/listings/bulk-live-description-beautify   { ids: [...] }
+ * The Live Listings bulk bar's "Beautify descriptions with AI": the live-pushing counterpart of POST /bulk-description-beautify above.
+ */
+router.post('/bulk-live-description-beautify', requireAuth, async (req, res) => {
+  const ids = bulkIds(req.body);
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > MAX_LIVE_AI_BATCH) return res.status(400).json({ success: false, error: `Please beautify at most ${MAX_LIVE_AI_BATCH} listings per request - the app sends a larger selection in several requests.` });
+  try {
+    const { getAiSettings } = require('../models/settingsModel');
+    if (!(await getAiSettings()).aiBeautifyDescriptionEnabled) return res.status(403).json({ success: false, error: 'This AI feature is turned off by the administrator.' });
+    const { getDescriptionTemplate } = require('../models/usersModel');
+    const { normalizeTemplate } = require('../services/descriptionTemplateLibrary');
+    const template = normalizeTemplate(await getDescriptionTemplate(req.userId));
+    const { beautifyManyLiveDescriptions } = require('../services/descriptionBeautifyService');
+    const results = await beautifyManyLiveDescriptions(req.userId, ids, template, { getListingById, updateListing, reviseActiveListing, getRefreshToken: getEbayAccountRefreshToken });
+    res.json({
+      success: true,
+      results,
+      filled: results.filter((r) => r.status === 'done').length,
+      creditsUsed: results.reduce((sum, r) => sum + (r.creditsUsed || 0), 0),
+      cost: Number(ACTION_COSTS.AI_DESCRIPTION_BEAUTIFY || 0),
+    });
+  } catch (err) {
+    console.error('bulk live description beautify error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not beautify the descriptions. Please try again.' });
+  }
+});
+
 /**
  * POST /api/listings/:id/pause
  * Withdraws the eBay offer but keeps the offer object and ELMS listing.

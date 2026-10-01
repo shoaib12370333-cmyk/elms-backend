@@ -162,4 +162,97 @@ async function fillManyDraftAspects(userId, ids, { concurrency = 3 } = {}) {
   return results;
 }
 
-module.exports = { fillDraftAspects, fillManyDraftAspects, fillEditorAspects };
+const LIVE_ASPECT_STATUSES = ['published', 'sold']; // still live on eBay; a sold-out listing is "live in principle" (models/schemas/Listing.js) - same definition liveBulkVeroService.js uses
+
+/**
+ * The Live Listings bulk bar's "Fill specifics with AI": AI fills ONE live listing's item specifics (the same
+ * fillItemSpecifics + checkAspects logic fillDraftAspects uses) and pushes them to eBay with reviseActiveListing,
+ * then saves ELMS's own copy only once eBay has taken it - unlike fillDraftAspects, which only ever saves locally.
+ * Unlike a draft, a live listing already has a category (eBay requires one to publish) - there is no "no category,
+ * ask eBay to suggest one" branch here: a live listing somehow missing one is skipped, not guessed at and pushed
+ * (eBay does not support changing an already-published listing's category - see services/liveBulkEditService.js).
+ * @returns {Promise<{ id, title, status: 'filled'|'nothing'|'skipped'|'failed'|'no_credits', filled?, missing?, reason?, creditsUsed }>}
+ */
+async function fillLiveListingAspects(userId, id, d) {
+  const skip = (title, reason) => ({ id, title, status: 'skipped', reason, creditsUsed: 0 });
+  const listing = await d.getListingById(userId, id);
+  if (!listing) return skip(null, 'Not found.');
+  const title = listing.title || listing.sku || id;
+  if (!LIVE_ASPECT_STATUSES.includes(String(listing.status || '').toLowerCase())) return skip(title, 'Only a live (or sold-out) listing can be filled here. A draft is filled with Fill specifics with AI on the Drafts page.');
+  if (!listing.ebay_offer_id || !listing.sku) return skip(title, 'This listing has no eBay offer to change.');
+  if (!listing.ebay_account_id) return skip(title, 'No eBay account is connected to this listing.');
+  const categoryId = listing.category_id || null;
+  if (!categoryId) return skip(title, 'This listing has no eBay category set. Open it in the editor to set one first.');
+
+  const marketplaceId = await marketplaceOf(userId, listing);
+  let defs;
+  try {
+    defs = (await getItemAspectsForCategory(null, categoryId, marketplaceId)).aspects || [];
+  } catch (err) {
+    return skip(title, err.statusCode === 404 || err.statusCode === 400 ? 'eBay does not know category ' + categoryId + ' on ' + marketplaceId + '.' : 'eBay\'s item specifics could not be loaded (' + err.message + '). Try again in a minute.');
+  }
+  if (!defs.length) return skip(title, 'This eBay category has no item specifics to fill.');
+
+  const facts = {
+    title: listing.title,
+    description: listing.description || '',
+    bulletPoints: Array.isArray(listing.bullet_points) ? listing.bullet_points : [],
+    specifications: Array.isArray(listing.specifications) ? listing.specifications : [],
+  };
+  const existing = asLists(listing.ebay_aspects);
+  const cost = Number(ACTION_COSTS.AI_ASPECTS || 0);
+
+  const refreshToken = await Promise.resolve(d.getRefreshToken(userId, listing.ebay_account_id)).catch(() => null);
+  if (!refreshToken) return skip(title, 'The connected eBay account is missing its connection. Reconnect it in Settings.');
+
+  try {
+    const out = await withCredits(userId, cost, async () => {
+      const ai = await fillItemSpecifics({ ...facts, categoryName: '', aspects: defs, existing });
+      const merged = { ...existing, ...ai.data.values };
+      const checked = await checkAspects({ categoryId, marketplaceId, product: { ...facts, ebayAspects: merged }, aspectsOnly: true });
+      const final = checked.aspects || merged;
+      const changed = JSON.stringify(final) !== JSON.stringify(existing);
+      if (!changed) {
+        const nothing = new Error('Nothing new to fill.');
+        nothing.nothingToFill = true;
+        nothing.missing = checked.missing;
+        throw nothing;
+      }
+      await d.reviseActiveListing(refreshToken, {
+        offerId: listing.ebay_offer_id, sku: listing.sku, title: listing.title, description: listing.description,
+        aspects: final, sellPrice: listing.sell_price, priceCurrency: listing.currency, quantity: listing.quantity, categoryId,
+      });
+      await d.updateListing(userId, id, { ebayAspects: final, markDraftCustomized: false });
+      return { ai, missing: checked.missing, filled: Object.keys(final).filter((k) => !existing[k]).length };
+    });
+    AiUsage.create({ userId, kind: 'aspects', ok: true, credits: cost, model: out.ai.usage?.model, inputTokens: out.ai.usage?.inputTokens, outputTokens: out.ai.usage?.outputTokens }).catch(() => {});
+    return { id, title, status: 'filled', filled: out.filled, missing: out.missing, creditsUsed: cost };
+  } catch (err) {
+    if (err.nothingToFill) return { id, title, status: 'nothing', filled: 0, missing: err.missing || [], creditsUsed: 0 };
+    if (err.outOfCredits) return { id, title, status: 'no_credits', reason: err.message, creditsUsed: 0 };
+    AiUsage.create({ userId, kind: 'aspects', ok: false, credits: 0 }).catch(() => {});
+    console.error('[bulk-live-aspects]', id, err.message);
+    return { id, title, status: 'failed', reason: err.message || 'The AI request failed, or eBay did not accept the change.', creditsUsed: 0 };
+  }
+}
+
+/** Fills several live listings' item specifics, a few at a time - same worker-pool/no_credits short-circuit as fillManyDraftAspects. */
+async function fillManyLiveAspects(userId, ids, d, { concurrency = 3 } = {}) {
+  const results = new Array(ids.length);
+  let next = 0;
+  let broke = false;
+  const worker = async () => {
+    while (next < ids.length) {
+      const at = next++;
+      if (broke) { results[at] = { id: ids[at], title: null, status: 'no_credits', reason: 'Not enough credits.', creditsUsed: 0 }; continue; }
+      try { results[at] = await fillLiveListingAspects(userId, ids[at], d); } catch (err) {
+        results[at] = { id: ids[at], title: null, status: 'failed', reason: err.message || 'Could not fill.', creditsUsed: 0 };
+      }
+      if (results[at].status === 'no_credits') broke = true;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, ids.length)) }, worker));
+  return results;
+}
+
+module.exports = { fillDraftAspects, fillManyDraftAspects, fillEditorAspects, fillLiveListingAspects, fillManyLiveAspects };

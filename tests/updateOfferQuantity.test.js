@@ -44,6 +44,8 @@ require.cache[axiosPath] = {
     if (failOn === 'inventory-put' && config.method === 'PUT' && isInventory) throw { response: { status: 400, data: { errors: [{ message: 'Quantity is invalid.' }] } } };
     if (failOn === 'offer-put' && config.method === 'PUT' && isOffer) throw { response: { status: 400, data: { errors: [{ message: 'Offer is not published.' }] } } };
     if (failOn === 'publish' && isPublish) throw { response: { status: 400, data: { errors: [{ message: 'This offer has an unresolved issue.' }] } } };
+    if (failOn === 'publish-transient-once' && isPublish && publishCalls === 0) { publishCalls += 1; throw { response: { status: 503, data: { errors: [{ message: 'eBay is temporarily unavailable.' }] } } }; }
+    if (failOn === 'publish-transient-always' && isPublish) throw { response: { status: 503, data: { errors: [{ message: 'eBay is temporarily unavailable.' }] } } };
     if (config.method === 'GET' && isOffer) {
       if (writesHappened && staleGetsLeft > 0) { staleGetsLeft -= 1; return { data: preWriteOffer }; }
       return { data: offerState };
@@ -119,6 +121,18 @@ const reset = () => {
   // ---------- republishing itself fails: a clear, specific error, not eBay's raw one ----------
   reset(); offerState.status = 'UNPUBLISHED'; failOn = 'publish';
   await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 5), /unresolved issue|is unpublished and could not be republished/i);
+
+  // ---------- republishing hits a transient eBay hiccup (not a real problem with the listing): retried once, and
+  // this time it succeeds - before this fix, a plain "eBay is briefly down" failed the whole restock permanently,
+  // indistinguishable from a genuine unresolved-issue refusal ----------
+  reset(); offerState.status = 'UNPUBLISHED'; failOn = 'publish-transient-once';
+  out = await updateOfferQuantity('rt1', 'O123', 6);
+  assert.strictEqual(out.quantity, 6);
+  assert.strictEqual(publishCalls, 2, 'the failed attempt, then the retry that succeeded');
+
+  // ---------- the transient hiccup does not clear up even after the retry: still fails, but the one retry is given ----------
+  reset(); offerState.status = 'UNPUBLISHED'; failOn = 'publish-transient-always';
+  await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 5), /temporarily unavailable/);
 
   // ---------- eBay answers 200 but the live listing never actually moves (a real, observed eBay failure mode): this now throws instead of reporting false success ----------
   reset(); silentNoop = true;
