@@ -698,10 +698,16 @@ router.get('/product-catalog/jobs', async (req, res) => {
   res.json({ success: true, jobs: await listAdminCatalogJobs() });
 });
 
-/** GET /api/admin/product-catalog?page=&limit= - the catalog table, newest first. */
+/** GET /api/admin/product-catalog/marketplaces - how many rows exist per eBay marketplace (the table is sectioned by marketplace in the Admin Panel). */
+router.get('/product-catalog/marketplaces', async (req, res) => {
+  const { listMarketplaceCounts } = require('../models/productCatalogModel');
+  res.json({ success: true, marketplaces: await listMarketplaceCounts() });
+});
+
+/** GET /api/admin/product-catalog?marketplaceId=&page=&limit= - the catalog table of one marketplace's section, newest first. */
 router.get('/product-catalog', async (req, res) => {
   const { listCatalogItems } = require('../models/productCatalogModel');
-  const out = await listCatalogItems({ page: req.query.page, limit: req.query.limit });
+  const out = await listCatalogItems({ page: req.query.page, limit: req.query.limit, marketplaceId: req.query.marketplaceId || undefined });
   res.json({ success: true, ...out });
 });
 
@@ -731,6 +737,27 @@ router.post('/product-catalog/:id/push', async (req, res) => {
   } catch (err) {
     res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not push this product to that seller\'s Drafts.' });
   }
+});
+
+const CATALOG_MAX_BULK_PUSH = 200;
+/**
+ * POST /api/admin/product-catalog/push-bulk   Body: { ids: string[], email }
+ * Pushes many catalog rows into one seller's Drafts at once (models/productCatalogModel.js
+ * pushCatalogItemsToUserDrafts) - a row the seller already owns is skipped and reported as such
+ * (status 'already_have'), never treated as the whole batch failing; the rest still go through.
+ */
+router.post('/product-catalog/push-bulk', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, error: 'Enter a valid email address.' });
+  const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String).filter(Boolean))];
+  if (!ids.length) return res.status(400).json({ success: false, error: 'ids must be a non-empty array.' });
+  if (ids.length > CATALOG_MAX_BULK_PUSH) return res.status(400).json({ success: false, error: `Please push at most ${CATALOG_MAX_BULK_PUSH} products at a time.` });
+  const user = await User.findOne({ email }, { _id: 1 }).lean();
+  if (!user) return res.status(404).json({ success: false, error: 'No ELMS user has that email.' });
+
+  const { pushCatalogItemsToUserDrafts } = require('../models/productCatalogModel');
+  const out = await pushCatalogItemsToUserDrafts(ids, String(user._id));
+  res.json({ success: true, ...out });
 });
 
 /** Announcements (bulk mail). Sent in small batches by jobs/announcementSender.js. */

@@ -10,13 +10,15 @@ const stub = (rel, exports) => { const p = require.resolve(path.join('..', rel))
 let rows = [];
 let seq = 0;
 const reverseRows = () => [...rows].reverse(); // newest-created last in `rows`, so a reverse mirrors sort({createdAt:-1})
+const matches = (row, query) => !query.marketplaceId || row.marketplaceId === query.marketplaceId;
 stub('models/schemas/ProductCatalogItem', {
   create: async (fields) => { const doc = { _id: 'C' + (++seq), ...fields }; rows.push(doc); return doc; },
-  find: () => ({ sort: () => ({ skip: (n) => ({ limit: (l) => ({ lean: async () => reverseRows().slice(n, n + l) }) }) }) }),
-  countDocuments: async () => rows.length,
+  find: (query = {}) => ({ sort: () => ({ skip: (n) => ({ limit: (l) => ({ lean: async () => reverseRows().filter((r) => matches(r, query)).slice(n, n + l) }) }) }) }),
+  countDocuments: async (query = {}) => rows.filter((r) => matches(r, query)).length,
   findById: (id) => ({ lean: async () => rows.find((r) => r._id === id) || null }),
   deleteOne: async ({ _id }) => { const before = rows.length; rows = rows.filter((r) => r._id !== _id); return { deletedCount: before - rows.length }; },
   deleteMany: async ({ expiresAt }) => { const before = rows.length; rows = rows.filter((r) => !(expiresAt && expiresAt.$lte && r.expiresAt <= expiresAt.$lte)); return { deletedCount: before - rows.length }; },
+  aggregate: async () => { const byMarket = new Map(); for (const r of rows) byMarket.set(r.marketplaceId, (byMarket.get(r.marketplaceId) || 0) + 1); return [...byMarket.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([_id, count]) => ({ _id, count })); },
 });
 
 const db = { drafts: [], imports: [], pricingRule: null };
@@ -24,19 +26,20 @@ stub('models/importsModel', {
   createImport: async (userId, product, suggestedPrice, amazonUrl, ebayAccountId) => { const imp = { id: 'IMP' + db.imports.length, userId, product, suggestedPrice, amazonUrl, ebayAccountId }; db.imports.push(imp); return imp; },
   updateImportImages: async () => {},
 });
-let existingListing = null;
+let existingListing = null; // null, or a single override used by the single-push tests
+let existingAsins = new Set(); // asins the target "already owns" - used by the bulk-push tests
 stub('models/listingsModel', {
-  findListingInStore: async () => existingListing,
+  findListingInStore: async (userId, sku) => (existingListing || (existingAsins.has(sku) ? { status: 'published' } : null)),
   upsertDraft: async (userId, fields) => { const draft = { id: 'D' + db.drafts.length, userId, ...fields }; db.drafts.push(draft); return draft; },
 });
 let activeAccount = { id: 'acc1', label: 'My US Store', marketplaceId: 'EBAY_US' };
 stub('models/ebayAccountsModel', { getActiveEbayAccount: async () => activeAccount });
 stub('models/usersModel', { getPricingRule: async () => db.pricingRule });
 
-const { createCatalogItem, listCatalogItems, getCatalogItemById, deleteCatalogItem, deleteExpiredCatalogItems, pushCatalogItemToUserDrafts } = require('../models/productCatalogModel');
+const { createCatalogItem, listCatalogItems, listMarketplaceCounts, getCatalogItemById, deleteCatalogItem, deleteExpiredCatalogItems, pushCatalogItemToUserDrafts, pushCatalogItemsToUserDrafts } = require('../models/productCatalogModel');
 
 const product = (over = {}) => ({ asin: 'B0CATALOG1', title: 'A nice gadget', description: 'Works well.', bulletPoints: ['Fast', 'Durable'], images: ['https://img/1.jpg'], price: 10, currency: 'USD', brand: 'Acme', specifications: [{ name: 'Color', value: 'Black' }], ...over });
-const reset = () => { rows = []; seq = 0; db.drafts = []; db.imports = []; db.pricingRule = null; existingListing = null; activeAccount = { id: 'acc1', label: 'My US Store', marketplaceId: 'EBAY_US' }; };
+const reset = () => { rows = []; seq = 0; db.drafts = []; db.imports = []; db.pricingRule = null; existingListing = null; existingAsins = new Set(); activeAccount = { id: 'acc1', label: 'My US Store', marketplaceId: 'EBAY_US' }; };
 
 (async () => {
   // ---------- createCatalogItem: maps the normalized product + taxonomy into a row ----------
@@ -113,6 +116,36 @@ const reset = () => { rows = []; seq = 0; db.drafts = []; db.imports = []; db.pr
   // ---------- catalog item not found ----------
   reset();
   await assert.rejects(() => pushCatalogItemToUserDrafts('nope', 'seller5'), (err) => { assert.strictEqual(err.statusCode, 404); return true; });
+
+  // ---------- listCatalogItems / listMarketplaceCounts: the Admin Panel's per-marketplace sections ----------
+  reset();
+  await createCatalogItem({ createdBy: 'admin1', product: product({ asin: 'B0US000001' }), country: 'US', marketplaceId: 'EBAY_US', expiresAt: new Date(now + 86400000) });
+  await createCatalogItem({ createdBy: 'admin1', product: product({ asin: 'B0US000002' }), country: 'US', marketplaceId: 'EBAY_US', expiresAt: new Date(now + 86400000) });
+  await createCatalogItem({ createdBy: 'admin1', product: product({ asin: 'B0GB000001' }), country: 'GB', marketplaceId: 'EBAY_GB', expiresAt: new Date(now + 86400000) });
+  assert.deepStrictEqual(await listMarketplaceCounts(), [{ marketplaceId: 'EBAY_GB', count: 1 }, { marketplaceId: 'EBAY_US', count: 2 }]);
+  let filtered = await listCatalogItems({ marketplaceId: 'EBAY_US' });
+  assert.strictEqual(filtered.total, 2);
+  assert.ok(filtered.items.every((i) => i.marketplaceId === 'EBAY_US'));
+  filtered = await listCatalogItems({ marketplaceId: 'EBAY_GB' });
+  assert.strictEqual(filtered.total, 1);
+  assert.strictEqual((await listCatalogItems({})).total, 3, 'no filter: every marketplace');
+
+  // ---------- pushCatalogItemsToUserDrafts (bulk): the target's existing products are skipped, not treated as a batch failure ----------
+  reset();
+  const bulkA = await createCatalogItem({ createdBy: 'admin1', product: product({ asin: 'B0BULKA001' }), country: 'US', marketplaceId: 'EBAY_US', categoryId: '1', categoryName: 'A', expiresAt: new Date(now + 86400000) });
+  const bulkB = await createCatalogItem({ createdBy: 'admin1', product: product({ asin: 'B0BULKB001' }), country: 'US', marketplaceId: 'EBAY_US', categoryId: '2', categoryName: 'B', expiresAt: new Date(now + 86400000) });
+  const bulkC = await createCatalogItem({ createdBy: 'admin1', product: product({ asin: 'B0BULKC001' }), country: 'US', marketplaceId: 'EBAY_US', categoryId: '3', categoryName: 'C', expiresAt: new Date(now + 86400000) });
+  existingAsins = new Set(['B0BULKB001']); // the target seller already has product B
+  const bulkOut = await pushCatalogItemsToUserDrafts([bulkA.id, bulkB.id, bulkC.id, 'not-a-real-id'], 'seller6');
+  assert.deepStrictEqual(bulkOut.summary, { pushed: 2, alreadyHave: 1, failed: 0, notFound: 1 });
+  const byId = Object.fromEntries(bulkOut.results.map((r) => [r.id, r]));
+  assert.strictEqual(byId[bulkA.id].status, 'pushed');
+  assert.strictEqual(byId[bulkB.id].status, 'already_have');
+  assert.match(byId[bulkB.id].reason, /already/i);
+  assert.strictEqual(byId[bulkC.id].status, 'pushed');
+  assert.strictEqual(byId['not-a-real-id'].status, 'not_found');
+  assert.strictEqual(db.drafts.length, 2, 'only the two not already owned were actually created');
+  assert.deepStrictEqual(db.drafts.map((d) => d.sku).sort(), ['B0BULKA001', 'B0BULKC001']);
 
   console.log('product catalog model tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
