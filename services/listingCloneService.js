@@ -48,14 +48,14 @@ function shuffle(arr) {
 /**
  * One random candidate per distinct ASIN, platform-wide, from the last POOL_WINDOW_DAYS - excluding ASINs the target
  * already owns (any status, any store) and, since cloning your own listing back to yourself is meaningless, listings that
- * already belong to the target user.
+ * already belong to the target user. sourceCountry (e.g. "UK", "US") narrows the pool to products scraped from that one
+ * Amazon site, so a UK-focused store is never pushed US-sourced products and vice versa; omitted = any site.
  */
-async function candidatePool({ excludeUserId, excludeSkus = [] } = {}) {
+async function candidatePool({ excludeUserId, excludeSkus = [], sourceCountry } = {}) {
   const since = new Date(Date.now() - POOL_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-  const rows = await Listing.find(
-    { sourcePlatform: 'amazon', categoryId: { $ne: null }, importId: { $ne: null }, createdAt: { $gte: since } },
-    { sku: 1, importId: 1, userId: 1 }
-  ).lean();
+  const filter = { sourcePlatform: 'amazon', categoryId: { $ne: null }, importId: { $ne: null }, createdAt: { $gte: since } };
+  if (sourceCountry) filter.sourceCountry = sourceCountry;
+  const rows = await Listing.find(filter, { sku: 1, importId: 1, userId: 1 }).lean();
   const excluded = new Set((excludeSkus || []).map((s) => String(s || '').toUpperCase()).filter(Boolean));
   const bySku = new Map();
   for (const row of rows) {
@@ -106,6 +106,7 @@ async function cloneOneListing(row, targetUserId) {
     ebayAccountId: activeEbayAccount?.id || null,
     marketplaceId: activeEbayAccount?.marketplaceId || null,
     sku: sourceListing.sku,
+    amazonUrl: sourceImport.amazonUrl || null,
     title: sourceListing.title,
     mainImage: images[0] || sourceListing.mainImage || null,
     images,
@@ -130,12 +131,12 @@ async function cloneOneListing(row, targetUserId) {
  * is charged and no Easyparser/Canopy call is made either way - the caller (the admin push route, or the listing-pack
  * grant) decides separately whether/how this was paid for.
  */
-async function pushRandomListings({ targetUserId, count }) {
+async function pushRandomListings({ targetUserId, count, sourceCountry }) {
   const wanted = Math.max(0, Math.floor(Number(count) || 0));
   if (!wanted) return { requested: 0, poolSize: 0, pushed: 0 };
 
   const existingSkus = (await Listing.find({ userId: targetUserId }, { sku: 1 }).lean()).map((l) => l.sku);
-  const pool = shuffle(await candidatePool({ excludeUserId: targetUserId, excludeSkus: existingSkus }));
+  const pool = shuffle(await candidatePool({ excludeUserId: targetUserId, excludeSkus: existingSkus, sourceCountry }));
   const picked = pool.slice(0, wanted);
 
   const results = await mapWithConcurrency(picked, 8, (row) => cloneOneListing(row, targetUserId).catch((err) => {

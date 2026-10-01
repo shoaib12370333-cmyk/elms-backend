@@ -63,7 +63,16 @@ const call = async (handler, { params = {}, body = {} } = {}) => {
   assert.strictEqual(out.status, 200);
   assert.strictEqual(out.body.pushed, 480);
   assert.strictEqual(out.body.poolSize, 4000);
-  assert.deepStrictEqual(pushCalls[pushCalls.length - 1], { targetUserId: ID, count: 500 });
+  assert.deepStrictEqual(pushCalls[pushCalls.length - 1], { targetUserId: ID, count: 500, sourceCountry: null }, 'no sourceCountry given: any Amazon site, as before');
+
+  // ---- sourceCountry: narrows which Amazon site the pool is drawn from, so a UK-focused store is never pushed US products ----
+  out = await call(pushHandler, { params: { id: ID }, body: { count: 5, sourceCountry: 'uk' } });
+  assert.strictEqual(out.status, 200, 'lower-case is accepted');
+  assert.deepStrictEqual(pushCalls[pushCalls.length - 1], { targetUserId: ID, count: 5, sourceCountry: 'UK' });
+  out = await call(pushHandler, { params: { id: ID }, body: { count: 5, sourceCountry: 'FR' } });
+  assert.deepStrictEqual(pushCalls[pushCalls.length - 1], { targetUserId: ID, count: 5, sourceCountry: 'FR' });
+  out = await call(pushHandler, { params: { id: ID }, body: { count: 5, sourceCountry: 'Mars' } });
+  assert.strictEqual(out.status, 400, 'not one of the known Amazon sites: rejected');
 
   // ---- Buy Listings tier CRUD (the same admin tab) ----
   const listHandler = routeHandler('/listing-pack-tiers', 'get');

@@ -61,7 +61,7 @@ async function createListing(userId, { importId, ebayAccountId, marketplaceId, s
  * if the user has already published, errored, or ended this SKU, re-fetching
  * the same product does NOT overwrite that listing's status or eBay IDs.
  */
-async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule }) {
+async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule, amazonUrl }) {
   const normalizedSku = requireAsinSku(sku, 'draft');
   // The same Amazon product can live as a separate draft in each connected store,
   // so a listing is identified by (user, store, sku). A legacy listing with no
@@ -83,6 +83,9 @@ async function upsertDraft(userId, { importId, ebayAccountId, marketplaceId, sku
       importId: importId || null,
       sourcePlatform: 'amazon', // explicit, not left to the schema's upsert default - see models/schemas/Listing.js
       sku: normalizedSku,
+      // Which Amazon site the product came from (a fact about the product, never seller-edited) - refreshed on every
+      // fetch, same as importId/sku above, so a re-fetch of the same ASIN from a different Amazon site still corrects it.
+      sourceCountry: supplierCountryFromUrl(amazonUrl),
       ...(sellerEdited ? {} : {
         title: title || null,
         mainImage: mainImage || null,
@@ -404,7 +407,7 @@ async function listListingsByStatuses(userId, statuses = [], accountId = null, {
     serialized.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
     serialized.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
     serialized.asin = doc.importId?.asin || null;
-    serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+    serialized.supplier_country = doc.sourceCountry || supplierCountryFromUrl(doc.importId?.amazonUrl);
     serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
     return withImportFallback(serialized, doc);
   });
@@ -509,7 +512,7 @@ async function claimUnassignedListings(userId, accountId) {
     const SUPPLIER_MARKET = { UK: 'EBAY_GB', US: 'EBAY_US', AU: 'EBAY_AU', CA: 'EBAY_CA', DE: 'EBAY_DE', FR: 'EBAY_FR', IT: 'EBAY_IT', ES: 'EBAY_ES' };
     let moved = 0;
     for (const l of orphans) {
-      const market = l.marketplaceId || SUPPLIER_MARKET[supplierCountryFromUrl(l.importId?.amazonUrl)] || null;
+      const market = l.marketplaceId || SUPPLIER_MARKET[l.sourceCountry || supplierCountryFromUrl(l.importId?.amazonUrl)] || null;
       const target = (market && byMarket.get(market)) || accounts[0];
       await Listing.updateOne({ _id: l._id, ebayAccountId: null }, { $set: { ebayAccountId: target._id, marketplaceId: l.marketplaceId || target.marketplaceId || null } });
       moved += 1;
@@ -581,7 +584,7 @@ async function listListings(userId, status, accountId = null) {
     serialized.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
     serialized.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
     serialized.asin = doc.importId?.asin || null;
-    serialized.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+    serialized.supplier_country = doc.sourceCountry || supplierCountryFromUrl(doc.importId?.amazonUrl);
     serialized.sold_count = soldByListing.get(String(doc._id)) || 0;
     return withImportFallback(serialized, doc);
   });
@@ -716,7 +719,7 @@ function pageRow(doc, { soldByListing, veroTerms }) {
   row.amazon_url = doc.importId?.amazonUrl || null;
   row.amazon_price = normalizeAmazonPrice(doc.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.amazonPrice) ?? normalizeAmazonPrice(doc.importId?.product?.price);
   row.asin = doc.importId?.asin || null;
-  row.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+  row.supplier_country = doc.sourceCountry || supplierCountryFromUrl(doc.importId?.amazonUrl);
   row.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
   row.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
   row.sold_count = soldByListing.get(String(doc._id)) || 0;
@@ -852,7 +855,7 @@ async function getListingFull(userId, id) {
   row.ebay_account_username = publicUsername(doc.ebayAccountId?.ebayUserId);
   row.ebay_account_label = doc.ebayAccountId ? accountLabel(doc.ebayAccountId) : null;
   row.asin = doc.importId?.asin || null;
-  row.supplier_country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+  row.supplier_country = doc.sourceCountry || supplierCountryFromUrl(doc.importId?.amazonUrl);
   row.sold_count = sold.get(String(doc._id)) || 0;
   return withImportFallback(row, doc);
 }
@@ -1352,6 +1355,7 @@ async function recoverStalePublishingListings(maxAgeMinutes = 30) {
 module.exports = {
   createListing,
   upsertDraft,
+  supplierCountryFromUrl,
   upsertCjDraft,
   upsertAliexpressDraft,
   getListingById,

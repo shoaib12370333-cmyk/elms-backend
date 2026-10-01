@@ -210,6 +210,7 @@ router.post('/', requireAuth, async (req, res) => {
         ebayAccountId: activeEbayAccount?.id || null,
         marketplaceId: activeEbayAccount?.marketplaceId || null,
         sku,
+        amazonUrl: amazonUrl.trim(),
         title: normalized.title,
         mainImage: storedImages[0] || null,
         images: storedImages,

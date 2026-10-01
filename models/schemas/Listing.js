@@ -7,6 +7,12 @@ const listingSchema = new mongoose.Schema(
     // credits - every job and service that touches a supplier branches on this. Required so a listing can never be silently
     // ambiguous; existing rows are backfilled to 'amazon' by db.js migrateSourcePlatformDefault (they predate this field).
     sourcePlatform: { type: String, enum: ['amazon', 'cj', 'aliexpress'], required: true, default: 'amazon' },
+    // Which Amazon SITE this product was scraped from (UK, US, DE, ...) - set once at import time
+    // (models/listingsModel.js upsertDraft, from the Import's own amazonUrl), not re-derived from the URL on every
+    // read. null for CJ/AliExpress listings (no Amazon site), and for an Amazon listing imported before this field
+    // existed - db.js migrateSourceCountryBackfill fills those in once. This is the PRODUCT'S country, never to be
+    // confused with marketplaceId (the eBay site it is published TO) or countryLocation (the eBay item location).
+    sourceCountry: { type: String, default: null },
     // CJdropshipping's own ids for this product/variant. Set only when sourcePlatform is 'cj'; an Amazon listing's asin lives on
     // its Import (services/skuService requireAsinSku), never here, and these are never set on an Amazon listing.
     cjProductId: { type: String, default: null },
@@ -136,5 +142,7 @@ listingSchema.index({ userId: 1, ebayAccountId: 1, aliexpressProductId: 1, aliex
 // the admin's push-listings tool and the paid Buy Listings tab clone from - scans across every user, not one, so it needs
 // its own index rather than riding on the per-user ones above.
 listingSchema.index({ sourcePlatform: 1, categoryId: 1, createdAt: -1 });
+// Same pool, filtered by the Amazon site it was sourced from too (admin push-listings / Buy Listings "only UK products" etc.).
+listingSchema.index({ sourcePlatform: 1, sourceCountry: 1, categoryId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Listing', listingSchema);

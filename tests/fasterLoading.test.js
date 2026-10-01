@@ -60,6 +60,15 @@ const idOf = (s) => ({ toString: () => s });
   assert.deepStrictEqual(r.variants.map((v) => v.asin), ['B0AAAA1111'], 'only the product itself');
   assert.strictEqual(r.publish_response, null);
 
+  // a STORED sourceCountry wins over re-deriving one from the Import's amazonUrl (it is set once at import time -
+  // models/listingsModel.js upsertDraft - not re-parsed from the URL on every read once a listing carries it)
+  plainListing.sourceCountry = 'US';
+  Module._load = function (request, parent) { if (fakes[request] && parent && /listingsModel\.js$/.test(parent.filename)) return fakes[request]; return orig.apply(this, arguments); };
+  const rowsStored = await L.listListings('a1b2c3d4e5f6a7b8c9d0e1f2', 'published', null);
+  Module._load = orig;
+  assert.strictEqual(rowsStored[0].supplier_country, 'US', 'the stored field, not the .co.uk URL, decides');
+  delete plainListing.sourceCountry;
+
   // ---------- the dashboard's order totals ----------
   const finds = [];
   const orderSeen = { select: null, populate: null };

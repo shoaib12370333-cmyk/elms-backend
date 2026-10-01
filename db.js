@@ -18,6 +18,7 @@ async function connectDB() {
   await migrateProductCacheTtl();
   await migrateUserExtensionKeyIndex();
   await migrateSourcePlatformDefault();
+  await migrateSourceCountryBackfill();
   await require('./services/signupBonusGuard').backfillEmailKeys().then((n) => n && console.log(`Filled emailKey on ${n} user(s).`)).catch((err) => console.warn('emailKey backfill skipped:', err.message));
 }
 
@@ -127,4 +128,33 @@ async function migrateSourcePlatformDefault() {
   }
 }
 
-module.exports = { connectDB };
+/**
+ * sourceCountry (models/schemas/Listing.js) is set going forward at import time (models/listingsModel.js upsertDraft),
+ * but every Amazon listing imported before this field existed has none - the admin push-listings pool and any future
+ * "only UK products"-style filter would silently skip them. Backfills from each listing's own linked Import.amazonUrl,
+ * the same source of truth the live supplier_country badge already reads. Idempotent ($exists: false matches only rows
+ * never touched by this migration); a listing whose Import is gone, or whose URL matches no known Amazon site, is left
+ * alone and simply keeps showing supplier_country's own on-the-fly fallback (models/listingsModel.js).
+ */
+async function migrateSourceCountryBackfill() {
+  try {
+    const Listing = require('./models/schemas/Listing');
+    const { supplierCountryFromUrl } = require('./models/listingsModel');
+    const cursor = Listing.find(
+      { sourcePlatform: 'amazon', sourceCountry: { $exists: false }, importId: { $ne: null } },
+      { importId: 1 }
+    ).populate({ path: 'importId', select: 'amazonUrl' }).cursor();
+    let updated = 0;
+    for await (const doc of cursor) {
+      const country = supplierCountryFromUrl(doc.importId?.amazonUrl);
+      if (!country) continue;
+      await Listing.updateOne({ _id: doc._id }, { $set: { sourceCountry: country } });
+      updated += 1;
+    }
+    if (updated) console.log(`Backfilled sourceCountry on ${updated} listing(s).`);
+  } catch (err) {
+    console.warn('sourceCountry backfill skipped:', err.message);
+  }
+}
+
+module.exports = { connectDB, _migrateSourceCountryBackfill: migrateSourceCountryBackfill };
