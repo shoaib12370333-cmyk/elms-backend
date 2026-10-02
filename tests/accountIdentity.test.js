@@ -37,7 +37,8 @@ console.warn = () => {};
 
 const xml = (inner) => ({ data: '<?xml version="1.0"?><Response><Ack>Success</Ack>' + inner + '</Response>' });
 const failure = (code, msg) => ({ data: '<Response><Ack>Failure</Ack><Errors><ShortMessage>' + msg + '</ShortMessage><ErrorCode>' + code + '</ErrorCode></Errors></Response>' });
-const STORE = xml('<Store><Name>Bob&apos;s &amp; Sons Outlet</Name><URL>https://www.ebay.co.uk/str/bobs</URL><Description>x</Description><CustomCategories><CustomCategory><Name>Shoes</Name></CustomCategory></CustomCategories></Store>');
+const STORE = xml('<Store><Name>Bob&apos;s &amp; Sons Outlet</Name><URL>https://www.ebay.co.uk/str/bobs</URL><Logo><URL>https://i.ebayimg.com/logo/bobs.png</URL></Logo><Description>x</Description><CustomCategories><CustomCategory><Name>Shoes</Name></CustomCategory></CustomCategories></Store>');
+const STORE_NO_LOGO = xml('<Store><Name>Plain Shop</Name><URL>https://www.ebay.com/str/plain</URL><Logo/><Description>x</Description><CustomCategories></CustomCategories></Store>');
 const USER = xml('<User><UserID>tradinguser</UserID><SellerInfo><StoreOwner>true</StoreOwner><StoreURL>https://www.ebay.co.uk/str/bobs</StoreURL></SellerInfo></User>');
 
 (async () => {
@@ -59,24 +60,27 @@ const USER = xml('<User><UserID>tradinguser</UserID><SellerInfo><StoreOwner>true
   calls.length = 0;
   postImpl = async (name) => (name === 'GetStore' ? STORE : USER);
   let st = await identity.fetchStoreName('rt', 'EBAY_GB');
-  assert.deepStrictEqual(st, { name: "Bob's & Sons Outlet", url: 'https://www.ebay.co.uk/str/bobs' }, "the store's own name, not a category's; entities decoded");
+  assert.deepStrictEqual(st, { name: "Bob's & Sons Outlet", url: 'https://www.ebay.co.uk/str/bobs', logoUrl: 'https://i.ebayimg.com/logo/bobs.png' }, "the store's own name, not a category's; entities decoded; the logo URL too");
   assert.strictEqual(calls[0].headers['X-EBAY-API-CALL-NAME'], 'GetStore'); assert.strictEqual(calls[0].headers['X-EBAY-API-SITEID'], '3', 'the UK site');
   assert.strictEqual(calls[0].headers['X-EBAY-API-IAF-TOKEN'], 'access-token');
   assert.ok(/<GetStoreRequest/.test(calls[0].body));
+  postImpl = async (name) => (name === 'GetStore' ? STORE_NO_LOGO : USER);
+  assert.deepStrictEqual(await identity.fetchStoreName('rt', 'EBAY_US'), { name: 'Plain Shop', url: 'https://www.ebay.com/str/plain', logoUrl: null }, 'a self-closing <Logo/> (no logo set) is null, not an error');
   postImpl = async () => failure('13003', 'You do not have a Store.');
-  assert.deepStrictEqual(await identity.fetchStoreName('rt', 'EBAY_US'), { name: '', url: null }, 'no store subscription = no store name (an answer, not a failure)');
+  assert.deepStrictEqual(await identity.fetchStoreName('rt', 'EBAY_US'), { name: '', url: null, logoUrl: null }, 'no store subscription = no store name (an answer, not a failure)');
   postImpl = async () => failure('931', 'Auth token is hard expired.');
   assert.strictEqual(await identity.fetchStoreName('rt', 'EBAY_US'), null, 'a real failure = unknown');
   postImpl = async () => { throw new Error('network'); };
   assert.strictEqual(await identity.fetchStoreName('rt', 'EBAY_US'), null);
   assert.deepStrictEqual(identity.parseTradingUser(USER.data), { username: 'tradinguser', hasStore: true, storeUrl: 'https://www.ebay.co.uk/str/bobs' });
-  assert.deepStrictEqual(identity.parseStore('<Response></Response>'), { name: null, url: null });
+  assert.deepStrictEqual(identity.parseStore('<Response></Response>'), { name: null, url: null, logoUrl: null });
 
   // everything together
   getImpl = async () => ({ data: { username: 'seller-uk' } });
   postImpl = async (name) => (name === 'GetStore' ? STORE : USER);
   let all = await identity.fetchSellerIdentity('rt', 'EBAY_GB');
   assert.strictEqual(all.username, 'seller-uk'); assert.strictEqual(all.storeName, "Bob's & Sons Outlet"); assert.strictEqual(all.hasStore, true); assert.strictEqual(all.checked, true);
+  assert.strictEqual(all.storeLogoUrl, 'https://i.ebayimg.com/logo/bobs.png');
   // no username from the Identity API: GetUser gives it
   getImpl = async () => ({ data: { userId: 'opaque' } });
   all = await identity.fetchSellerIdentity('rt', 'EBAY_GB');
@@ -126,9 +130,10 @@ const USER = xml('<User><UserID>tradinguser</UserID><SellerInfo><StoreOwner>true
 
   // the answer is saved: store name, and the real username in place of the stand-in
   docs.push({ _id: 'a1', userId: 'u1', ebayUserId: 'eBay Account 1758', marketplaceId: 'EBAY_GB', refreshTokenEncrypted: 'enc1', storeName: null, identityCheckedAt: null });
-  lookupImpl = async () => ({ username: 'seller-uk', storeName: 'Trendy Deals UK', checked: true });
+  lookupImpl = async () => ({ username: 'seller-uk', storeName: 'Trendy Deals UK', storeLogoUrl: 'https://i.ebayimg.com/logo/uk.png', checked: true });
   let saved = await svc.refreshAccountIdentity('u1', 'a1');
   assert.strictEqual(saved.storeName, 'Trendy Deals UK'); assert.strictEqual(saved.ebayUserId, 'seller-uk'); assert.ok(saved.identityCheckedAt instanceof Date);
+  assert.strictEqual(saved.storeLogoUrl, 'https://i.ebayimg.com/logo/uk.png', 'the logo URL is saved alongside the store name');
   // the same username already belongs to another account of the user: the stand-in stays
   docs.push({ _id: 'a2', userId: 'u1', ebayUserId: 'eBay Account 999', marketplaceId: 'EBAY_US', refreshTokenEncrypted: 'enc2', storeName: null, identityCheckedAt: null });
   saved = await svc.refreshAccountIdentity('u1', 'a2');

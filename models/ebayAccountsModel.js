@@ -265,6 +265,7 @@ function serialize(doc) {
     // (null = not looked up yet, '' = the seller has no store) and the one name the UI shows for the account.
     username: publicUsername(obj.ebayUserId),
     storeName: obj.storeName === undefined ? null : obj.storeName,
+    storeLogoUrl: obj.storeLogoUrl || null,
     storeNumber: obj.storeNumber || null,
     identityCheckedAt: obj.identityCheckedAt || null,
     label: accountLabel(obj),
