@@ -13,16 +13,28 @@ let lineItemsFor = () => [{ lineItem: 'x' }];
 const saved = [];
 let failOnLine = null; // a lineItem object that upsertOrder should throw for
 const updates = [];
+const fulfillmentCalls = []; // orderIds fetchShippingFulfillments was actually called for
+const importCalls = [];
+let needsTrackingFor = () => false;
+let fulfillmentsImpl = async () => [];
+let fulfillmentsThrows = null;
 
 stub('services/ebayOrdersService', {
   fetchOrders: async () => rawOrders,
   normalizeOrderLineItems: (rawOrder) => lineItemsFor(rawOrder),
+  fetchShippingFulfillments: async (rt, orderId) => {
+    fulfillmentCalls.push(orderId);
+    if (fulfillmentsThrows) throw fulfillmentsThrows;
+    return fulfillmentsImpl(orderId);
+  },
 });
 stub('models/ordersModel', {
   upsertOrder: async (userId, lineItem, accountId) => {
     if (failOnLine && lineItem === failOnLine) throw new Error('Duplicate key-ish real error.');
     saved.push({ userId, lineItem, accountId });
   },
+  hasOrderLineItemsNeedingTracking: async (userId, accountId, orderId) => needsTrackingFor(orderId),
+  importTrackingFromEbay: async (userId, accountId, orderId, fulfillments) => { importCalls.push({ orderId, fulfillments }); },
 });
 stub('models/ebayAccountsModel', { getEbayAccountRefreshToken: async () => 'rt' });
 stub('models/schemas/EbayAccount', {
@@ -32,7 +44,11 @@ stub('models/schemas/EbayAccount', {
 stub('services/orderImageService', { fillMissingOrderImages: async () => {} });
 
 const { syncAccountOrders } = require('../services/orderSyncService');
-const reset = () => { saved.length = 0; updates.length = 0; failOnLine = null; };
+const reset = () => {
+  saved.length = 0; updates.length = 0; failOnLine = null;
+  fulfillmentCalls.length = 0; importCalls.length = 0;
+  needsTrackingFor = () => false; fulfillmentsImpl = async () => []; fulfillmentsThrows = null;
+};
 
 (async () => {
   // ---------- the happy path: every order's line items save ----------
@@ -64,6 +80,55 @@ const reset = () => { saved.length = 0; updates.length = 0; failOnLine = null; }
   out = await syncAccountOrders('u1', 'acc1');
   assert.strictEqual(out.failedCount, 1, 'one order that itself throws counts as one failed order, not per-line-item');
   assert.strictEqual(out.savedCount, 0, 'the throw happens on the first line, so the second line of the SAME order (inside the same try) is never reached - a within-order ordering detail, not a cross-order one');
+
+  // ---------- NOT_STARTED (or missing) orderFulfillmentStatus: eBay itself has nothing shipped yet, so the extra
+  // call is never worth making ----------
+  reset();
+  rawOrders = [{ orderId: 'O5', orderFulfillmentStatus: 'NOT_STARTED' }, { orderId: 'O6' }];
+  lineItemsFor = (o) => [{ id: o.orderId + '-1' }];
+  await syncAccountOrders('u1', 'acc1');
+  assert.deepStrictEqual(fulfillmentCalls, [], 'NOT_STARTED and missing status both skip the tracking check entirely');
+
+  // ---------- eBay says FULFILLED, but ELMS already has tracking on every line of this order: no eBay call wasted ----------
+  reset();
+  rawOrders = [{ orderId: 'O7', orderFulfillmentStatus: 'FULFILLED' }];
+  lineItemsFor = (o) => [{ id: o.orderId + '-1' }];
+  needsTrackingFor = () => false;
+  await syncAccountOrders('u1', 'acc1');
+  assert.deepStrictEqual(fulfillmentCalls, [], 'already fully tracked in ELMS - fetchShippingFulfillments is never called');
+
+  // ---------- eBay says FULFILLED and ELMS is still missing tracking: fetches and imports it ----------
+  reset();
+  rawOrders = [{ orderId: 'O8', orderFulfillmentStatus: 'FULFILLED' }];
+  lineItemsFor = (o) => [{ id: o.orderId + '-1' }];
+  needsTrackingFor = (orderId) => orderId === 'O8';
+  const fulfillmentsFromEbay = [{ fulfillmentId: 'f1', shipmentTrackingNumber: '1Z999', shippingCarrierCode: 'UPS', lineItems: [{ lineItemId: 'li1' }] }];
+  fulfillmentsImpl = async () => fulfillmentsFromEbay;
+  await syncAccountOrders('u1', 'acc1');
+  assert.deepStrictEqual(fulfillmentCalls, ['O8']);
+  assert.strictEqual(importCalls.length, 1);
+  assert.strictEqual(importCalls[0].orderId, 'O8');
+  assert.deepStrictEqual(importCalls[0].fulfillments, fulfillmentsFromEbay);
+
+  // ---------- IN_PROGRESS counts too (not just FULFILLED) - a partially-shipped multi-line order still needs checking ----------
+  reset();
+  rawOrders = [{ orderId: 'O9', orderFulfillmentStatus: 'IN_PROGRESS' }];
+  lineItemsFor = (o) => [{ id: o.orderId + '-1' }];
+  needsTrackingFor = () => true;
+  await syncAccountOrders('u1', 'acc1');
+  assert.deepStrictEqual(fulfillmentCalls, ['O9']);
+
+  // ---------- a failure fetching/importing eBay's own tracking is isolated - it never fails the order's own (already
+  // successful) save, and never stops the NEXT order in the same run ----------
+  reset();
+  rawOrders = [{ orderId: 'O10', orderFulfillmentStatus: 'FULFILLED' }, { orderId: 'O11', orderFulfillmentStatus: 'FULFILLED' }];
+  lineItemsFor = (o) => [{ id: o.orderId + '-1' }];
+  needsTrackingFor = () => true;
+  fulfillmentsThrows = new Error('eBay hiccup');
+  out = await syncAccountOrders('u1', 'acc1');
+  assert.deepStrictEqual(fulfillmentCalls, ['O10', 'O11'], 'both orders are still tried even though the first one errors');
+  assert.strictEqual(out.savedCount, 2, 'the main order save is unaffected by a tracking-check failure');
+  assert.strictEqual(out.failedCount, 0, 'a tracking-check failure is not counted as the order itself failing to save');
 
   console.log('order sync service tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -42,6 +42,19 @@ const { fetchOrders } = require('../services/ebayOrdersService');
   assert.strictEqual(errors.length, 1, 'hitting the cap while eBay still had more is logged, not silently treated as "done"');
   assert.match(errors[0], /50-page limit/);
 
+  // ---------- fetchShippingFulfillments: the collection endpoint, the one place tracking added directly on eBay
+  // (never included on the main order GET) can be picked up from ----------
+  let lastUrl = null;
+  require.cache[axiosPath].exports.get = async (url) => { lastUrl = url; return { data: { fulfillments: [{ fulfillmentId: 'f1', shipmentTrackingNumber: '1Z999', shippingCarrierCode: 'UPS', lineItems: [{ lineItemId: 'li1' }] }] } }; };
+  const { fetchShippingFulfillments } = require('../services/ebayOrdersService');
+  const fulfillments = await fetchShippingFulfillments('rt', 'O1');
+  assert.ok(lastUrl.endsWith('/sell/fulfillment/v1/order/O1/shipping_fulfillment'));
+  assert.strictEqual(fulfillments.length, 1);
+  assert.strictEqual(fulfillments[0].shipmentTrackingNumber, '1Z999');
+  // no fulfillments container at all (an order with nothing shipped yet) - an empty array, never a throw
+  require.cache[axiosPath].exports.get = async () => ({ data: {} });
+  assert.deepStrictEqual(await fetchShippingFulfillments('rt', 'O2'), []);
+
   console.error = origError;
   console.log('ebay orders fetch tests passed');
 })().catch((e) => { console.error = origError; console.error(e); process.exit(1); });

@@ -322,6 +322,38 @@ async function markShippedNoTracking(userId, id) {
 }
 
 /**
+ * Whether this eBay order still has a line item in ELMS with no tracking number - used by jobs/orderSync.js (via
+ * services/ebayOrdersService.js fetchShippingFulfillments) to decide whether an extra eBay call is worth making at
+ * all: an order eBay says is fulfilled, but whose ELMS line items already all have tracking, needs nothing more.
+ */
+async function hasOrderLineItemsNeedingTracking(userId, ebayAccountId, ebayOrderId) {
+  return Order.exists({ userId, ebayAccountId, ebayOrderId, trackingNumber: null });
+}
+
+/**
+ * Fills in trackingNumber/shippingCarrier for this eBay order's line items from eBay's OWN shipping fulfillment
+ * records (added directly on eBay - Seller Hub, another app - rather than through ELMS, which the main order sync
+ * never sees: see fetchShippingFulfillments's own comment). Matches `trackingNumber: null` in the filter itself
+ * (atomic), so this can never overwrite a tracking number ELMS already has, from setTracking or an earlier run of
+ * this same function. Returns how many line items were filled in.
+ */
+async function importTrackingFromEbay(userId, ebayAccountId, ebayOrderId, fulfillments) {
+  let updated = 0;
+  for (const f of fulfillments || []) {
+    if (!f.shipmentTrackingNumber) continue;
+    for (const li of f.lineItems || []) {
+      if (!li.lineItemId) continue;
+      const result = await Order.updateOne(
+        { userId, ebayAccountId, ebayOrderId, ebayLineItemId: li.lineItemId, trackingNumber: null },
+        { trackingNumber: f.shipmentTrackingNumber, shippingCarrier: f.shippingCarrierCode || null, fulfillmentStatus: 'shipped' }
+      );
+      if (result.modifiedCount) updated += 1;
+    }
+  }
+  return updated;
+}
+
+/**
  * Auto-marks "shipped" orders as "delivered" once eBay's own estimated delivery date (estDeliveryMax) has passed -
  * the same local-only status change the manual "Mark delivered" button already makes (eBay has no seller-side "mark
  * delivered" call of its own; delivery is eBay's own inference from carrier data - this only keeps ELMS's status
@@ -677,4 +709,4 @@ async function setOrderEarningsBulk(updates) {
   return result.modifiedCount || 0;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, autoMarkDelivered, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, _summaryCache: summaryCache };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, autoMarkDelivered, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, hasOrderLineItemsNeedingTracking, importTrackingFromEbay, _summaryCache: summaryCache };
