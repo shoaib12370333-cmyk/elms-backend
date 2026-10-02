@@ -73,4 +73,15 @@ function assertAmazonMatchesStore(amazonUrl, marketplaceId) {
   throw err;
 }
 
-module.exports = { isValidAmazonUrl, isValidObjectIdString, isPositiveNumber, assertAmazonMatchesStore, COUNTRY_TO_AMAZON_DOMAIN };
+// A description is raw HTML (tables, bullet lists, inline styles) - counting words in the markup itself (tag names,
+// attributes) would overstate it, so tags/entities are stripped first. Same limit and counting as the frontend
+// editor's own live counter (index.html descWordCount) - kept here too since the editor's check is bypassable
+// (a direct API call, or any other path that saves a description) and this field has no hard character cap from
+// eBay itself to lean on instead.
+const DESCRIPTION_WORD_LIMIT = 4000;
+function descriptionWordCount(html) {
+  const text = String(html || '').replace(/<[^>]*>/g, ' ').replace(/&[a-zA-Z#0-9]+;/g, ' ');
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+module.exports = { isValidAmazonUrl, isValidObjectIdString, isPositiveNumber, assertAmazonMatchesStore, COUNTRY_TO_AMAZON_DOMAIN, DESCRIPTION_WORD_LIMIT, descriptionWordCount };
