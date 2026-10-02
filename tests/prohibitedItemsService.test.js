@@ -42,5 +42,19 @@ const { scanListing } = require('../services/prohibitedItemsService');
   assert.deepStrictEqual(scanListing({}), []);
   assert.deepStrictEqual(scanListing(undefined), []);
 
+  // ---------- performance regression guard: models/listingsModel.js's serialize() runs this for every listing row a
+  // page shows (Drafts and Live Listings both, every page load) - a real production report (2026-10-02) traced
+  // "Live Listings Bulk Edit is very slow" to an earlier version of this file reusing veroService.js's matcher, whose
+  // foldWithMap() normalizes the text one character at a time (needed there to cut a word back OUT of the original
+  // text - never needed for a heads-up). 300 listings, each with a long (4000-word, the app's own cap) description,
+  // must stay comfortably fast - generous enough to never flake on a loaded CI box, tight enough to catch that
+  // regression coming back (it measured at roughly 25x slower before this fix).
+  const longDescription = '<div><h2>Product</h2><p>' + Array.from({ length: 4000 }, (_, i) => 'word' + (i % 50)).join(' ') + '</p></div>';
+  const manyListings = Array.from({ length: 300 }, () => ({ title: 'An Ordinary Product Title', description: longDescription, bulletPoints: ['Durable', 'Lightweight'], specifications: [{ name: 'Color', value: 'Blue' }] }));
+  const start = Date.now();
+  manyListings.forEach((l) => scanListing(l));
+  const elapsedMs = Date.now() - start;
+  assert.ok(elapsedMs < 2000, `300 listings with a 4000-word description took ${elapsedMs}ms - expected well under 2000ms`);
+
   console.log('prohibited items service tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
