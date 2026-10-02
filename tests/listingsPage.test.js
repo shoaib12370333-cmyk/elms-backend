@@ -105,6 +105,10 @@ const add = (over = {}) => { n += 1; const d = { _id: hex(n), userId: USER, impo
   assert.deepStrictEqual(M.pageOptions({ page: '-4', limit: '9999' }), { page: 1, limit: 200 }); assert.deepStrictEqual(M.pageOptions({ page: 'x', limit: '0' }), { page: 1, limit: 50 });
   assert.ok(M.pageQuery(USER, { q: 'a.b(c)' }).$or[0].title.test('xx A.B(C) yy') && !M.pageQuery(USER, { q: 'a.b(c)' }).$or[0].title.test('aXb(c)'), 'the search text is text, not a pattern');
   assert.deepStrictEqual(Object.keys(M.pageQuery(USER, { statuses: ['published'], accountId: ACC1 })).sort(), ['ebayAccountId', 'status', 'userId']);
+  // the source filter: each real source narrows to ITS listings (AliExpress was missing - the filter then matched every listing, and "Select all" under it reached Amazon and CJ ones); anything else is no filter
+  for (const source of ['amazon', 'cj', 'aliexpress']) assert.strictEqual(M.pageQuery(USER, { source }).sourcePlatform, source, source + ' filters to its own listings');
+  assert.strictEqual(M.pageQuery(USER, { source: 'ebay' }).sourcePlatform, undefined, 'an unknown source is no filter');
+  assert.strictEqual(M.pageQuery(USER, {}).sourcePlatform, undefined);
 
   // ---------- a page: 120 live listings, 50 to a page ----------
   reset();

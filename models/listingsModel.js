@@ -628,13 +628,14 @@ function pageOptions({ page, limit } = {}) {
   return { page: p, limit: l };
 }
 
-/** The database filter of the list: the seller's listings, in these statuses, of this store and source (Amazon/CJ), whose title / SKU / eBay item number / note holds the search text. */
+/** The database filter of the list: the seller's listings, in these statuses, of this store and source (Amazon/CJ/AliExpress), whose title / SKU / eBay item number / note holds the search text. */
 function pageQuery(userId, { statuses = [], accountId = null, q = '', source = null } = {}) {
   const query = { userId };
   const list = [...new Set((Array.isArray(statuses) ? statuses : []).filter(Boolean))];
   if (list.length) query.status = { $in: list };
   if (accountId) query.ebayAccountId = accountId;
-  if (source === 'amazon' || source === 'cj') query.sourcePlatform = source;
+  // 'aliexpress' too: without it the AliExpress filter matched EVERY listing, and "Select all" under it reached Amazon and CJ ones.
+  if (source === 'amazon' || source === 'cj' || source === 'aliexpress') query.sourcePlatform = source;
   const text = String(q || '').trim().slice(0, 100);
   if (text) {
     const re = new RegExp(escapeRegExp(text), 'i');

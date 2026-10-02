@@ -50,8 +50,9 @@ const ACTION_COSTS = {
   CJ_STOCK_MONITORING: 1, // one CJ stock + price check for a published CJ listing (jobs/stockMonitor.js)
 
   // AliExpress (services/aliexpressAdapter.js) - a third, separate product source next to Amazon and CJ. Never shares a key,
-  // a call or a credit charge with the Amazon or CJ actions above. Stock/price monitoring is not built yet.
+  // a call or a credit charge with the Amazon or CJ actions above.
   ALIEXPRESS_IMPORT: 1, // importing one AliExpress product/sku as a draft - website Import page
+  ALIEXPRESS_STOCK_MONITORING: 1, // one AliExpress stock + price check for a published AliExpress listing (jobs/stockMonitor.js)
 };
 
 /**
@@ -91,6 +92,7 @@ const ACTION_COST_METADATA = [
   { key: 'CJ_IMPORT', label: 'CJdropshipping import', usesCanopy: false, usesCj: true, description: 'Importing one product/variant from CJdropshipping as a draft (Import page and "Find products on CJ"). Separate from the Amazon import price.' },
   { key: 'CJ_STOCK_MONITORING', label: 'CJ stock monitoring (daily)', usesCanopy: false, usesCj: true, description: 'Automatic daily stock + price check for a published CJ listing, against the CJ API. Separate from Amazon stock monitoring.' },
   { key: 'ALIEXPRESS_IMPORT', label: 'AliExpress import', usesCanopy: false, description: 'Importing one product/sku from AliExpress as a draft (Import page). Separate from the Amazon and CJ import prices.' },
+  { key: 'ALIEXPRESS_STOCK_MONITORING', label: 'AliExpress stock monitoring (daily)', usesCanopy: false, description: 'Automatic daily stock + price check for a published AliExpress listing, against the AliExpress API. Separate from Amazon and CJ stock monitoring.' },
 ];
 
 module.exports = { ACTION_COSTS, ACTION_COST_METADATA };
