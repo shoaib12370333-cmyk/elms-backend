@@ -4,6 +4,7 @@ const EbayAccount = require('./schemas/EbayAccount');
 const { normalizeAsinSku, requireAsinSku } = require('../services/skuService');
 const { accountLabel, publicUsername } = require('../services/accountLabel');
 const { isMissingLocalImage } = require('../services/imageStorageService');
+const { scanListing: scanProhibitedItems } = require('../services/prohibitedItemsService');
 
 // Amazon product prices are positive monetary values. Treat null/undefined/empty
 // values (and the legacy 0 created by Number(null)) as missing so the UI can
@@ -1227,6 +1228,10 @@ function serialize(doc) {
     views: Number.isFinite(Number(obj.views)) && obj.views !== null ? Number(obj.views) : null,
     watchers: Number.isFinite(Number(obj.watchers)) && obj.watchers !== null ? Number(obj.watchers) : null,
     stats_synced_at: obj.statsSyncedAt || null,
+    // A heads-up, never a block - see services/prohibitedItemsService.js. Empty for the overwhelming majority of
+    // listings, so computing it on every serialize (list pages can show hundreds of rows) costs very little: the
+    // matcher itself is built once, not per listing.
+    policy_warning_terms: scanProhibitedItems({ title: obj.title, description: obj.description, bulletPoints: obj.bulletPoints, specifications: obj.specifications }),
     is_error: obj.status === 'error',
     created_at: obj.createdAt,
     updated_at: obj.updatedAt,

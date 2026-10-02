@@ -32,4 +32,11 @@ s = serialize({ toObject: () => ({ _id: oid('l3'), ebayAccountId: null, importId
 assert.strictEqual(s.ebay_account_id, null);
 assert.strictEqual(s.import_id, null);
 
+// serialize() also includes services/prohibitedItemsService.js's heads-up for every listing (Drafts and Live
+// Listings share this same function) - a clean listing gets an empty array, never undefined/missing.
+s = serialize({ toObject: () => ({ _id: oid('l4'), title: 'Stainless Steel Water Bottle' }) });
+assert.deepStrictEqual(s.policy_warning_terms, []);
+s = serialize({ toObject: () => ({ _id: oid('l5'), title: 'Glass Dab Rig Smoking Accessory' }) });
+assert.deepStrictEqual(s.policy_warning_terms, ['dab rig']);
+
 console.log('listing serialize ids tests passed');
