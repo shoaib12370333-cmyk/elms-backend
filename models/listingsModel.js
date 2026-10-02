@@ -183,7 +183,7 @@ async function upsertCjDraft(userId, { importId, ebayAccountId, marketplaceId, c
  * aliexpressSkuId (never by sku - findAliexpressListingInStore), uses aliSkuFor (built from the AliExpress sku's own id,
  * never the supplier's own sku text - see services/skuService.js) instead of requireAsinSku/cjSkuFor.
  */
-async function upsertAliexpressDraft(userId, { importId, ebayAccountId, marketplaceId, aliexpressProductId, aliexpressSkuId, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule }) {
+async function upsertAliexpressDraft(userId, { importId, ebayAccountId, marketplaceId, aliexpressProductId, aliexpressSkuId, title, mainImage, images, sellPrice, markupPercent, currency, quantity, categoryId, description, bulletPoints, specifications, ebayAspects, amazonPrice, marginAmount, pricingRule, aliexpressShipping }) {
   const { aliSkuFor } = require('../services/skuService');
   const normalizedSku = aliSkuFor(aliexpressSkuId, 'AliExpress draft');
   const accountKey = ebayAccountId || null;
@@ -220,6 +220,9 @@ async function upsertAliexpressDraft(userId, { importId, ebayAccountId, marketpl
     status: 'draft',
   };
   if (sellerEdited && normalizedAmazonPrice !== null) update.amazonPrice = normalizedAmazonPrice;
+  // A shipping quote is a fact about the product, not something the seller edits: kept even on a draft they customized, and an
+  // import whose quote failed leaves what is already there alone.
+  Object.assign(update, shippingFieldsFromQuote(aliexpressShipping) || {});
   if (ebayAccountId !== undefined && !existing?.ebayAccountId) update.ebayAccountId = ebayAccountId || null;
   if (marketplaceId !== undefined && !existing?.marketplaceId) update.marketplaceId = marketplaceId || null;
   if (!existing || !Array.isArray(existing.images) || existing.images.length === 0) {
@@ -606,7 +609,7 @@ async function listListings(userId, status, accountId = null) {
 // what the editor needs (description, pictures, item specifics ...) is read for the ONE listing that is opened (getListingFull).
 const PAGE_DEFAULT = 50;
 const PAGE_MAX = 200;
-const PAGE_SELECT = 'sku title mainImage sellPrice amazonPrice status ebayAccountId marketplaceId currency quantity soldQuantity ebayListingId ebayOfferId categoryId errorMessage note markupPercent pricingRule views watchers statsSyncedAt createdAt updatedAt importId amazonInStock stockMonitoring priceMonitoring sourcePlatform cjProductId cjVariantId cjShippingCost';
+const PAGE_SELECT = 'sku title mainImage sellPrice amazonPrice status ebayAccountId marketplaceId currency quantity soldQuantity ebayListingId ebayOfferId categoryId errorMessage note markupPercent pricingRule views watchers statsSyncedAt createdAt updatedAt importId amazonInStock stockMonitoring priceMonitoring sourcePlatform cjProductId cjVariantId cjShippingCost aliexpressProductId aliexpressSkuId aliexpressShippingCost aliexpressDelivery';
 const VERO_TEXT_FIELDS = 'description bulletPoints specifications ebayAspects'; // read for the rows of one page only, to flag VeRO words; never sent
 const IMPORT_FOR_PAGE = 'asin amazonUrl amazonPrice product.price';
 const KEYS_NOT_IN_A_ROW = ['description', 'bullet_points', 'specifications', 'ebay_aspects', 'images', 'images_customized', 'ebay_image_urls', 'publish_response', 'publish_error_details', 'tags', 'draft_customized'];
@@ -620,6 +623,36 @@ const SIMPLE_SORTS = {
 const COMPUTED_SORTS = new Set(['profit', 'profitLow', 'sold']); // these need the Amazon price / the orders: worked out from a light read of every matching listing
 const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const numOrNull = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/**
+ * A shipping quote (services/aliexpressAdapter.js quoteShipping) as the two fields a listing keeps: the cost, and what the quote said
+ * about delivery. null when there is no usable quote - a missing quote must never become a cost of 0.
+ */
+function shippingFieldsFromQuote(quote) {
+  const cost = quote ? numOrNull(quote.cost) : null;
+  if (cost === null || cost < 0) return null;
+  const days = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n) : null; };
+  // Only keys that have a value: no undefined/null placeholders written into the stored sub-document.
+  const delivery = { quotedAt: new Date() };
+  if (quote.carrier) delivery.carrier = String(quote.carrier).slice(0, 120);
+  if (days(quote.minDays) !== null) delivery.minDays = days(quote.minDays);
+  if (days(quote.maxDays) !== null) delivery.maxDays = days(quote.maxDays);
+  if (quote.shipFrom) delivery.shipFrom = String(quote.shipFrom).slice(0, 8);
+  if (typeof quote.tracking === 'boolean') delivery.tracking = quote.tracking;
+  if (typeof quote.free === 'boolean') delivery.free = quote.free;
+  if (quote.currency) delivery.currency = String(quote.currency).slice(0, 8);
+  return { aliexpressShippingCost: Number(cost.toFixed(2)), aliexpressDelivery: delivery };
+}
+
+/** The shipping cost counted in a listing's profit: the one its own source quoted (CJ's freight, AliExpress's shipping quote). An Amazon listing has none. */
+function sourceShippingCostOf(doc) {
+  return doc.sourcePlatform === 'aliexpress' ? doc.aliexpressShippingCost : doc.cjShippingCost;
+}
+
+/** True when the listing has a real AliExpress shipping quote (a free 0 included) - it then stands in for the Margin rule's guessed delivery cost in the profit. */
+function hasQuotedShipping(doc) {
+  return doc.sourcePlatform === 'aliexpress' && numOrNull(doc.aliexpressShippingCost) !== null;
+}
 
 /** The page and limit of a request, made safe: page 1.., limit 1..200 (default 50). */
 function pageOptions({ page, limit } = {}) {
@@ -658,16 +691,19 @@ async function excludeDisconnectedAccounts(query, userId) {
 
 /**
  * The profit the card shows (after eBay's fees when the listing was priced by the Margin rule): the same rule as the page's
- * listingProfit. null when there is no price or cost. `extraCost` is CJ's own shipping cost (Listing.cjShippingCost) added to
- * the source cost for a CJ listing; it is always 0 for an Amazon listing, so Amazon profit is worked out exactly as before.
+ * listingProfit. null when there is no price or cost. `extraCost` is the source's own shipping cost (Listing.cjShippingCost for CJ,
+ * Listing.aliexpressShippingCost for AliExpress - see sourceShippingCostOf) added to the source cost; it is always 0 for an Amazon
+ * listing, so Amazon profit is worked out exactly as before.
  */
-function listingProfitAmount(sellPrice, amazon, rule, extraCost = 0) {
+function listingProfitAmount(sellPrice, amazon, rule, extraCost = 0, quotedShipping = false) {
   const sell = numOrNull(sellPrice);
   const cost = numOrNull(amazon);
   if (sell === null || cost === null) return null;
   const extra = numOrNull(extraCost) || 0;
   if (rule && typeof rule === 'object' && numOrNull(rule.feePercent) !== null) {
-    const costTotal = cost + extra + (numOrNull(rule.shipping) || 0);
+    // A REAL shipping quote (AliExpress) replaces the delivery cost the Margin rule only guessed ("Delivery you pay"): both are what
+    // the seller pays to send the item, so counting both would charge the same shipping twice.
+    const costTotal = cost + extra + (quotedShipping ? 0 : (numOrNull(rule.shipping) || 0));
     return sell - costTotal - (sell * numOrNull(rule.feePercent) / 100 + (numOrNull(rule.feeFixed) || 0));
   }
   return sell - cost - extra;
@@ -675,7 +711,7 @@ function listingProfitAmount(sellPrice, amazon, rule, extraCost = 0) {
 
 /** A light read of every listing of a filter: only what sorting, the summary and the "select all" need, with the Amazon price the list shows (the import's when the listing has none). */
 async function lightRows(query, extraSelect = '') {
-  const docs = await Listing.find(query).select('sellPrice amazonPrice cjShippingCost pricingRule importId status views watchers statsSyncedAt createdAt ' + extraSelect).lean();
+  const docs = await Listing.find(query).select('sellPrice amazonPrice cjShippingCost aliexpressShippingCost sourcePlatform pricingRule importId status views watchers statsSyncedAt createdAt ' + extraSelect).lean();
   const needImport = docs.filter((d) => normalizeAmazonPrice(d.amazonPrice) === null && d.importId).map((d) => d.importId);
   const imports = new Map();
   if (needImport.length) {
@@ -784,7 +820,7 @@ async function listListingsPage(userId, { statuses = [], accountId = null, q = '
       const sold = await getSoldByListing(userId);
       key = (r) => sold.get(r.id) || 0;
     } else {
-      key = (r) => listingProfitAmount(r.doc.sellPrice, r.amazon, r.doc.pricingRule, r.doc.cjShippingCost);
+      key = (r) => listingProfitAmount(r.doc.sellPrice, r.amazon, r.doc.pricingRule, sourceShippingCostOf(r.doc), hasQuotedShipping(r.doc));
     }
     const up = sort === 'profitLow';
     const scored = rows.map((r) => ({ id: r.id, score: key(r), created: r.doc.createdAt ? new Date(r.doc.createdAt).getTime() : 0 }));
@@ -941,6 +977,11 @@ async function updateListing(userId, id, fields) {
   if (fields.cjShippingCost !== undefined) {
     const shipping = Number(fields.cjShippingCost);
     update.cjShippingCost = Number.isFinite(shipping) ? Number(shipping.toFixed(2)) : null;
+  }
+  if (fields.aliexpressShipping !== undefined) {
+    // A fresh AliExpress shipping quote. An explicit null clears both fields; anything unusable is ignored (it never wipes a good figure).
+    if (fields.aliexpressShipping === null) Object.assign(update, { aliexpressShippingCost: null, aliexpressDelivery: null });
+    else Object.assign(update, shippingFieldsFromQuote(fields.aliexpressShipping) || {});
   }
   if (fields.repricingEnabled !== undefined) update.repricingEnabled = fields.repricingEnabled !== false;
   if (fields.lastRepricedAt !== undefined) update.lastRepricedAt = fields.lastRepricedAt || null;
@@ -1179,6 +1220,17 @@ function serialize(doc) {
     cj_shipping_cost: Number.isFinite(Number(obj.cjShippingCost)) ? Number(obj.cjShippingCost) : null,
     aliexpress_product_id: obj.aliexpressProductId || null,
     aliexpress_sku_id: obj.aliexpressSkuId || null,
+    aliexpress_shipping_cost: numOrNull(obj.aliexpressShippingCost),
+    aliexpress_delivery: obj.aliexpressDelivery && typeof obj.aliexpressDelivery === 'object' ? {
+      carrier: obj.aliexpressDelivery.carrier || null,
+      min_days: obj.aliexpressDelivery.minDays ?? null,
+      max_days: obj.aliexpressDelivery.maxDays ?? null,
+      ship_from: obj.aliexpressDelivery.shipFrom || null,
+      tracking: typeof obj.aliexpressDelivery.tracking === 'boolean' ? obj.aliexpressDelivery.tracking : null,
+      free: typeof obj.aliexpressDelivery.free === 'boolean' ? obj.aliexpressDelivery.free : null,
+      currency: obj.aliexpressDelivery.currency || null,
+      quoted_at: obj.aliexpressDelivery.quotedAt || null,
+    } : null,
     title: obj.title,
     main_image: obj.mainImage,
     images: Array.isArray(obj.images) ? obj.images : [],
@@ -1427,4 +1479,7 @@ module.exports = {
   serialize,
   withImportFallback,
   compactVariants,
+  sourceShippingCostOf,
+  hasQuotedShipping,
+  shippingFieldsFromQuote,
 };

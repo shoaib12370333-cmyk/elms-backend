@@ -24,6 +24,15 @@ const listingSchema = new mongoose.Schema(
     // builds the eBay sku from aliexpressSkuId, never the supplier's own sku text - same "never" rule CJ follows).
     aliexpressProductId: { type: String, default: null },
     aliexpressSkuId: { type: String, default: null },
+    // The cheapest AliExpress shipping quote last read for this sku into the store's country (services/aliexpressAdapter quoteShipping),
+    // in THIS listing's currency - AliExpress profit includes it, like cjShippingCost does for CJ (models/listingsModel.js
+    // listingProfitAmount). null = never quoted / no usable quote (unknown is never stored as 0: a real 0 means free shipping).
+    aliexpressShippingCost: { type: Number, default: null },
+    // What that quote said about delivery (carrier, days range, where it ships from). Shown to the seller, never used in a price.
+    aliexpressDelivery: {
+      type: new mongoose.Schema({ carrier: String, minDays: Number, maxDays: Number, shipFrom: String, tracking: Boolean, free: Boolean, currency: String, quotedAt: Date }, { _id: false }),
+      default: null,
+    },
     // Which of the user's (possibly several) connected eBay accounts this
     // listing belongs to / was published through. Null for drafts created
     // before an account was chosen.

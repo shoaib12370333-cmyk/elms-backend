@@ -5,8 +5,9 @@ const assert = require('assert');
 const Module = require('module');
 const { ACTION_COSTS } = require('../config/actionCosts');
 
-const calls = { canopy: 0, aliexpress: [], spend: [], refund: [], withdraw: [], price: [], qty: [], ended: [], updates: [], converted: [], notifications: [] };
+const calls = { canopy: 0, aliexpress: [], shipping: [], spend: [], refund: [], withdraw: [], price: [], qty: [], ended: [], updates: [], converted: [], notifications: [] };
 let adapterBehaviour = async () => ({});
+let quoteBehaviour = async () => null; // the shipping quote (null = AliExpress had none)
 let hasCredits = true;
 let withdrawShouldBlock = false;
 let listings = [];
@@ -19,7 +20,10 @@ const fakes = {
   '../services/canopyAmazonService': { checkAvailabilityByAsin: async () => { calls.canopy += 1; return { inStock: true }; }, detectCountryFromUrl: () => 'US' },
   '../services/cjAdapter': { getProductDetail: async () => { throw new Error('CJ must never be called for an AliExpress listing'); }, calcFreight: async () => null },
   '../services/cjImportService': { destCountryFor: () => 'US' },
-  '../services/aliexpressAdapter': { getProductDetail: async (userId, args) => { calls.aliexpress.push({ userId, ...args }); return adapterBehaviour(userId, args); } },
+  '../services/aliexpressAdapter': {
+    getProductDetail: async (userId, args) => { calls.aliexpress.push({ userId, ...args }); return adapterBehaviour(userId, args); },
+    quoteShipping: async (userId, args) => { calls.shipping.push({ userId, ...args }); return quoteBehaviour(userId, args); },
+  },
   '../services/ebayListingService': {
     withdrawListing: async (token, offerId) => { if (withdrawShouldBlock) throw blockedErr(); calls.withdraw.push([token, offerId]); },
     updateOfferPrice: async (token, offerId, price) => { calls.price.push([token, offerId, price]); },
@@ -54,8 +58,9 @@ Module._load = origLoad;
 
 const reset = () => {
   calls.canopy = 0;
-  ['aliexpress', 'spend', 'refund', 'withdraw', 'price', 'qty', 'ended', 'updates', 'converted', 'notifications'].forEach((k) => { calls[k].length = 0; });
+  ['aliexpress', 'shipping', 'spend', 'refund', 'withdraw', 'price', 'qty', 'ended', 'updates', 'converted', 'notifications'].forEach((k) => { calls[k].length = 0; });
   adapterBehaviour = async () => ({});
+  quoteBehaviour = async () => null;
   hasCredits = true;
   withdrawShouldBlock = false;
   listings = [];
@@ -314,6 +319,72 @@ const check = async (...ls) => { listings = ls; await runStockCheckForUser(user)
   adapterBehaviour = async () => detailFor('1', { sku_available_stock: 5 });
   await check(aeListing('1'), { id: 'z', sku: 'NOASIN', status: 'published', source_platform: 'amazon' });
   assert.strictEqual(calls.aliexpress.length, 1, 'an Amazon listing is never sent to AliExpress');
+
+  // ---------- the shipping quote is refreshed on each check, for this sku, the store's country and the listing's currency ----------
+  const QUOTE = { cost: 2.4, currency: 'GBP', free: false, carrier: 'AliExpress Standard Shipping', minDays: 7, maxDays: 15, shipFrom: 'CN', tracking: true };
+  reset();
+  adapterBehaviour = async () => detailFor('1', { sku_available_stock: 5 });
+  quoteBehaviour = async () => QUOTE;
+  await check(aeListing('1', { quantity: 5, marketplace_id: 'EBAY_GB', currency: 'GBP', aliexpress_shipping_cost: null }));
+  assert.deepStrictEqual(calls.shipping, [{ userId: 'u1', productId: 'P1', skuId: 'S1', shipToCountry: 'GB', currency: 'GBP' }]);
+  const shipUpdate = calls.updates.find(([, p]) => p.aliexpressShipping);
+  assert.ok(shipUpdate, 'a new figure is saved on the listing');
+  assert.strictEqual(shipUpdate[1].aliexpressShipping.cost, 2.4);
+
+  // ...unchanged -> nothing written
+  reset();
+  adapterBehaviour = async () => detailFor('1', { sku_available_stock: 5 });
+  quoteBehaviour = async () => QUOTE;
+  await check(aeListing('1', { quantity: 5, aliexpress_shipping_cost: 2.4, aliexpress_delivery: { min_days: 7, max_days: 15 } }));
+  assert.strictEqual(calls.shipping.length, 1);
+  assert.ok(!calls.updates.some(([, p]) => p.aliexpressShipping), 'the same figure and days are not rewritten');
+  // ...a listing that was never quoted (null) gets a FREE quote with no day figures stored (Number(null) is 0, which once made this look unchanged)
+  reset();
+  adapterBehaviour = async () => detailFor('1', { sku_available_stock: 5 });
+  quoteBehaviour = async () => ({ cost: 0, currency: 'GBP', free: true });
+  await check(aeListing('1', { quantity: 5, aliexpress_shipping_cost: null, aliexpress_delivery: null }));
+  assert.ok(calls.updates.some(([, p]) => p.aliexpressShipping && p.aliexpressShipping.cost === 0), 'the free quote is saved, not skipped as unchanged');
+  // ...a changed delivery time alone is saved too
+  reset();
+  adapterBehaviour = async () => detailFor('1', { sku_available_stock: 5 });
+  quoteBehaviour = async () => ({ ...QUOTE, maxDays: 25 });
+  await check(aeListing('1', { quantity: 5, aliexpress_shipping_cost: 2.4, aliexpress_delivery: { min_days: 7, max_days: 15 } }));
+  assert.ok(calls.updates.some(([, p]) => p.aliexpressShipping && p.aliexpressShipping.maxDays === 25));
+
+  // ---------- shipping NEVER reprices: a new shipping cost with the AliExpress price unchanged leaves the eBay price alone ----------
+  reset();
+  adapterBehaviour = async () => detailFor('1', { offer_sale_price: '20.00', sku_available_stock: 10 });
+  quoteBehaviour = async () => ({ ...QUOTE, cost: 9.99 });
+  await check(aeListing('1', { quantity: 10, aliexpress_shipping_cost: 1 }));
+  assert.strictEqual(calls.price.length, 0, 'shipping only keeps the profit figure honest; the eBay price follows the item price');
+  assert.ok(calls.updates.some(([, p]) => p.aliexpressShipping && p.aliexpressShipping.cost === 9.99));
+
+  // ---------- no quote (null) or a quote that blows up: the last good figure stays, and the stock + price check still completes ----------
+  reset();
+  adapterBehaviour = async () => detailFor('1', { offer_sale_price: '25.00', sku_available_stock: 5 });
+  quoteBehaviour = async () => null;
+  await check(aeListing('1', { aliexpress_shipping_cost: 2.4 }));
+  assert.ok(!calls.updates.some(([, p]) => p.aliexpressShipping), 'a missing quote does not wipe the stored figure');
+  assert.deepStrictEqual(calls.qty, [['token', 'o1', 5]]);
+  assert.strictEqual(calls.price.length, 1, 'the price check still ran');
+  reset();
+  adapterBehaviour = async () => detailFor('1', { offer_sale_price: '25.00', sku_available_stock: 5 });
+  quoteBehaviour = async () => { throw new Error('quote exploded'); };
+  await check(aeListing('1'));
+  assert.deepStrictEqual(calls.qty, [['token', 'o1', 5]]);
+  assert.strictEqual(calls.price.length, 1);
+
+  // ---------- an ended listing is not quoted; a listing AliExpress could not be asked about is not quoted ----------
+  reset();
+  adapterBehaviour = async () => detailFor('1', { sku_available_stock: 0 });
+  quoteBehaviour = async () => QUOTE;
+  await check(aeListing('1'));
+  assert.strictEqual(calls.shipping.length, 0);
+  reset();
+  adapterBehaviour = async () => { throw new Error('AliExpress said no.'); };
+  quoteBehaviour = async () => QUOTE;
+  await check(aeListing('1'));
+  assert.strictEqual(calls.shipping.length, 0);
 
   console.log('aliexpress stock monitor tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
