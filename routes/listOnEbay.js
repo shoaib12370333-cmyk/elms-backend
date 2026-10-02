@@ -17,7 +17,7 @@ const {
   getActiveEbayAccount,
 } = require('../models/ebayAccountsModel');
 const { requireAuth } = require('../middleware/requireAuth');
-const { isPositiveNumber, isValidObjectIdString } = require('../services/validationService');
+const { isPositiveNumber, isValidObjectIdString, descriptionWordCount, DESCRIPTION_WORD_LIMIT } = require('../services/validationService');
 const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { requireAsinSku } = require('../services/skuService');
@@ -415,6 +415,14 @@ router.put('/:id', requireAuth, async (req, res) => {
   }
   if (accountId !== undefined && accountId !== null && accountId !== '' && !isValidObjectIdString(accountId)) {
     return res.status(400).json({ success: false, error: 'That does not look like a valid eBay account.' });
+  }
+  // Mirrors exactly which description ends up saved below (draftProduct.description wins over the top-level field).
+  const descriptionToSave = (draftProduct && typeof draftProduct === 'object' ? draftProduct.description : undefined) ?? req.body.description;
+  if (descriptionToSave !== undefined) {
+    const wordCount = descriptionWordCount(descriptionToSave);
+    if (wordCount > DESCRIPTION_WORD_LIMIT) {
+      return res.status(400).json({ success: false, error: `The description is ${wordCount} words - keep it to ${DESCRIPTION_WORD_LIMIT} or fewer.` });
+    }
   }
 
   try {
