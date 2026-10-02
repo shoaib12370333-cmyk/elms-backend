@@ -670,11 +670,37 @@ async function checkAliexpressListing(user, listing, blockState) {
       await syncAliexpressStockQuantity(user, listing, stock, blockState);
     }
 
+    await refreshAliexpressShipping(user, listing);
     if (listing.price_monitoring !== false) await syncAliexpressPriceIfChanged(user, listing, sku, detail, blockState);
     return true;
   } catch (err) {
     console.error(`[aliexpress-stock-monitor] Could not check stock for ${listing.sku}: ${err.message}`);
     return true;
+  }
+}
+
+/**
+ * Re-quotes the AliExpress shipping for a listing's sku and keeps the figure on the listing current, so the profit shown stays
+ * honest. Deliberately does NOT reprice: the eBay price follows the AliExpress item price only (as the CJ monitor's margin logic
+ * would otherwise push the whole shipping cost into the first price change). A failed quote leaves the last good figure alone.
+ */
+async function refreshAliexpressShipping(user, listing) {
+  try {
+    const quote = await aliexpressAdapter.quoteShipping(user.id, {
+      productId: listing.aliexpress_product_id,
+      skuId: listing.aliexpress_sku_id,
+      shipToCountry: getMarketplaceConfig(listing.marketplace_id)?.country || 'US',
+      currency: listing.currency || 'USD',
+    });
+    if (!quote) return;
+    const before = listing.aliexpress_delivery || {};
+    // != null first: Number(null) is 0, which would make a free quote look "unchanged" from a listing that was never quoted.
+    const unchanged = listing.aliexpress_shipping_cost != null && Number(listing.aliexpress_shipping_cost) === quote.cost && (before.min_days ?? null) === (quote.minDays ?? null) && (before.max_days ?? null) === (quote.maxDays ?? null);
+    if (unchanged) return;
+    await updateListing(user.id, listing.id, { aliexpressShipping: quote, markDraftCustomized: false });
+    console.log(`[aliexpress-stock-monitor] ${listing.sku}: shipping ${listing.aliexpress_shipping_cost ?? 'unknown'} -> ${quote.cost} ${quote.currency || ''}`.trim());
+  } catch (err) {
+    console.warn(`[aliexpress-stock-monitor] Could not refresh the shipping quote for ${listing.sku}: ${err.message}`);
   }
 }
 

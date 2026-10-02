@@ -22,6 +22,20 @@ function destCountryFor(marketplaceId) {
   return getMarketplaceConfig(marketplaceId)?.country || 'US';
 }
 
+/**
+ * What the seller will pay AliExpress to ship this sku to the store's country (services/aliexpressAdapter.js quoteShipping), or
+ * null. A failed quote never blocks an import - the draft is simply saved without a shipping figure (profit is then shown without
+ * it until the stock/price monitor quotes it).
+ */
+async function quoteShippingFor(userId, product, destCountry) {
+  try {
+    return await aliexpressAdapter.quoteShipping(userId, { productId: product.aliexpressProductId, skuId: product.aliexpressSkuId, shipToCountry: destCountry, currency: product.currency });
+  } catch (err) {
+    console.warn('[aliexpress] shipping quote failed during import:', err.message);
+    return null;
+  }
+}
+
 /** One sku's picker-friendly label from its ae_sku_property_dtos, e.g. "Black Green / Polarized". */
 function skuLabel(sku) {
   const props = Array.isArray(sku.ae_sku_property_dtos) ? sku.ae_sku_property_dtos : [];
@@ -87,6 +101,8 @@ async function saveAliexpressProductAsDraft(userId, product, markupPercent, req,
       if (!Number.isNaN(markup)) suggestedPrice = Number((product.price * (1 + markup / 100)).toFixed(2));
     }
 
+    const shipping = await quoteShippingFor(userId, product, destCountryFor(activeEbayAccount?.marketplaceId));
+
     const importRecord = await createAliexpressImport(userId, product, suggestedPrice, activeEbayAccount?.id || null);
     const images = product.images?.length
       ? await materializeImageUrls({ urls: product.images, userId, listingId: importRecord.id, req })
@@ -114,9 +130,10 @@ async function saveAliexpressProductAsDraft(userId, product, markupPercent, req,
       amazonPrice: product.price,
       marginAmount: ruled ? ruled.marginAmount : (suggestedPrice != null && product.price != null ? Number((suggestedPrice - product.price).toFixed(2)) : null),
       pricingRule: ruled ? ruled.pricingRule : null,
+      aliexpressShipping: shipping,
     });
 
-    return { product, suggestedPrice, importId: importRecord.id, draft, pricing: ruled ? ruled.breakdown : null };
+    return { product, suggestedPrice, importId: importRecord.id, draft, pricing: ruled ? ruled.breakdown : null, aliexpressShipping: shipping };
   };
   return alreadyCharged ? save() : withCredits(userId, cost, save);
 }
