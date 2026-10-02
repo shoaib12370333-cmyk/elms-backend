@@ -10,8 +10,7 @@ const {
 const { getDescriptionTemplate, setDescriptionTemplate } = require('../models/usersModel');
 const { AVAILABLE_BLOCKS, TEMPLATE_STYLES, normalizeTemplate } = require('../services/descriptionTemplateLibrary');
 const { fetchBusinessPolicies } = require('../services/ebayListingService');
-const { lookupPostalCode } = require('../services/postalCodeService');
-const { generatePostalCode } = require('../services/postalGeneratorService');
+const { generatePostalCode, resolveLocation } = require('../services/postalGeneratorService');
 const { assertSupportedMarketplace, normalizeMarketplaceId } = require('../config/ebayMarketplaces');
 
 
@@ -97,9 +96,13 @@ router.get('/ebay-policies', requireAuth, async (req, res) => {
  * GET /api/seller-settings/postal-lookup?country=US&postalCode=10001
  * Requires a valid session token.
  *
- * Looks up the place name (city/state) for a country + postal code, using
- * the free Zippopotam.us service - used by the "Custom" product location
- * option so the user only has to type a postal code and see it resolved.
+ * Resolves a postal code the SELLER typed themselves (city/state, and the
+ * UK's own "outward code only" input completed to a real, full postcode) -
+ * the same resolveLocation() the PUT below uses right before saving it as
+ * the custom product location, so what this shows is exactly what Save
+ * will accept. { complete: false } means it could not be resolved (e.g. a
+ * GB outward code with nothing found in that area) - not a hard error, the
+ * seller can still try Generate or re-check what they typed.
  */
 router.get('/postal-lookup', requireAuth, async (req, res) => {
   const { country, postalCode } = req.query;
@@ -109,13 +112,10 @@ router.get('/postal-lookup', requireAuth, async (req, res) => {
   }
 
   try {
-    const result = await lookupPostalCode(country, postalCode);
-    if (!result) {
-      return res.status(404).json({ success: false, error: 'That postal code was not found for the selected country.' });
-    }
-    res.json({ success: true, location: result });
+    const location = await resolveLocation(String(country), String(postalCode));
+    res.json({ success: true, location });
   } catch (err) {
-    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Could not look up that postal code right now.' });
   }
 });
 
@@ -167,7 +167,6 @@ router.put('/', requireAuth, async (req, res) => {
   }
 
   if (updates.customPostalCode && (updates.customCountryCode || updates.productLocationMode === 'custom')) {
-    const { resolveLocation } = require('../services/postalGeneratorService');
     const cc = updates.customCountryCode || 'US';
     const loc = await resolveLocation(cc, updates.customPostalCode).catch(() => null);
     if (loc && !loc.complete) {
