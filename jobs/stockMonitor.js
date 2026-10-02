@@ -12,6 +12,7 @@ const { createSystemNotification } = require('../models/systemNotificationsModel
 const { acquireLock } = require('../services/jobLockService');
 const { ACTION_COSTS } = require('../config/actionCosts');
 const cjAdapter = require('../services/cjAdapter');
+const aliexpressAdapter = require('../services/aliexpressAdapter');
 const { destCountryFor } = require('../services/cjImportService');
 const {
   spendCredit,
@@ -73,6 +74,14 @@ async function runStockCheckForUser(user) {
     // which uses only services/cjAdapter.js and its own credit key (ACTION_COSTS.CJ_STOCK_MONITORING).
     if (listing.source_platform === 'cj') {
       const keepGoing = await checkCjListing(user, listing, blockState);
+      if (!keepGoing) break;
+      continue;
+    }
+
+    // AliExpress listings likewise have their own function and credit key (ACTION_COSTS.ALIEXPRESS_STOCK_MONITORING), and only
+    // ever call services/aliexpressAdapter.js - never Canopy or CJ.
+    if (listing.source_platform === 'aliexpress') {
+      const keepGoing = await checkAliexpressListing(user, listing, blockState);
       if (!keepGoing) break;
       continue;
     }
@@ -159,6 +168,8 @@ async function runStockCheckForUser(user) {
       console.error(`[stock-monitor] Could not check stock for ${listing.sku}: ${err.message}`);
     }
   }
+
+  await notifyAliexpressProblems(user, blockState);
 }
 
 
@@ -505,6 +516,271 @@ async function syncCjPriceIfChanged(user, listing, variant, blockState) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------
+// AliExpress stock + price monitor. Its own functions, its own credit key (ACTION_COSTS.ALIEXPRESS_STOCK_MONITORING, never
+// STOCK_MONITORING/PRICE_MONITORING/CJ_STOCK_MONITORING) - only services/aliexpressAdapter.js is called here. It reads the same
+// aliexpress.ds.product.get answer the import reads (sku_available_stock, offer_sale_price / sku_price, currency_code), for the
+// ONE sku the listing was imported from, priced for the store's own country exactly like the import did.
+// ---------------------------------------------------------------------------------------------------------------------------
+
+// After this many AliExpress calls in a row fail inside one user's run (a dead or revoked token, AliExpress down), the rest of
+// that user's AliExpress listings are left for the next run instead of each being charged, failed and refunded.
+const ALIEXPRESS_MAX_CONSECUTIVE_FAILURES = 3;
+
+/** The sku's available stock as a number, or null when AliExpress did not give a usable one - "unknown" must never read as "0", which would end a good listing. Only a real number or a numeric string counts (Number(false), Number(' ') and Number([]) are all 0). */
+function aliexpressSkuStock(sku) {
+  const raw = sku.sku_available_stock;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** The sku's current price: the sale price when there is one, else the list price (the same preference services/aliexpressImportService.js normalizeAliexpressProduct imported it with). */
+function aliexpressSkuPrice(sku) {
+  const sale = Number(sku.offer_sale_price);
+  if (Number.isFinite(sale) && sale > 0) return sale;
+  const list = Number(sku.sku_price);
+  return Number.isFinite(list) && list > 0 ? list : null;
+}
+
+/**
+ * Withdraws a published listing's eBay offer because its supplier has run out, then marks it ended here. The listing is never
+ * marked ended locally when the eBay offer could not be withdrawn (ELMS would say "ended" while eBay keeps selling it): it stays
+ * published and the next run retries.
+ */
+async function endListingBecauseSupplierOutOfStock(user, listing, reason, blockState, logTag) {
+  if (!listing.ebay_offer_id) {
+    await markEnded(user.id, listing.id, reason);
+    return;
+  }
+  const refreshToken = listing.ebay_account_id ? await getEbayAccountRefreshToken(user.id, listing.ebay_account_id) : null;
+  if (!refreshToken) {
+    console.warn(`[${logTag}] Could not find the eBay account for listing ${listing.sku}; leaving it published so withdrawal can be retried.`);
+    return;
+  }
+  try {
+    await withdrawListing(refreshToken, listing.ebay_offer_id);
+  } catch (withdrawErr) {
+    console.error(`[${logTag}] Could not withdraw eBay listing ${listing.sku}; leaving it published for retry: ${withdrawErr.message}`);
+    await notifyAccountBlockedOnce(user, withdrawErr, blockState);
+    return;
+  }
+  await updateListing(user.id, listing.id, { amazonInStock: false, lastStockSyncedAt: new Date(), lastStockCheckedAt: new Date(), markDraftCustomized: false });
+  await markEnded(user.id, listing.id, reason);
+  console.log(`[${logTag}] Listing ${listing.sku} ended on eBay and locally.`);
+}
+
+/**
+ * Tells the seller, once per run, about the two AliExpress problems the monitor cannot fix itself: AliExpress not answering for them
+ * (a dead or revoked connection - the rest of the run's AliExpress listings were skipped) and products AliExpress no longer has
+ * (still live on eBay, so the seller has to decide). Without this the monitoring would simply stop, with nothing to see.
+ */
+async function notifyAliexpressProblems(user, blockState) {
+  if ((blockState.aliexpressFailures || 0) >= ALIEXPRESS_MAX_CONSECUTIVE_FAILURES) {
+    console.warn(`[aliexpress-stock-monitor] ${user.email}: AliExpress failed ${ALIEXPRESS_MAX_CONSECUTIVE_FAILURES} times in a row; the rest of this run's AliExpress listings were skipped.`);
+    await createSystemNotification(user.id, {
+      type: 'aliexpress_unavailable',
+      level: 'warning',
+      title: 'AliExpress stock monitoring paused',
+      message: 'ELMS could not reach AliExpress for your account several times in a row, so the rest of your AliExpress listings were not checked this time. If this keeps happening, reconnect AliExpress in Settings.',
+    }).catch(() => {});
+  }
+  const missing = blockState.aliexpressMissing || [];
+  if (missing.length) {
+    const shown = missing.slice(0, 5).join(', ') + (missing.length > 5 ? ` and ${missing.length - 5} more` : '');
+    await createSystemNotification(user.id, {
+      type: 'aliexpress_product_missing',
+      level: 'warning',
+      title: 'AliExpress no longer has some of your products',
+      message: `AliExpress could not find ${missing.length} product(s) you are selling (${shown}). They are still live on eBay - check them on AliExpress, and end them here if they are gone.`,
+    }).catch(() => {});
+  }
+}
+
+/**
+ * Checks one AliExpress-sourced published listing: ends it on eBay when its sku is out of stock on AliExpress, otherwise keeps the
+ * eBay quantity in sync with AliExpress's real number and reprices it when the AliExpress price moved - the AliExpress counterpart
+ * of checkCjListing above. A sku AliExpress no longer lists, or a stock figure AliExpress did not give, is left alone (logged),
+ * never read as "out of stock".
+ * @returns {Promise<boolean>} false when the user is out of credits (the caller stops checking this user's remaining listings)
+ */
+async function checkAliexpressListing(user, listing, blockState) {
+  if (!listing.aliexpress_product_id || !listing.aliexpress_sku_id) {
+    console.warn(`[aliexpress-stock-monitor] Listing ${listing.id} (SKU ${listing.sku}) has no AliExpress ids, skipping.`);
+    return true;
+  }
+  if ((blockState.aliexpressFailures || 0) >= ALIEXPRESS_MAX_CONSECUTIVE_FAILURES) return true; // AliExpress is not answering for this seller right now - see above
+
+  if (!(await spendCredit(user.id, ACTION_COSTS.ALIEXPRESS_STOCK_MONITORING))) {
+    console.warn(`[aliexpress-stock-monitor] ${user.email} ran out of credits mid-check; remaining listings will be checked next time they're due.`);
+    return false;
+  }
+
+  try {
+    let detail;
+    try {
+      detail = await aliexpressAdapter.getProductDetail(user.id, {
+        productId: listing.aliexpress_product_id,
+        shipToCountry: getMarketplaceConfig(listing.marketplace_id)?.country || 'US', // the same country the import priced it for
+        targetCurrency: listing.currency || 'USD',
+      });
+    } catch (err) {
+      await refundCredit(user.id, ACTION_COSTS.ALIEXPRESS_STOCK_MONITORING).catch((e) => console.error(`[credits] REFUND FAILED for user ${user.id}: ${e.message}`));
+      if (err.productMissing) {
+        // AliExpress answered: this product is gone. That is not an outage (it must not count toward giving up on the rest of the
+        // run) - but it is not safe to end the listing on it either while the answer's shape is unconfirmed, so the seller is told instead.
+        (blockState.aliexpressMissing = blockState.aliexpressMissing || []).push(listing.sku);
+      } else {
+        blockState.aliexpressFailures = (blockState.aliexpressFailures || 0) + 1;
+      }
+      throw err;
+    }
+    blockState.aliexpressFailures = 0;
+
+    // Exactly ONE sku must match: sku ids are large numbers, and should two siblings ever read as the same id, the first one's stock
+    // must not decide whether THIS listing is ended.
+    const skus = Array.isArray(detail.ae_item_sku_info_dtos) ? detail.ae_item_sku_info_dtos : [];
+    const matches = skus.filter((s) => String(s.sku_id) === String(listing.aliexpress_sku_id));
+    const sku = matches.length === 1 ? matches[0] : null;
+    if (!sku) {
+      // Nothing was learned, so nothing is charged (if a field name were wrong, every listing would otherwise burn a credit a day for nothing).
+      await refundCredit(user.id, ACTION_COSTS.ALIEXPRESS_STOCK_MONITORING).catch((e) => console.error(`[credits] REFUND FAILED for user ${user.id}: ${e.message}`));
+      console.warn(matches.length > 1
+        ? `[aliexpress-stock-monitor] ${listing.sku}: AliExpress lists more than one sku with this id; leaving the listing as it is.`
+        : `[aliexpress-stock-monitor] ${listing.sku}: AliExpress no longer lists this sku; leaving the listing as it is.`);
+      return true;
+    }
+
+    const stock = aliexpressSkuStock(sku);
+    if (stock === null && aliexpressSkuPrice(sku) === null) {
+      await refundCredit(user.id, ACTION_COSTS.ALIEXPRESS_STOCK_MONITORING).catch((e) => console.error(`[credits] REFUND FAILED for user ${user.id}: ${e.message}`));
+      console.warn(`[aliexpress-stock-monitor] ${listing.sku}: AliExpress gave neither a stock figure nor a price for this sku; leaving the listing as it is.`);
+      return true;
+    }
+    if (stock === null) {
+      console.warn(`[aliexpress-stock-monitor] ${listing.sku}: AliExpress gave no stock figure for this sku; leaving the listing as it is.`);
+    } else if (stock <= 0 && listing.stock_monitoring !== false) {
+      console.log(`[aliexpress-stock-monitor] ${listing.sku} is out of stock on AliExpress. Ending eBay listing...`);
+      await endListingBecauseSupplierOutOfStock(user, listing, 'Ended: out of stock on AliExpress', blockState, 'aliexpress-stock-monitor');
+      return true; // ended (or left for a retry): no point price-checking it too
+    } else if (listing.stock_monitoring !== false) {
+      await syncAliexpressStockQuantity(user, listing, stock, blockState);
+    }
+
+    if (listing.price_monitoring !== false) await syncAliexpressPriceIfChanged(user, listing, sku, detail, blockState);
+    return true;
+  } catch (err) {
+    console.error(`[aliexpress-stock-monitor] Could not check stock for ${listing.sku}: ${err.message}`);
+    return true;
+  }
+}
+
+/** Keeps eBay's quantity equal to AliExpress's real stock for the sku (like CJ, an exact number, not just in/out of stock) - capped at 999 defensively. */
+async function syncAliexpressStockQuantity(user, listing, stock, blockState) {
+  if (!listing.ebay_offer_id) return;
+  const safeQuantity = Math.min(stock, 999);
+  if (listing.amazon_in_stock === true && Number(listing.quantity) === safeQuantity) {
+    await updateListing(user.id, listing.id, { lastStockCheckedAt: new Date(), markDraftCustomized: false });
+    return;
+  }
+  const refreshToken = listing.ebay_account_id ? await getEbayAccountRefreshToken(user.id, listing.ebay_account_id) : null;
+  if (!refreshToken) {
+    console.warn(`[aliexpress-stock-monitor] Could not find the eBay account for listing ${listing.sku}; quantity sync will retry next run.`);
+    return;
+  }
+  try {
+    await updateOfferQuantity(refreshToken, listing.ebay_offer_id, safeQuantity);
+    await updateListing(user.id, listing.id, { quantity: safeQuantity, amazonInStock: true, lastStockSyncedAt: new Date(), lastStockCheckedAt: new Date(), markDraftCustomized: false });
+    console.log(`[aliexpress-stock-monitor] ${listing.sku}: AliExpress has ${stock} in stock; eBay quantity synchronized to ${safeQuantity}.`);
+  } catch (err) {
+    console.error(`[aliexpress-stock-monitor] Could not sync eBay quantity for ${listing.sku}: ${err.message}`);
+    await notifyAccountBlockedOnce(user, err, blockState);
+  }
+}
+
+/**
+ * Keeps an AliExpress-sourced listing's eBay price in sync, the AliExpress counterpart of syncCjPriceIfChanged above (without a
+ * shipping quote: AliExpress has none stored on the listing): the same "keep the seller's exact cash margin, or reprice by their
+ * saved rule" logic (services/repricingService.js). A price AliExpress quoted in another currency than the listing's baseline is
+ * never compared with it - that round is skipped and the baseline stays.
+ */
+async function syncAliexpressPriceIfChanged(user, listing, sku, detail, blockState) {
+  const newSourcePrice = aliexpressSkuPrice(sku);
+  if (newSourcePrice === null) return;
+
+  const quotedIn = String(sku.currency_code || detail.ae_item_base_info_dto?.currency_code || '').toUpperCase();
+  const draftCurrency = String(listing.currency || 'USD').toUpperCase();
+  if (quotedIn && quotedIn !== draftCurrency) {
+    console.warn(`[aliexpress-price-monitor] ${listing.sku}: AliExpress quoted ${quotedIn}, the listing is in ${draftCurrency}; skipping the price check this round.`);
+    return;
+  }
+
+  const oldSourcePrice = Number(listing.amazon_price);
+  const hasBaseline = Number.isFinite(oldSourcePrice) && oldSourcePrice > 0;
+  const unchanged = hasBaseline && Math.abs(newSourcePrice - oldSourcePrice) < 0.01;
+  const margin = getSavedMargin(listing);
+
+  try {
+    if (!hasBaseline) {
+      const baselineUpdate = { amazonPrice: newSourcePrice, lastStockCheckedAt: new Date() };
+      if (margin == null && Number.isFinite(Number(listing.sell_price))) {
+        baselineUpdate.marginAmount = Number((Number(listing.sell_price) - newSourcePrice).toFixed(2));
+      }
+      await updateListing(user.id, listing.id, { ...baselineUpdate, markDraftCustomized: false });
+      console.log(`[aliexpress-price-monitor] ${listing.sku}: established AliExpress price baseline at ${newSourcePrice}.`);
+      return;
+    }
+
+    if (unchanged) {
+      await updateListing(user.id, listing.id, { lastStockCheckedAt: new Date(), markDraftCustomized: false });
+      return;
+    }
+
+    if (listing.repricing_enabled === false || !listing.ebay_offer_id || listing.sell_price == null) {
+      await updateListing(user.id, listing.id, { amazonPrice: newSourcePrice, lastStockCheckedAt: new Date(), markDraftCustomized: false });
+      return;
+    }
+
+    const effectiveMargin = margin != null ? margin : Number((Number(listing.sell_price) - oldSourcePrice).toFixed(2));
+    const repriced = repriceFor(listing, newSourcePrice, effectiveMargin);
+    if (repriced == null) {
+      console.error(`[aliexpress-price-monitor] ${listing.sku}: calculated eBay price is invalid; baseline retained for retry.`);
+      return;
+    }
+
+    const refreshToken = listing.ebay_account_id ? await getEbayAccountRefreshToken(user.id, listing.ebay_account_id) : null;
+    if (!refreshToken) {
+      console.warn(`[aliexpress-price-monitor] Could not find the eBay account for listing ${listing.sku} (user ${user.id}); price baseline retained for retry.`);
+      return;
+    }
+
+    // The offer is in the store's currency; the listing's price is in the currency it was imported in (AliExpress was asked for it).
+    const storeCurrency = getMarketplaceConfig(listing.marketplace_id)?.currency || null;
+    let offerPrice = repriced.sellPrice;
+    if (storeCurrency && storeCurrency !== draftCurrency) {
+      offerPrice = (await convertAmount(repriced.sellPrice, draftCurrency, storeCurrency)).amount;
+    }
+
+    await updateOfferPrice(refreshToken, listing.ebay_offer_id, offerPrice);
+    await updateListing(user.id, listing.id, {
+      sellPrice: repriced.sellPrice,
+      amazonPrice: newSourcePrice,
+      marginAmount: repriced.marginAmount,
+      ...(repriced.rule ? { pricingRule: repriced.rule } : {}),
+      lastRepricedAt: new Date(),
+      lastStockCheckedAt: new Date(),
+      markDraftCustomized: false,
+    });
+    console.log(`[aliexpress-price-monitor] ${listing.sku}: AliExpress ${oldSourcePrice} -> ${newSourcePrice}, eBay ${listing.sell_price} -> ${repriced.sellPrice}.`);
+  } catch (err) {
+    console.error(`[aliexpress-price-monitor] Could not update eBay price for ${listing.sku}: ${err.message}`);
+    await notifyAccountBlockedOnce(user, err, blockState);
+  }
+}
+
 /**
  * Runs stock checks for every user whose configured interval has elapsed
  * since their last check (set per-user in the Admin Panel, in days). A user
@@ -564,4 +840,4 @@ function startStockMonitor() {
   console.log('[stock-monitor] Daily stock monitor scheduled.');
 }
 
-module.exports = { startStockMonitor, runStockCheck, runStockCheckForUser, supplierCountryOf, checkCjListing, cjTotalInventory, cjPrimaryWarehouse };
+module.exports = { startStockMonitor, runStockCheck, runStockCheckForUser, supplierCountryOf, checkCjListing, cjTotalInventory, cjPrimaryWarehouse, checkAliexpressListing, aliexpressSkuStock, aliexpressSkuPrice };

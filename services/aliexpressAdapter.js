@@ -26,11 +26,13 @@ async function ensureToken(userId) {
   if (!chain) {
     chain = (async () => {
       const refreshed = await refreshAccessToken(creds.refreshToken);
-      await setAliexpressTokens(userId, refreshed);
+      // Should a refresh answer ever omit the refresh token, keep the one we have rather than lose the new access token over it.
+      await setAliexpressTokens(userId, { ...refreshed, refreshToken: refreshed.refreshToken || creds.refreshToken });
       return refreshed.accessToken;
     })();
     refreshChains.set(key, chain);
-    chain.finally(() => { if (refreshChains.get(key) === chain) refreshChains.delete(key); });
+    // .catch: a failed refresh already rejects `chain` to its callers; this side branch must not raise a second, unhandled rejection.
+    chain.finally(() => { if (refreshChains.get(key) === chain) refreshChains.delete(key); }).catch(() => {});
   }
   return chain;
 }
@@ -50,7 +52,8 @@ async function getProductDetail(userId, { productId, shipToCountry = 'US', targe
     target_language: targetLanguage,
     remove_personal_benefit: 'false',
   });
-  if (!result || !result.ae_item_base_info_dto) throw new Error('AliExpress does not have that product.');
+  // productMissing: callers that watch a product over time (jobs/stockMonitor.js) tell "this product is gone" from "AliExpress did not answer".
+  if (!result || !result.ae_item_base_info_dto) throw Object.assign(new Error('AliExpress does not have that product.'), { statusCode: 404, productMissing: true });
   return result;
 }
 
