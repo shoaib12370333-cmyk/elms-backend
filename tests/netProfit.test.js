@@ -47,6 +47,13 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   l = S.buildLine(order({ net_profit_typed: 30, sheet_amazon_price: 100 })); assert.deepStrictEqual([l.net_profit, l.net_profit_older], [30, true], 'one figure is not enough to replace it');
   l = S.buildLine(order({ net_profit_typed: 30, sheet_amazon_price: 100, order_earning: 120 })); assert.deepStrictEqual([l.net_profit, l.net_profit_older], [20, false], 'both typed: the worked-out figure wins');
   assert.strictEqual(S.resolveNetProfit(130, 100, 5), 30); assert.strictEqual(S.resolveNetProfit(null, 100, 5), 5); assert.strictEqual(S.resolveNetProfit(null, null, null), null); assert.strictEqual(S.resolveNetProfit(0.3, 0.1, null), 0.2);
+  // the ad fee is what eBay reported for the order (Promoted Listings): shown as it is, and it changes NOTHING else - eBay takes it off before
+  // payout, so it is already inside EBAY COST and the ORDER EARNING; taking it off the net profit again would count it twice
+  l = S.buildLine(order({ sale_price: 150, sheet_amazon_price: 100, order_earning: 130, ad_fee: 12 }));
+  assert.deepStrictEqual([l.ad_fee, l.ebay_cost, l.net_profit, l.profit], [12, 20, 30, 50]);
+  assert.strictEqual(S.buildLine(order({ order_earning: 130, ad_fee: 0 })).ad_fee, 0, '0 = eBay was asked and there was none: shown as 0, not empty');
+  assert.strictEqual(S.buildLine(order({ order_earning: 130 })).ad_fee, null, 'not fetched yet is empty, never 0');
+  assert.strictEqual(S.buildLine(order({ ad_fee: 0.1 + 0.2 })).ad_fee, 0.3, 'exact cents');
   // title falls back to eBay's own title, then the SKU
   assert.strictEqual(S.buildLine(order({ listing_title: null, item_title: 'From eBay' })).title, 'From eBay'); assert.strictEqual(S.buildLine(order({ listing_title: null, item_title: null, sku: 'EBAY-1' })).title, 'EBAY-1');
 
@@ -60,9 +67,12 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   const totals = S.totalsOf(lines);
   const gbp = totals.find((t) => t.currency === 'GBP'); const eur = totals.find((t) => t.currency === 'EUR');
   assert.strictEqual(totals.length, 2, 'a pound and a euro are never added together');
-  assert.deepStrictEqual(gbp, { currency: 'GBP', lines: 3, amazon_price: 100.1, ebay_price: 160.3, profit: 50.2, order_earning: 130, ebay_cost: 20, net_profit: 30 }, 'each column adds only the cells that have a number');
-  assert.deepStrictEqual(eur, { currency: 'EUR', lines: 1, amazon_price: 20, ebay_price: 50, profit: 30, order_earning: 45, ebay_cost: 5, net_profit: 25 });
+  assert.deepStrictEqual(gbp, { currency: 'GBP', lines: 3, amazon_price: 100.1, ebay_price: 160.3, profit: 50.2, order_earning: 130, ebay_cost: 20, ad_fee: null, net_profit: 30 }, 'each column adds only the cells that have a number');
+  assert.deepStrictEqual(eur, { currency: 'EUR', lines: 1, amazon_price: 20, ebay_price: 50, profit: 30, order_earning: 45, ebay_cost: 5, ad_fee: null, net_profit: 25 });
   assert.deepStrictEqual(S.totalsOf([]), []); assert.strictEqual(S.totalsOf([S.buildLine(order())])[0].profit, null, 'nothing to add is empty, not 0');
+  const adTotals = S.totalsOf([1.1, 2.2, 0, null].map((ad_fee) => S.buildLine(order({ ad_fee }))));
+  assert.strictEqual(adTotals[0].ad_fee, 3.3, 'the ad fee column adds in exact cents and skips the line that has none yet');
+  assert.strictEqual(S.totalsOf([S.buildLine(order())])[0].ad_fee, null, 'no ad fee fetched anywhere: empty, not 0');
 
   // ---------- who is paid ----------
   const now = new Date('2026-09-27T00:00:00Z');
@@ -105,7 +115,7 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
   }
 
   const xlsxLines = [
-    S.buildLine(order({ sheet_amazon_price: 100, order_earning: 130, listing_title: 'Wash, "Summer" edition' })),
+    S.buildLine(order({ sheet_amazon_price: 100, order_earning: 130, ad_fee: 12, listing_title: 'Wash, "Summer" edition' })),
     S.buildLine(order({ id: 'b', listing_title: '=HYPERLINK("http://x")', ebay_order_id: '22-1-2', sale_price: 80, sheet_amazon_price: 100, order_earning: 70, currency: 'EUR', ebay_account_label: 'Berlin' })), // a loss: net profit -30
   ];
   const ws = await readBack(async (stream) => {
@@ -114,17 +124,20 @@ const order = (over = {}) => ({ id: 'o1', listing_title: 'CarPlan All Seasons Wi
     S.totalsOf(xlsxLines).forEach((t) => sheet.addTotal(t));
     await sheet.finish();
   });
-  assert.deepStrictEqual(ws.getRow(1).values.slice(1), ['Title', 'Order ID', 'Buying price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Net profit', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN'], 'no separate Currency column - the sign is already on every money cell');
+  assert.deepStrictEqual(ws.getRow(1).values.slice(1), ['Title', 'Order ID', 'Buying price', 'eBay price', 'Profit', 'Order earning', 'eBay cost', 'Ad fee', 'Net profit', 'Quantity', 'Order date', 'Store', 'eBay item number', 'Amazon ASIN'], 'no separate Currency column - the sign is already on every money cell');
   assert.deepStrictEqual(ws.getRow(1).getCell(1).font, { bold: true, color: { argb: 'FFFFFFFF' } }, 'the header is bold, white on the app\'s own blue');
   assert.deepStrictEqual(ws.getRow(1).getCell(1).fill, { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0064D2' } });
   assert.strictEqual(ws.getRow(2).getCell(1).value, 'Wash, "Summer" edition', 'a title is never quote-escaped or formula-guarded here - a real spreadsheet cell holds it as text as-is, not as a CSV string');
   assert.strictEqual(ws.getRow(2).getCell(3).value, 100);
   assert.strictEqual(ws.getRow(2).getCell(3).numFmt, '"£"#,##0.00;[Red]-"£"#,##0.00', 'the sign is on the money cell itself, not a separate "GBP" column');
-  assert.deepStrictEqual(ws.getRow(2).getCell(8).font, { color: { argb: 'FF15803D' } }, 'a positive net profit is green');
+  assert.strictEqual(ws.getRow(2).getCell(8).value, 12, 'the Ad fee column sits right after eBay cost');
+  assert.strictEqual(ws.getRow(2).getCell(8).numFmt, '"£"#,##0.00;[Red]-"£"#,##0.00');
+  assert.strictEqual(ws.getRow(3).getCell(8).value, null, 'an ad fee not fetched yet is an empty cell');
+  assert.deepStrictEqual(ws.getRow(2).getCell(9).font, { color: { argb: 'FF15803D' } }, 'a positive net profit is green');
   assert.strictEqual(ws.getRow(3).getCell(1).value, '=HYPERLINK("http://x")', 'kept as plain text - a real spreadsheet cell is never run as a formula just because it looks like one');
-  assert.strictEqual(ws.getRow(3).getCell(8).value, -30); assert.deepStrictEqual(ws.getRow(3).getCell(8).font, { color: { argb: 'FFDC2626' } }, 'a loss is red');
+  assert.strictEqual(ws.getRow(3).getCell(9).value, -30); assert.deepStrictEqual(ws.getRow(3).getCell(9).font, { color: { argb: 'FFDC2626' } }, 'a loss is red');
   assert.strictEqual(ws.getRow(3).getCell(3).numFmt, '"€"#,##0.00;[Red]-"€"#,##0.00');
-  assert.strictEqual(ws.getRow(3).getCell(12).value, '110001234567', 'the eBay item number is text (kept as a string), not a number that Excel would round or turn into 1.1E+11');
+  assert.strictEqual(ws.getRow(3).getCell(13).value, '110001234567', 'the eBay item number is text (kept as a string), not a number that Excel would round or turn into 1.1E+11');
   assert.strictEqual(ws.getRow(4).getCell(1).value, 'TOTAL (1 line)'); assert.strictEqual(ws.getRow(5).getCell(1).value, 'TOTAL (1 line)');
   assert.deepStrictEqual(ws.getRow(4).getCell(1).font, { bold: true }, 'the total row is bold');
   assert.strictEqual(ws.rowCount, 5, 'header, two lines, one total row per currency');

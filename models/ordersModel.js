@@ -526,6 +526,7 @@ function serialize(doc) {
     shipped_message_error: obj.shippedMessageError || null,
     sheet_amazon_price: obj.sheetAmazonPrice ?? null, // Net Profit sheet: typed by the seller
     order_earning: obj.orderEarning ?? null, // Net Profit sheet: typed by the seller
+    ad_fee: obj.adFee ?? null, // Net Profit sheet: the Promoted Listings ad fee eBay took off this line (fetched, null = not yet, 0 = none) - already inside the earning
     net_profit_typed: obj.netProfit ?? null, // typed in the first version of the sheet
     net_profit: resolveNetProfit(obj.orderEarning, obj.sheetAmazonPrice, obj.netProfit), // order earning - Amazon price when both are typed, else the older typed figure
     order_status: deriveOrderStatus(obj),
@@ -696,7 +697,7 @@ async function listOrdersNeedingEarnings(ebayAccountId, minAgeMs) {
     ebayPaymentStatus: 'PAID',
     ebayOrderId: { $ne: null },
     paidAt: { $ne: null, $lt: cutoff },
-  }).select('_id ebayOrderId salePrice').lean();
+  }).select('_id ebayOrderId ebayLineItemId salePrice').lean();
 }
 
 /** Saves the eBay-fetched earning on several order lines at once (one write per distinct value, via bulkWrite). */
@@ -709,4 +710,47 @@ async function setOrderEarningsBulk(updates) {
   return result.modifiedCount || 0;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, autoMarkDelivered, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, hasOrderLineItemsNeedingTracking, importTrackingFromEbay, _summaryCache: summaryCache };
+/**
+ * Order lines that already have their earning (fetched, or typed in an older version of the sheet) but whose ad fee was
+ * never read - everything synced before the Ad fee column existed. Newest first, at most `limit` lines per call: each
+ * distinct order costs one Finances call, so the old backlog is worked through a little each run instead of in one burst.
+ * A line eBay had nothing for is stamped adFeeCheckedAt (markAdFeeChecked) and never asked about again - which is why
+ * only lines paid at least minAgeMs ago are listed: by then eBay has settled the sale, so "nothing to read" is final
+ * (an earning typed by a seller can exist before eBay has the transaction). The (userId, ebayAccountId, adFee,
+ * adFeeCheckedAt, createdAt) index makes this a seek to the few waiting lines, and an immediate empty answer once the
+ * backlog is done. New orders never need this: their ad fee is read in the same Finances call as their earning
+ * (jobs/orderEarningsSync.js).
+ */
+async function listOrdersNeedingAdFee(userId, ebayAccountId, limit, minAgeMs = 0) {
+  const cutoff = new Date(Date.now() - minAgeMs);
+  return Order.find({
+    userId,
+    ebayAccountId,
+    orderEarning: { $ne: null },
+    adFee: null,
+    adFeeCheckedAt: null,
+    ebayPaymentStatus: 'PAID',
+    ebayOrderId: { $ne: null },
+    paidAt: { $ne: null, $lt: cutoff },
+  }).sort({ createdAt: -1 }).limit(limit).select('_id ebayOrderId ebayLineItemId salePrice').lean();
+}
+
+/** Saves the eBay-fetched ad fee on several order lines at once. Like the earning, never overwrites a value that is already set. */
+async function setOrderAdFeesBulk(updates) {
+  const ops = updates
+    .filter((u) => u && u.id && Number.isFinite(Number(u.adFee)))
+    .map((u) => ({ updateOne: { filter: { _id: u.id, adFee: null }, update: { $set: { adFee: Number(Number(u.adFee).toFixed(2)) || 0 } } } })); // || 0: a -0 is stored as 0
+  if (!ops.length) return 0;
+  const result = await Order.bulkWrite(ops);
+  return result.modifiedCount || 0;
+}
+
+/** Stamps lines eBay had no transaction for, so the backfill (listOrdersNeedingAdFee) tries each of them once, not forever. */
+async function markAdFeeChecked(ids) {
+  const list = (ids || []).filter(Boolean);
+  if (!list.length) return 0;
+  const result = await Order.updateMany({ _id: { $in: list }, adFeeCheckedAt: null }, { $set: { adFeeCheckedAt: new Date() } });
+  return result.modifiedCount || 0;
+}
+
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, autoMarkDelivered, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, listOrdersNeedingAdFee, setOrderAdFeesBulk, markAdFeeChecked, hasOrderLineItemsNeedingTracking, importTrackingFromEbay, _summaryCache: summaryCache };

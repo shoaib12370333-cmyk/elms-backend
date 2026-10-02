@@ -80,7 +80,7 @@ router.get('/export', requireAuth, async (req, res) => {
     for (let offset = 0; offset < cap; offset += PAGE_SIZE) {
       const lines = await listNetProfitLines(req.userId, filters, { offset, limit: Math.min(PAGE_SIZE, cap - offset) });
       if (!lines.length) break;
-      for (const l of lines) { sheet.addLine(l); all.push({ currency: l.currency, amazon_price: l.amazon_price, ebay_price: l.ebay_price, profit: l.profit, order_earning: l.order_earning, ebay_cost: l.ebay_cost, net_profit: l.net_profit }); }
+      for (const l of lines) { sheet.addLine(l); all.push({ currency: l.currency, amazon_price: l.amazon_price, ebay_price: l.ebay_price, profit: l.profit, order_earning: l.order_earning, ebay_cost: l.ebay_cost, ad_fee: l.ad_fee, net_profit: l.net_profit }); }
     }
     totalsOf(all).forEach((t) => sheet.addTotal(t));
     await sheet.finish();
