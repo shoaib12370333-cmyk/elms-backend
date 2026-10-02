@@ -20,12 +20,15 @@ function pick(xml, tag) {
   return m ? decodeXml(m[1]) : null;
 }
 
-/** The Trading API answer of GetStore -> { name, url } ('' name = the seller has no eBay Store). */
+/** The Trading API answer of GetStore -> { name, url, logoUrl } ('' name = the seller has no eBay Store). */
 function parseStore(xml) {
   const block = (String(xml || '').match(/<Store>([\s\S]*?)<\/Store>/) || [])[1];
-  if (!block) return { name: null, url: null };
-  const head = block.split('<CustomCategories>')[0]; // the store's own Name comes before its category names
-  return { name: pick(head, 'Name') || null, url: pick(head, 'URL') || null };
+  if (!block) return { name: null, url: null, logoUrl: null };
+  const head = block.split('<CustomCategories>')[0]; // the store's own Name/Logo come before its category names
+  // <Logo/> (self-closing, no URL child) when the seller has not set one - the inner pick() then finds nothing,
+  // same as the <Logo> container being absent entirely.
+  const logoBlock = (head.match(/<Logo>([\s\S]*?)<\/Logo>/) || [])[1];
+  return { name: pick(head, 'Name') || null, url: pick(head, 'URL') || null, logoUrl: pick(logoBlock, 'URL') || null };
 }
 
 /** The Trading API answer of GetUser (no UserID = the account of the token) -> { username, hasStore, storeUrl }. */
@@ -88,19 +91,19 @@ async function fetchEbayUsername(refreshToken) {
   }
 }
 
-/** The eBay Store name of the account ('' when the seller has no eBay Store). null = could not be looked up. */
+/** The eBay Store name (+ logo) of the account ('' name = the seller has no eBay Store). null = could not be looked up. */
 async function fetchStoreName(refreshToken, marketplaceId) {
   try {
     const xml = await tradingCall(refreshToken, 'GetStore', marketplaceId, '<CategoryStructureOnly>true</CategoryStructureOnly>');
     const failed = failureOf(xml);
     if (failed) {
       // "You do not have a Store" is an answer, not a failure: it means there is no store name to show.
-      if (/no\s+store|not\s+have\s+a\s+store|store\s+not\s+found|does not have an? (ebay )?store/i.test(failed.message) || failed.code === '13003') return { name: '', url: null };
+      if (/no\s+store|not\s+have\s+a\s+store|store\s+not\s+found|does not have an? (ebay )?store/i.test(failed.message) || failed.code === '13003') return { name: '', url: null, logoUrl: null };
       console.warn('[ebay-identity] GetStore: ' + (failed.code ? failed.code + ' ' : '') + failed.message);
       return null;
     }
     const store = parseStore(xml);
-    return { name: store.name || '', url: store.url };
+    return { name: store.name || '', url: store.url, logoUrl: store.logoUrl };
   } catch (err) {
     console.warn('[ebay-identity] GetStore failed:', err.response?.data ? String(err.response.data).slice(0, 200) : err.message);
     return null;
@@ -122,9 +125,10 @@ async function fetchTradingUser(refreshToken, marketplaceId) {
 
 /**
  * Everything ELMS shows to name a connected account:
- * { username, storeName, storeUrl, hasStore, accountType, checked }
+ * { username, storeName, storeUrl, storeLogoUrl, hasStore, accountType, checked }
  *  - username: the eBay username when eBay gives one (Identity API first, GetUser second), else null;
  *  - storeName: the eBay Store name, '' when the seller has no store, null when it could not be looked up;
+ *  - storeLogoUrl: the store's logo image URL, null when the seller has no store or has not set one;
  *  - checked: true when at least one lookup answered (so a wrong day for eBay does not mark the account as "looked at").
  */
 async function fetchSellerIdentity(refreshToken, marketplaceId) {
@@ -147,6 +151,7 @@ async function fetchSellerIdentity(refreshToken, marketplaceId) {
     username,
     storeName: store ? store.name : null,
     storeUrl,
+    storeLogoUrl: store?.logoUrl || null,
     hasStore,
     accountType: identity?.accountType || null,
     businessName: identity?.businessName || null,

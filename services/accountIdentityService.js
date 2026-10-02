@@ -32,6 +32,7 @@ async function refreshAccountIdentity(userId, accountId) {
     try {
       const identity = await fetchSellerIdentity(decrypt(doc.refreshTokenEncrypted), doc.marketplaceId);
       if (identity.storeName !== null) update.storeName = identity.storeName;
+      if (identity.storeName !== null) update.storeLogoUrl = identity.storeLogoUrl || null; // only trust it alongside a fresh store-name read, same call
       if (identity.username && isPlaceholderUsername(doc.ebayUserId) && identity.username !== doc.ebayUserId) {
         const taken = await EbayAccount.exists({ userId, ebayUserId: identity.username, _id: { $ne: doc._id } });
         if (!taken) update.ebayUserId = identity.username;

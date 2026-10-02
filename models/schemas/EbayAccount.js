@@ -16,6 +16,9 @@ const ebayAccountSchema = new mongoose.Schema(
     displayName: { type: String, default: null, trim: true, maxlength: 60 },
     // The seller's eBay Store name, read from eBay (GetStore) and remembered here. '' = looked up and the seller has no store.
     storeName: { type: String, default: null, trim: true, maxlength: 120 },
+    // The seller's eBay Store logo URL, from the same GetStore call (Store.Logo.URL) - null = looked up and the
+    // store has no logo set (or the seller has no store at all), '' never happens (eBay omits the field entirely).
+    storeLogoUrl: { type: String, default: null },
     // 1, 2, 3 ... per ELMS user: the name shown for a store that has neither an eBay Store name nor a known username.
     storeNumber: { type: Number, default: null },
     // When eBay was last asked who this account is (username / store name), so it is not asked on every page load.
