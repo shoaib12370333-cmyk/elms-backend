@@ -242,8 +242,9 @@ async function generatePostalCode(country, city, state) {
  */
 async function resolveLocation(country, postalCode) {
   const cc = normalizeCountry(country);
+  const countryName = COUNTRIES[cc].name;
   const raw = String(postalCode || '').trim().toUpperCase();
-  const out = { country: cc, postalCode: raw, city: null, state: null, complete: true };
+  const out = { country: cc, countryName, postalCode: raw, city: null, state: null, complete: true };
   if (cc === 'GB') {
     const compact = raw.replace(/s+/g, '');
     if (/^[A-Z]{1,2}[0-9][A-Z0-9]?$/.test(compact)) {
@@ -251,7 +252,7 @@ async function resolveLocation(country, postalCode) {
       try {
         const found = await axios.get('https://api.postcodes.io/postcodes', { params: { q: compact, limit: 1 }, timeout: 8000 });
         const hit = found.data?.result?.[0];
-        if (hit?.postcode) return { country: cc, postalCode: hit.postcode, city: hit.admin_district || hit.parish || null, state: hit.region || hit.country || null, complete: true, completedFrom: raw };
+        if (hit?.postcode) return { country: cc, countryName, postalCode: hit.postcode, city: hit.admin_district || hit.parish || null, state: hit.region || hit.country || null, complete: true, completedFrom: raw };
       } catch (_) { /* fall through */ }
       out.complete = false;
       return out;
