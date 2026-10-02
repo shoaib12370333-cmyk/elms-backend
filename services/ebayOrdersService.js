@@ -208,4 +208,17 @@ async function createShippingFulfillment(refreshToken, ebayOrderId, ebayLineItem
   return ebayPost(refreshToken, `/sell/fulfillment/v1/order/${encodeURIComponent(ebayOrderId)}/shipping_fulfillment`, body);
 }
 
-module.exports = { fetchOrders, fetchOrderById, normalizeOrderLineItems, createShippingFulfillment };
+/**
+ * Every shipping fulfillment (tracking number, carrier, line items it covers) eBay has recorded for one order -
+ * added either by ELMS itself (createShippingFulfillment above) or directly on eBay (Seller Hub, another app), which
+ * is otherwise invisible to ELMS: the main order GET (fetchOrderById/fetchOrders) never includes tracking at all,
+ * only orderFulfillmentStatus/lineItemFulfillmentStatus (NOT_STARTED/IN_PROGRESS/FULFILLED) - confirmed against the
+ * Fulfillment API docs 2026-10-02. This is how a tracking number added straight on eBay reaches ELMS too.
+ * @returns {Promise<Array<{fulfillmentId, lineItems: [{lineItemId, quantity}], shippedDate, shipmentTrackingNumber, shippingCarrierCode}>>}
+ */
+async function fetchShippingFulfillments(refreshToken, ebayOrderId) {
+  const data = await ebayGet(refreshToken, `/sell/fulfillment/v1/order/${encodeURIComponent(ebayOrderId)}/shipping_fulfillment`);
+  return Array.isArray(data?.fulfillments) ? data.fulfillments : [];
+}
+
+module.exports = { fetchOrders, fetchOrderById, normalizeOrderLineItems, createShippingFulfillment, fetchShippingFulfillments };

@@ -1,5 +1,5 @@
-const { fetchOrders, normalizeOrderLineItems } = require('./ebayOrdersService');
-const { upsertOrder } = require('../models/ordersModel');
+const { fetchOrders, normalizeOrderLineItems, fetchShippingFulfillments } = require('./ebayOrdersService');
+const { upsertOrder, hasOrderLineItemsNeedingTracking, importTrackingFromEbay } = require('../models/ordersModel');
 const { getEbayAccountRefreshToken } = require('../models/ebayAccountsModel');
 const EbayAccount = require('../models/schemas/EbayAccount');
 const { fillMissingOrderImages } = require('./orderImageService');
@@ -41,6 +41,22 @@ async function syncAccountOrders(userId, accountId, { full = false } = {}) {
     } catch (err) {
       failedCount += 1;
       console.error(`[order-sync] Could not save order ${rawOrder?.orderId || '(unknown id)'} for account ${accountId}: ${err.message}`);
+    }
+
+    // The main order GET above never includes tracking (see fetchShippingFulfillments's own comment) - eBay only
+    // says a line item is FULFILLED, not what it was shipped with. A tracking number added directly on eBay (Seller
+    // Hub, another app) would otherwise never reach ELMS at all. Only worth the extra call when eBay itself says
+    // something has shipped, AND ELMS still has a line item of this order with no tracking number yet - a seller who
+    // only ever ships through ELMS (the common case) costs nothing extra here.
+    if (rawOrder?.orderFulfillmentStatus && rawOrder.orderFulfillmentStatus !== 'NOT_STARTED') {
+      try {
+        if (await hasOrderLineItemsNeedingTracking(userId, accountId, rawOrder.orderId)) {
+          const fulfillments = await fetchShippingFulfillments(refreshToken, rawOrder.orderId);
+          await importTrackingFromEbay(userId, accountId, rawOrder.orderId, fulfillments);
+        }
+      } catch (err) {
+        console.warn(`[order-sync] Could not check eBay's own tracking for order ${rawOrder?.orderId || '(unknown id)'}: ${err.message}`);
+      }
     }
   }
   await EbayAccount.updateOne({ _id: accountId }, { lastSyncAttemptAt: new Date() });
