@@ -8,7 +8,7 @@ const calls = [];
 stub('axios', { get: (url, config) => { calls.push({ url, config }); return Promise.resolve(nextResponse()); } });
 stub('../services/ebayAuthService', { getAccessToken: async (refreshToken) => 'AT-' + refreshToken });
 
-const { fetchSaleTransactionsForOrder, netEarningFromTransactions } = require('../services/ebayFinancesService');
+const { fetchSaleTransactionsForOrder, netEarningFromTransactions, adFeesFromTransactions } = require('../services/ebayFinancesService');
 
 (async () => {
   // ---------- request shape: two separate filter= params (not one comma-joined string), the marketplace header, access token ----------
@@ -70,6 +70,54 @@ const { fetchSaleTransactionsForOrder, netEarningFromTransactions } = require('.
       { transactionType: 'REFUND', amount: { value: '-3.00', currency: 'USD' } },
     ]),
     { amount: 10, currency: 'USD' }
+  );
+
+  // ---------- adFeesFromTransactions: only feeType AD_FEE (Promoted Listings), read from the SAME SALE transaction the earning
+  // comes from - per eBay line item, exact in cents, never a made-up 0 when eBay did not say ----------
+  const fee = (feeType, value, currency = 'GBP') => ({ feeType, amount: { value, currency } });
+  const saleWith = (...orderLineItems) => ({ transactionType: 'SALE', amount: { value: '20.00', currency: 'GBP' }, orderLineItems });
+
+  // a normal promoted sale: the final value fee is NOT an ad fee, only the AD_FEE entry counts
+  assert.deepStrictEqual(
+    adFeesFromTransactions([saleWith({ lineItemId: '111', marketplaceFees: [fee('FINAL_VALUE_FEE', '2.50'), fee('AD_FEE', '1.20'), fee('FINAL_VALUE_FEE_FIXED_PER_ORDER', '0.30')] })]),
+    { total: 1.2, currency: 'GBP', byLineItem: { 111: 1.2 } }
+  );
+  // a sale that was not promoted: a REAL 0 (the line is in eBay's answer and has no ad fee), not null
+  assert.deepStrictEqual(
+    adFeesFromTransactions([saleWith({ lineItemId: '111', marketplaceFees: [fee('FINAL_VALUE_FEE', '2.50')] })]),
+    { total: 0, currency: 'GBP', byLineItem: { 111: 0 } }
+  );
+  // two lines of one order each get their OWN fee; the total is exact (0.1 + 0.2 style sums stay exact)
+  assert.deepStrictEqual(
+    adFeesFromTransactions([saleWith(
+      { lineItemId: 'A', marketplaceFees: [fee('AD_FEE', '0.10')] },
+      { lineItemId: 'B', marketplaceFees: [fee('AD_FEE', '0.20')] },
+      { lineItemId: 'C', marketplaceFees: [] },
+    )]),
+    { total: 0.3, currency: 'GBP', byLineItem: { A: 0.1, B: 0.2, C: 0 } }
+  );
+  // a credit (negative AD_FEE) is summed in as it is; several AD_FEE entries on one line add up
+  assert.strictEqual(adFeesFromTransactions([saleWith({ lineItemId: 'A', marketplaceFees: [fee('AD_FEE', '1.00'), fee('AD_FEE', '-0.40')] })]).byLineItem.A, 0.6);
+  // a REFUND (or any non-SALE) row is ignored, like the earning ignores it
+  assert.deepStrictEqual(
+    adFeesFromTransactions([saleWith({ lineItemId: 'A', marketplaceFees: [fee('AD_FEE', '1.00')] }), { transactionType: 'REFUND', orderLineItems: [{ lineItemId: 'A', marketplaceFees: [fee('AD_FEE', '-1.00')] }] }]),
+    { total: 1, currency: 'GBP', byLineItem: { A: 1 } }
+  );
+  // nothing to read -> null (never 0): no transactions, no SALE, or a SALE that carries no orderLineItems at all
+  assert.strictEqual(adFeesFromTransactions([]), null);
+  assert.strictEqual(adFeesFromTransactions(null), null);
+  assert.strictEqual(adFeesFromTransactions([{ transactionType: 'REFUND', orderLineItems: [] }]), null);
+  assert.strictEqual(adFeesFromTransactions([{ transactionType: 'SALE', amount: { value: '20.00', currency: 'GBP' } }]), null, 'eBay did not list the fees: "no ad fee" cannot be told from "not said"');
+  // a SALE that lists no fee at all (orderLineItems empty, or its items carry no marketplaceFees): unknown, NOT a made-up 0.00 -
+  // a real sale always has at least its final value fee
+  assert.strictEqual(adFeesFromTransactions([saleWith()]), null);
+  assert.strictEqual(adFeesFromTransactions([saleWith({ lineItemId: 'A' }, { lineItemId: 'B', marketplaceFees: [] })]), null);
+  // ...but once ANY line lists fees, a line with none of its own is a real 0
+  assert.strictEqual(adFeesFromTransactions([saleWith({ lineItemId: 'A' }, { lineItemId: 'B', marketplaceFees: [fee('FINAL_VALUE_FEE', '1.00')] })]).byLineItem.A, 0);
+  // malformed pieces never throw: a fee with no amount, a line item with no marketplaceFees, a null entry
+  assert.deepStrictEqual(
+    adFeesFromTransactions([saleWith({ lineItemId: 'A' }, null, { lineItemId: 'B', marketplaceFees: [{ feeType: 'AD_FEE' }, null, fee('AD_FEE', '0.50')] })]),
+    { total: 0.5, currency: 'GBP', byLineItem: { A: 0, B: 0.5 } }
   );
 
   console.log('ebay finances service tests passed');

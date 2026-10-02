@@ -7,7 +7,11 @@
  *   PROFIT         EBAY PRICE - BUYING PRICE                                        worked out
  *   ORDER EARNING  what eBay pays out for the order ("Order earnings" in Seller Hub)  typed by the seller
  *   EBAY COST      EBAY PRICE - ORDER EARNING (what eBay kept: fees ...)             worked out
+ *   AD FEE         the Promoted Listings fee eBay took off the order                 fetched from eBay (Finances AD_FEE); empty until fetched
  *   NET PROFIT     ORDER EARNING - BUYING PRICE                                     worked out
+ *
+ * AD FEE is part of EBAY COST, not on top of it: eBay deducts it before payout, so ORDER EARNING already has it taken off.
+ * It is shown so the seller can see what advertising cost, and is NEVER used in the NET PROFIT (that would take it off twice).
  *
  * Every money column is for the whole order line (an order of 2 pieces has one price, one earning, one Amazon price). What cannot be
  * worked out yet (a figure is not typed) is empty, never 0. A net profit typed in the first version of the sheet is kept and shown
@@ -58,6 +62,7 @@ function buildLine(order) {
   const net = worked ? earning - amazon : older;
   const profit = ebay !== null && amazon !== null ? ebay - amazon : null;
   const cost = ebay !== null && earning !== null ? ebay - earning : null;
+  const adFee = cents(order.ad_fee); // 0 = fetched and there was none; null = not fetched yet. Display only: not part of the sums above.
   return {
     id: order.id,
     title: order.listing_title || order.item_title || order.sku || '',
@@ -76,6 +81,7 @@ function buildLine(order) {
     profit: money(profit),
     order_earning: money(earning),
     ebay_cost: money(cost),
+    ad_fee: money(adFee),
     net_profit: money(net),
     net_profit_older: !worked && older !== null, // shown from an older version of the sheet, until the two typed figures are there
   };
@@ -86,7 +92,7 @@ function totalsOf(lines) {
   const byCurrency = new Map();
   for (const l of lines) {
     const key = l.currency || '';
-    if (!byCurrency.has(key)) byCurrency.set(key, { currency: l.currency || null, lines: 0, sums: { amazon_price: null, ebay_price: null, profit: null, order_earning: null, ebay_cost: null, net_profit: null } });
+    if (!byCurrency.has(key)) byCurrency.set(key, { currency: l.currency || null, lines: 0, sums: { amazon_price: null, ebay_price: null, profit: null, order_earning: null, ebay_cost: null, ad_fee: null, net_profit: null } });
     const t = byCurrency.get(key);
     t.lines += 1;
     for (const col of Object.keys(t.sums)) {
@@ -94,7 +100,7 @@ function totalsOf(lines) {
       if (c !== null) t.sums[col] = (t.sums[col] || 0) + c;
     }
   }
-  return [...byCurrency.values()].map((t) => ({ currency: t.currency, lines: t.lines, amazon_price: money(t.sums.amazon_price), ebay_price: money(t.sums.ebay_price), profit: money(t.sums.profit), order_earning: money(t.sums.order_earning), ebay_cost: money(t.sums.ebay_cost), net_profit: money(t.sums.net_profit) }));
+  return [...byCurrency.values()].map((t) => ({ currency: t.currency, lines: t.lines, amazon_price: money(t.sums.amazon_price), ebay_price: money(t.sums.ebay_price), profit: money(t.sums.profit), order_earning: money(t.sums.order_earning), ebay_cost: money(t.sums.ebay_cost), ad_fee: money(t.sums.ad_fee), net_profit: money(t.sums.net_profit) }));
 }
 
 /**

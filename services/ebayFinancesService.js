@@ -84,4 +84,49 @@ function netEarningFromTransactions(transactions) {
   return { amount: Number(total.toFixed(2)), currency };
 }
 
-module.exports = { fetchSaleTransactionsForOrder, netEarningFromTransactions };
+const toCents = (v) => Math.round(v * 100 + (v < 0 ? -1e-7 : 1e-7));
+
+/**
+ * The Promoted Listings ad fee eBay took off one order: every `feeType: AD_FEE` entry in the SALE transaction(s)' own
+ * `orderLineItems[].marketplaceFees[]` (the same transaction netEarningFromTransactions already reads - no extra eBay
+ * call). eBay's docs: AD_FEE is "a fee charged or a credit issued for an Ad on eBay ... only for sellers who sign up to
+ * create Promoted Listings campaigns" - a negative entry is a credit and is summed in as it is. It is already inside
+ * the SALE `amount` (eBay deducts fees before payout), so this is for showing the fee, never for taking it off again.
+ *
+ * Returns null when there is nothing to read: no SALE transaction yet (same as netEarningFromTransactions), or no line
+ * item in them lists ANY fee (`orderLineItems` missing/empty, or no `marketplaceFees` anywhere - a real sale always
+ * carries at least its final value fee) - then "no ad fee" cannot be told from "eBay did not say", and a made-up 0.00
+ * would be wrong. Otherwise
+ *   { total, currency, byLineItem }  - byLineItem maps each eBay lineItemId in the answer to ITS ad fee (0 when that
+ * line had none), so a multi-line order is exact per line rather than split by price. Money in whole cents internally.
+ * Only SALE transactions: a Promoted Listings Advanced / per-click charge is billed at account level (not per order)
+ * and never appears here.
+ */
+function adFeesFromTransactions(transactions) {
+  const sales = (transactions || []).filter((t) => t && t.transactionType === 'SALE' && Array.isArray(t.orderLineItems));
+  const listsAnyFee = sales.some((t) => t.orderLineItems.some((item) => item && Array.isArray(item.marketplaceFees) && item.marketplaceFees.length > 0));
+  if (!listsAnyFee) return null;
+  const perLine = new Map();
+  let totalCents = 0;
+  let currency = null;
+  for (const sale of sales) {
+    for (const item of sale.orderLineItems) {
+      const id = item && item.lineItemId ? String(item.lineItemId) : null;
+      if (id && !perLine.has(id)) perLine.set(id, 0);
+      for (const fee of Array.isArray(item && item.marketplaceFees) ? item.marketplaceFees : []) {
+        if (!fee || fee.feeType !== 'AD_FEE') continue;
+        const v = money(fee.amount);
+        if (v === null) continue;
+        const c = toCents(v);
+        totalCents += c;
+        if (id) perLine.set(id, perLine.get(id) + c);
+        currency = currency || (fee.amount && fee.amount.currency) || null;
+      }
+    }
+  }
+  const byLineItem = {};
+  for (const [id, c] of perLine) byLineItem[id] = c / 100;
+  return { total: totalCents / 100, currency: currency || (sales[0].amount && sales[0].amount.currency) || null, byLineItem };
+}
+
+module.exports = { fetchSaleTransactionsForOrder, netEarningFromTransactions, adFeesFromTransactions };

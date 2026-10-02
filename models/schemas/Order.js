@@ -83,6 +83,8 @@ const orderSchema = new mongoose.Schema(
     netProfit: { type: Number, default: null },      // an older version of the Net Profit sheet had the seller type the net profit; kept, and shown until the two figures below are typed
     sheetAmazonPrice: { type: Number, default: null }, // Net Profit sheet: what the order cost on Amazon, typed by the seller (the whole order line); null = not typed
     orderEarning: { type: Number, default: null },   // Net Profit sheet: what eBay pays out for the order ("Order earnings" in Seller Hub), typed by the seller; null = not typed
+    adFee: { type: Number, default: null },          // Net Profit sheet: the Promoted Listings ad fee (eBay Finances feeType AD_FEE) eBay took off this order line; read from the same Finances transaction as orderEarning. null = not fetched yet, 0 = fetched and there was none. Already INSIDE the earning (eBay deducts it before payout), shown for information only - never subtracted again
+    adFeeCheckedAt: { type: Date, default: null },   // when the one-time backfill of adFee for an order that already had its earning last looked at eBay (jobs/orderEarningsSync.js) - an order eBay has no transaction for is tried once, not on every run forever
   },
   { timestamps: true }
 );
@@ -93,6 +95,7 @@ const orderSchema = new mongoose.Schema(
 // via sync, but just in case) don't collide with each other.
 orderSchema.index({ userId: 1, ebayOrderId: 1, sku: 1 }, { unique: true, sparse: true });
 orderSchema.index({ userId: 1, ebayAccountId: 1, createdAt: -1 });
+orderSchema.index({ userId: 1, ebayAccountId: 1, adFee: 1, adFeeCheckedAt: 1, createdAt: -1 }); // the ad-fee backfill (jobs/orderEarningsSync.js): seeks straight to the lines still waiting, instantly empty once done
 orderSchema.index({ userId: 1, ebayCreatedAt: -1 });
 orderSchema.index({ userId: 1, listingId: 1 }); // units sold per listing (the Live listings page)
 orderSchema.index({ userId: 1, ebayLineItemId: 1 }); // a message thread finds its order by line item id
