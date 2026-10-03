@@ -699,13 +699,31 @@ async function republishIfNeeded(refreshToken, offerId, offerStatus, context) {
   }
 }
 
+// eBay answers 25713 "This Offer is not available." when the offer no longer exists: the listing was ended or deleted in Seller Hub, or an
+// earlier delete reached eBay but ELMS never heard back. Seen in production on a Delete (2026-10-03).
+const OFFER_GONE_ERROR_ID = 25713;
+function isOfferGoneError(err) {
+  return Array.isArray(err?.ebayErrors) && err.ebayErrors.some((e) => Number(e?.errorId) === OFFER_GONE_ERROR_ID);
+}
+
+/**
+ * Deletes an offer (ending its listing if it is live). Deleting something that is already gone is a success - there is nothing left to
+ * end - so a listing whose offer vanished on eBay can still be removed from ELMS instead of staying stuck behind that error forever.
+ * Any other eBay error is thrown as before.
+ */
 async function deleteOffer(refreshToken, offerId) {
   if (!offerId) throw new Error('An offerId is required to delete an eBay offer.');
-  return ebayRequest(
-    refreshToken,
-    'DELETE',
-    `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`
-  );
+  try {
+    return await ebayRequest(
+      refreshToken,
+      'DELETE',
+      `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`
+    );
+  } catch (err) {
+    if (!isOfferGoneError(err)) throw err;
+    console.warn(`[delete-offer] offer ${offerId} is already gone on eBay (25713); nothing left to end`);
+    return { alreadyGone: true };
+  }
 }
 
 async function withdrawListing(
@@ -1430,6 +1448,7 @@ module.exports = {
   buildAspects,
   publishExistingOffer,
   deleteOffer,
+  isOfferGoneError,
   withdrawListing,
   updateOfferPrice,
   updateOfferQuantity,
