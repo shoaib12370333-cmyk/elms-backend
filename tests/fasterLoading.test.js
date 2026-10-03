@@ -51,7 +51,7 @@ const idOf = (s) => ({ toString: () => s });
   assert.strictEqual(seen.lean, true, 'plain objects, not database documents');
   assert.strictEqual(seen.select, '-publishResponse -publishErrorDetails', "eBay's publish answer is not sent with every row");
   const imp = seen.populates.find((p) => p.path === 'importId'); const acc = seen.populates.find((p) => p.path === 'ebayAccountId');
-  assert.ok(imp && /product\.price/.test(imp.select) && /product\.variants/.test(imp.select) && !/aplusContent|productInformation|categories/.test(imp.select), 'the import: what the list uses, not its A+ content or product information');
+  assert.ok(imp && /product\.price/.test(imp.select) && /product\.variants/.test(imp.select) && /product\.categories/.test(imp.select) && !/aplusContent|productInformation/.test(imp.select), 'the import: what the list uses (with its few category names, so a book about drugs is not flagged when the publish would let it through), not its A+ content or product information');
   assert.ok(acc && /displayName/.test(acc.select) && !/token|secret/i.test(acc.select), "the store: its name only, never its tokens");
   assert.strictEqual(rows.length, 1);
   const r = rows[0];

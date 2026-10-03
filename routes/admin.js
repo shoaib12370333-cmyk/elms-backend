@@ -30,7 +30,9 @@ const {
   updateActionCosts,
   getAiSettings,
   updateAiSettings,
+  saveEbayPolicySettings,
 } = require('../models/settingsModel');
+const ebayPolicy = require('../services/prohibitedItemsService');
 
 // Every route in this file requires the user to be signed in AND an admin.
 router.use(requireAuth, requireAdmin);
@@ -602,6 +604,68 @@ router.put('/settings/ai', async (req, res) => {
     res.json({ success: true, settings, costs: savedCosts });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message || 'Could not save the AI settings.' });
+  }
+});
+
+/**
+ * eBay rules (Admin Panel -> eBay rules): what ELMS refuses to list because eBay does not allow it (config/ebayPolicyRules.js, matched by
+ * services/prohibitedItemsService.js; publishQueueService stops such a product before any credit or eBay call).
+ *   GET  /api/admin/ebay-policy        -> the built-in areas (with their terms and eBay page), the always-fine phrases, and the admin's changes
+ *   PUT  /api/admin/ebay-policy        body { disabledAreas: [id], extraTerms: [{ area, term }], allowPhrases: [text] } -> saves them (what cannot be used is left out and counted)
+ *   POST /api/admin/ebay-policy/test   body { title, description, bulletPoints, categories, settings? } -> what the rules find in that text (with the saved changes, or the given ones)
+ */
+router.get('/ebay-policy', async (req, res) => {
+  try {
+    const settings = await ebayPolicy.refreshSettings({ force: true });
+    res.json({
+      success: true,
+      settings,
+      areas: ebayPolicy.AREAS.map((a) => ({ id: a.id, label: a.label, reason: a.reason, url: a.url, mediaExempt: !!a.mediaExempt, terms: a.terms, contextRules: (a.contextRules || []).map((r) => ({ terms: r.terms, unless: r.unless })) })),
+      allowPhrases: ebayPolicy.ALLOW_PHRASES,
+      limits: { extraTerms: ebayPolicy.MAX_EXTRA_TERMS, allowPhrases: ebayPolicy.MAX_ALLOW_PHRASES, termLength: ebayPolicy.MAX_TERM_LENGTH },
+    });
+  } catch (err) {
+    console.error('admin ebay-policy read error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not load the eBay rules.' });
+  }
+});
+
+router.put('/ebay-policy', async (req, res) => {
+  const body = req.body || {};
+  for (const key of ['disabledAreas', 'extraTerms', 'allowPhrases']) {
+    if (body[key] !== undefined && !Array.isArray(body[key])) return res.status(400).json({ success: false, error: key + ' must be a list.' });
+  }
+  try {
+    const clean = ebayPolicy.normalizeSettings(body);
+    const saved = await saveEbayPolicySettings(clean);
+    ebayPolicy.setSettings(saved);
+    const given = (k) => (Array.isArray(body[k]) ? body[k].length : 0);
+    res.json({
+      success: true,
+      settings: ebayPolicy.currentSettings(),
+      ignored: { extraTerms: Math.max(0, given('extraTerms') - clean.extraTerms.length), allowPhrases: Math.max(0, given('allowPhrases') - clean.allowPhrases.length) },
+    });
+  } catch (err) {
+    console.error('admin ebay-policy save error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not save the eBay rules.' });
+  }
+});
+
+router.post('/ebay-policy/test', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const text = (v, max) => String(v == null ? '' : v).slice(0, max);
+    const settings = b.settings && typeof b.settings === 'object' ? ebayPolicy.normalizeSettings(b.settings) : await ebayPolicy.refreshSettings();
+    const hits = ebayPolicy.scanDetailed({
+      title: text(b.title, 500),
+      description: text(b.description, 20000),
+      bulletPoints: (Array.isArray(b.bulletPoints) ? b.bulletPoints : []).slice(0, 30).map((x) => text(x, 1000)),
+      categories: (Array.isArray(b.categories) ? b.categories : []).slice(0, 20).map((x) => text(x, 120)),
+    }, { settings });
+    res.json({ success: true, blocked: hits.length > 0, hits, message: ebayPolicy.describe(hits) });
+  } catch (err) {
+    console.error('admin ebay-policy test error:', err.message);
+    res.status(500).json({ success: false, error: 'Could not run the test.' });
   }
 });
 

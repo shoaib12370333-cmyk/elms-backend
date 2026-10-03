@@ -4,7 +4,21 @@ const EbayAccount = require('./schemas/EbayAccount');
 const { normalizeAsinSku, requireAsinSku } = require('../services/skuService');
 const { accountLabel, publicUsername } = require('../services/accountLabel');
 const { isMissingLocalImage } = require('../services/imageStorageService');
-const { scanListing: scanProhibitedItems } = require('../services/prohibitedItemsService');
+const { scanDetailed: scanPolicyDetailed } = require('../services/prohibitedItemsService');
+
+/**
+ * What eBay's list of prohibited items finds in a listing's text, as the fields a row carries: policy_warning_terms (the words, as before) and
+ * policy_warnings (one entry per policy: which one, a word, where, its eBay page). Both empty for the overwhelming majority of listings. A product
+ * ELMS will not publish is exactly one with a warning here (books, films and music are only exempt at publish, where the product's category is known).
+ */
+function policyFields(listing) {
+  const hits = scanPolicyDetailed(listing);
+  if (!hits.length) return { policy_warning_terms: [], policy_warnings: [] };
+  const byArea = new Map();
+  for (const h of hits) if (!byArea.has(h.areaId)) byArea.set(h.areaId, { area: h.areaId, label: h.label, reason: h.reason, url: h.url, terms: [], field: h.field });
+  for (const h of hits) byArea.get(h.areaId).terms.push(h.term);
+  return { policy_warning_terms: [...new Set(hits.map((h) => h.term))], policy_warnings: [...byArea.values()] };
+}
 
 // Amazon product prices are positive monetary values. Treat null/undefined/empty
 // values (and the legacy 0 created by Number(null)) as missing so the UI can
@@ -388,7 +402,7 @@ async function findAliexpressListingInStore(userId, aliexpressProductId, aliexpr
 
 // A list of listings (Live listings, Drafts) is read as plain objects, and from each listing's import only what the list uses (the rest of the
 // import - A+ content, product information, categories ... - stays in the database; the eBay answer of a publish is not sent either).
-const IMPORT_FOR_LIST = 'asin amazonUrl amazonPrice currency product.asin product.price product.brand product.variants product.images product.description product.bulletPoints product.specifications product.ebayAspects';
+const IMPORT_FOR_LIST = 'asin amazonUrl amazonPrice currency product.asin product.title product.categories product.price product.brand product.variants product.images product.description product.bulletPoints product.specifications product.ebayAspects';
 const LIST_EXCLUDE = '-publishResponse -publishErrorDetails';
 const ACCOUNT_FOR_LIST = 'displayName storeName ebayUserId storeNumber';
 
@@ -467,6 +481,9 @@ function withImportFallback(serialized, doc) {
   if (!Array.isArray(serialized.bullet_points) || !serialized.bullet_points.length) serialized.bullet_points = Array.isArray(p.bulletPoints) ? p.bulletPoints : [];
   if (!Array.isArray(serialized.specifications) || !serialized.specifications.length) serialized.specifications = Array.isArray(p.specifications) ? p.specifications : [];
   if (!serialized.ebay_aspects || !Object.keys(serialized.ebay_aspects).length) serialized.ebay_aspects = p.ebayAspects && typeof p.ebayAspects === 'object' ? p.ebayAspects : {};
+  // The policy warning must be the verdict the publish will reach (services/publishQueueService.js): the same text, and the product's own categories (a book about
+  // drugs is exempt), and the imported brand. One more scan of text already in memory; without it a row would say "fine" for a draft the publish refuses (or the reverse).
+  Object.assign(serialized, policyFields({ title: serialized.title || p.title, description: serialized.description, bulletPoints: serialized.bullet_points, specifications: serialized.specifications, aspects: serialized.ebay_aspects, brand: p.brand, categories: p.categories }));
   return serialized;
 }
 
@@ -1286,7 +1303,7 @@ function serialize(doc) {
     // A heads-up, never a block - see services/prohibitedItemsService.js. Empty for the overwhelming majority of
     // listings, so computing it on every serialize (list pages can show hundreds of rows) costs very little: the
     // matcher itself is built once, not per listing.
-    policy_warning_terms: scanProhibitedItems({ title: obj.title, description: obj.description, bulletPoints: obj.bulletPoints, specifications: obj.specifications }),
+    ...policyFields({ title: obj.title, description: obj.description, bulletPoints: obj.bulletPoints, specifications: obj.specifications, aspects: obj.ebayAspects }),
     is_error: obj.status === 'error',
     created_at: obj.createdAt,
     updated_at: obj.updatedAt,

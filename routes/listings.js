@@ -58,6 +58,7 @@ const {
 
 const { getImportById } = require('../models/importsModel');
 const { checkAspects } = require('../services/publishPreflightService');
+const { refreshSettings: refreshEbayPolicySettings } = require('../services/prohibitedItemsService');
 
 const { requireAuth } = require('../middleware/requireAuth');
 const { enqueuePublish } = require('../services/publishRunner');
@@ -218,6 +219,7 @@ router.get('/', requireAuth, async (req, res) => {
     const f = listFilters(req.query);
     const { page, limit } = pageOptions({ page: req.query.page, limit: req.query.limit });
     if (f.nothing) return res.json({ success: true, listings: [], total: 0, page, limit, pages: 1 });
+    await refreshEbayPolicySettings(); // the policy warnings of the rows use the admin's eBay rules (at most one read a minute)
     const out = await listListingsPage(req.userId, { statuses: f.statuses, accountId: f.accountId, source: f.source, q: f.q, sort: f.sort, vero: f.vero, page, limit });
     res.json({ success: true, ...out });
   } catch (err) {
