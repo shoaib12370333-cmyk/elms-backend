@@ -67,6 +67,8 @@ require.cache[axiosPath] = {
       return { data: { shippingOptions: [{ costType: policyCost[id] || 'FLAT_RATE' }] } };
     }
     if (isBulk) {
+      if (bulkMode === 'throw-unreadable') throw { response: { status: 400, data: { responses: [{ sku: config.data.requests[0].sku, statusCode: 400 }] } } };
+      if (bulkMode === 'throw-responses') throw { response: { status: 400, data: { responses: [{ sku: config.data.requests[0].sku, statusCode: 400, errors: [{ errorId: 25709, message: 'Invalid value for weight.value.', parameters: [{ name: 'weight.value', value: '0' }] }] }] } } };
       if (bulkMode === 'throw') throw { response: { status: 400, data: { errors: [{ errorId: 25002, message: 'Bad bulk request.' }] } } };
       const reqs = config.data.requests;
       if (!writesHappened) { preWriteOffer = { ...offerState }; preWriteInventory = { ...inventoryState }; writesHappened = true; }
@@ -196,6 +198,20 @@ const weighted = { weight: { value: 0, unit: 'POUND' } }; // what eBay handed ba
     assert.deepStrictEqual(put.data.product.imageUrls, ['https://i/1.jpg']);
   }
 
+  // ---------- the quantity-only call refused the way eBay really did for two books (a 400 whose reasons sit in `responses`): logged with its reason, then the whole item is written ----------
+  reset(); bulkMode = 'throw-responses';
+  const warnings = []; const realWarn = console.warn; console.warn = (...a) => warnings.push(a.join(' '));
+  try { out = await updateOfferQuantity('rt1', 'O123', 4); } finally { console.warn = realWarn; }
+  assert.strictEqual(out.quantity, 4);
+  assert.ok(warnings.some((w) => /quantity-only update of B0TEST failed \(Invalid value for weight\.value\. \(eBay error 25709\)/.test(w)), 'the log says WHY: ' + warnings.join(' | '));
+
+  // ---------- a 400 with no readable reason at all: the raw answer goes to the log, so the next look has something to read ----------
+  reset(); bulkMode = 'throw-unreadable';
+  const rawSeen = []; console.warn = (...a) => rawSeen.push(a.join(' '));
+  try { out = await updateOfferQuantity('rt1', 'O123', 4); } finally { console.warn = realWarn; }
+  assert.strictEqual(out.quantity, 4);
+  assert.ok(rawSeen.some((w) => w.includes('body={"responses":[{"sku":"B0TEST","statusCode":400}]}')), rawSeen.join(' | '));
+
   // ---------- eBay refusing the inventory item PUT surfaces its own message, and the offer is never touched ----------
   reset(); bulkMode = 'throw'; failOn = 'inventory-put';
   await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 5), /Quantity is invalid/);
@@ -229,6 +245,18 @@ const weighted = { weight: { value: 0, unit: 'POUND' } }; // what eBay handed ba
     await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 6), /Invalid value for weight\.value/, label);
     assert.strictEqual(inventoryPuts().length, 1, `${label}: no second write`);
     assert.ok(!calls.some((c) => c.method === 'PUT' && kind(c) === 'offer'), `${label}: the offer is not touched`);
+  }
+
+  // ---------- ...and when the weight is kept, the log says what was known (package, policy, calculated or not) ----------
+  for (const [label, setup, expected] of [
+    ['calculated', () => { offerState.listingPolicies = { fulfillmentPolicyId: 'FP-CALC-L' }; policyCost['FP-CALC-L'] = 'CALCULATED'; }, /package=\{"weight":\{"value":0,"unit":"POUND"\}\}, policy=FP-CALC-L, calculated shipping=true/],
+    ['unknown', () => { offerState.listingPolicies = { fulfillmentPolicyId: 'FP-ERR-L' }; policyCost['FP-ERR-L'] = 'THROW'; }, /policy=FP-ERR-L, calculated shipping=unknown/],
+    ['no policy', () => { offerState.listingPolicies = { paymentPolicyId: 'p1' }; }, /policy=none, calculated shipping=not looked up/],
+  ]) {
+    reset(); bulkMode = 'unconfirmed'; weightRefused = 'when-present'; inventoryState.packageWeightAndSize = weighted; setup();
+    const seen = []; console.warn = (...a) => seen.push(a.join(' '));
+    try { await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 6), /Invalid value for weight\.value/, label); } finally { console.warn = realWarn; }
+    assert.ok(seen.some((w) => expected.test(w)), `${label}: ` + seen.join(' | '));
   }
 
   // ---------- only a refusal OF THE WEIGHT is repeated: another invalid value is thrown; and the repeat is a single one, not a loop ----------

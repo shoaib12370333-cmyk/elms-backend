@@ -133,7 +133,13 @@ async function ebayRequest(refreshToken, method, path, body, options = {}) {
 
     return response.data;
   } catch (err) {
-    const ebayErrors = err.response?.data?.errors;
+    let ebayErrors = err.response?.data?.errors;
+    // The bulk calls (bulk_update_price_quantity) answer a refusal with { responses: [{ sku, statusCode, errors: [...] }] } and no top-level `errors`:
+    // without this the reason was lost ("Request failed with status code 400").
+    if (!(Array.isArray(ebayErrors) && ebayErrors.length) && Array.isArray(err.response?.data?.responses)) {
+      const inner = err.response.data.responses.flatMap((r) => (Array.isArray(r?.errors) ? r.errors : []));
+      if (inner.length) ebayErrors = inner;
+    }
 
     const message =
       friendlyReasonFor(ebayErrors) ||
@@ -144,6 +150,7 @@ async function ebayRequest(refreshToken, method, path, body, options = {}) {
     const wrapped = new Error(message);
     wrapped.statusCode = err.response?.status || 500;
     wrapped.ebayErrors = ebayErrors;
+    wrapped.responseBody = err.response?.data; // only for logging what eBay said when it had no readable error list
 
     throw wrapped;
   }
@@ -1092,7 +1099,8 @@ async function setInventoryQuantity(refreshToken, offer, quantity) {
     if (answers.length && answers.every((r) => is2xx(r.statusCode) && !(Array.isArray(r.errors) && r.errors.length))) return;
     console.warn(`[restock] eBay did not confirm the quantity-only update of ${sku} (${JSON.stringify(res).slice(0, 300)}); writing the whole inventory item instead`);
   } catch (err) {
-    console.warn(`[restock] the quantity-only update of ${sku} failed (${err.message}); writing the whole inventory item instead`);
+    const unreadable = !(Array.isArray(err.ebayErrors) && err.ebayErrors.length) && err.responseBody !== undefined ? ` body=${JSON.stringify(err.responseBody).slice(0, 400)}` : '';
+    console.warn(`[restock] the quantity-only update of ${sku} failed (${err.message}${unreadable}); writing the whole inventory item instead`);
   }
 
   const currentInventory = await ebayRequest(
@@ -1114,9 +1122,14 @@ async function setInventoryQuantity(refreshToken, offer, quantity) {
   try {
     await put(inventoryUpdate);
   } catch (err) {
+    if (!isInvalidWeightError(err)) throw err;
+    const pkg = inventoryUpdate.packageWeightAndSize;
     const policyId = offer.listingPolicies?.fulfillmentPolicyId;
-    if (!isInvalidWeightError(err) || !inventoryUpdate.packageWeightAndSize || !policyId) throw err;
-    if ((await fulfillmentPolicyUsesCalculatedShipping(refreshToken, policyId, marketplaceId)) !== false) throw err; // calculated or unknown: the weight may be needed
+    const calculated = pkg && policyId ? await fulfillmentPolicyUsesCalculatedShipping(refreshToken, policyId, marketplaceId) : undefined;
+    if (calculated !== false) { // no package data, no policy, a calculated one or an unknown one: the weight may be needed, so it is kept
+      console.warn(`[restock] eBay refused the package weight of ${sku} and it is kept: package=${pkg ? JSON.stringify(pkg).slice(0, 200) : 'none'}, policy=${policyId || 'none'}, calculated shipping=${calculated === undefined ? 'not looked up' : calculated === null ? 'unknown' : calculated}`);
+      throw err;
+    }
     console.warn(`[restock] eBay refused the package weight of ${sku} (${err.message}); the shipping policy is not calculated, so it is written without it`);
     const { packageWeightAndSize: _dropped, ...withoutPackage } = inventoryUpdate;
     await put(withoutPackage);
