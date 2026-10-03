@@ -40,6 +40,14 @@ const userSchema = new mongoose.Schema(
     // Set when the account was made by entering the confirmation code mailed to the address (accounts from before have none).
     emailVerifiedAt: { type: Date, default: undefined },
     emailKey: { type: String, default: null, index: true }, // the mailbox with dots / +tags removed (services/signupBonusGuard.js)
+    // The phone number typed at sign-up (or added later). NOT verified - no SMS, no code: it is checked for being a valid number of the
+    // chosen country (services/phoneService.js) and kept for the admins (Admin -> Users). Never shown to other users.
+    phone: { type: String, default: null },        // E.164, e.g. +923001234567
+    phoneCountry: { type: String, default: null }, // ISO 3166-1 alpha-2, e.g. PK
+    phoneDisplay: { type: String, default: null }, // spaced for reading, e.g. +92 300 1234567
+    // true = the account was made WITHOUT a number (e.g. "Continue with Google" skips the sign-up form) and must add one before using the app.
+    // Missing = an account from before phone numbers existed: it is asked for one, but may skip.
+    phoneRequired: { type: Boolean, default: undefined },
 
     // Messages page: how ELMS answers new buyer messages. off = never, draft = AI writes a draft for you
     // to review, auto = AI also sends it (only for simple, low-risk messages).
