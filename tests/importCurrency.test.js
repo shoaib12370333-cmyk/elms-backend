@@ -59,11 +59,12 @@ const reset = () => { drafts.length = 0; charges.length = 0; fxCalls.length = 0;
     ]);
     axios.post = origPost;
     const cur = (domain) => body.find((j) => j.domain === domain).payload;
-    assert.strictEqual(cur('.co.uk').currency, 'GBP', 'a UK product is asked for in pounds');
-    assert.strictEqual(cur('.com').currency, 'USD');
-    assert.strictEqual(cur('.com.au').currency, 'AUD');
-    assert.strictEqual(cur('.de').currency, 'EUR');
-    assert.strictEqual(cur('.ca').currency, 'CAD');
+    // written the way the bulk endpoint takes it (small letters; it refuses capitals - see CURRENCY_MODES in services/easyparserAmazonService.js)
+    assert.strictEqual(cur('.co.uk').currency, 'gbp', 'a UK product is asked for in pounds');
+    assert.strictEqual(cur('.com').currency, 'usd');
+    assert.strictEqual(cur('.com.au').currency, 'aud');
+    assert.strictEqual(cur('.de').currency, 'eur');
+    assert.strictEqual(cur('.ca').currency, 'cad');
     assert.deepStrictEqual(cur('.co.uk').asins, ['B0UKPRODUC'], 'the ASINs are still in the payload');
     assert.ok(!('currency' in cur('.zz')), 'a site we do not know is left to Easyparser');
     assert.ok(body.every((j) => !('currency' in j)), 'currency is a payload setting, not a root one');

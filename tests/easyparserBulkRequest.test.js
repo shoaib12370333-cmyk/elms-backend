@@ -1,6 +1,6 @@
 // The Easyparser bulk request: a request that Easyparser refuses as a whole ("Bad request.") must never stop an import.
-// The price currency is written the documented way first (GBP), then the other documented way (gbp), then left out - and the way that
-// worked is remembered. Every kind of rejected item (invalid / failed / rate limit / no credit) comes back with its reason.
+// The price currency is written the way the bulk endpoint really takes it first (small letters: gbp - it refuses GBP every time, seen in the
+// production log), then the other way (GBP), then left out - and the way that worked is remembered. Every kind of rejected item (invalid / failed / rate limit / no credit) comes back with its reason.
 // The real submitBulkDetail runs here; only the HTTP call is scripted.
 const assert = require('assert');
 
@@ -25,27 +25,27 @@ const reset = () => { calls.length = 0; script = []; resetCurrencyMode(); };
 const currencyOf = (call, domain = '.co.uk') => call.find((j) => j.domain === domain).payload.currency;
 
 (async () => {
-  // ---------- 1. accepted the first time: capitals, and it stays that way ----------
+  // ---------- 1. accepted the first time: small letters, and it stays that way (nothing refused after a restart) ----------
   reset();
   script = [ok(), ok()];
   let r = await submitBulkDetail(UK);
   assert.strictEqual(calls.length, 1);
-  assert.strictEqual(currencyOf(calls[0]), 'GBP');
+  assert.strictEqual(currencyOf(calls[0]), 'gbp');
   assert.deepStrictEqual(r.accepted, [{ asin: 'B0UKPRODUC', domain: '.co.uk', queryId: 'q-uk', credit: 1 }]);
   await submitBulkDetail(UK);
-  assert.strictEqual(currencyOf(calls[1]), 'GBP');
+  assert.strictEqual(currencyOf(calls[1]), 'gbp');
 
-  // ---------- 2. refused as a whole ("Bad request."): the small letters are tried, and remembered ----------
+  // ---------- 2. refused as a whole ("Bad request."): the capitals are tried, and remembered ----------
   reset();
   script = [httpError(400, { success: false, message: 'Bad request.' }), ok(), ok()];
   r = await submitBulkDetail(UK);
   assert.strictEqual(calls.length, 2, 'one refused try, then the next way');
-  assert.strictEqual(currencyOf(calls[0]), 'GBP');
-  assert.strictEqual(currencyOf(calls[1]), 'gbp');
+  assert.strictEqual(currencyOf(calls[0]), 'gbp');
+  assert.strictEqual(currencyOf(calls[1]), 'GBP');
   assert.strictEqual(r.accepted.length, 1);
   await submitBulkDetail(UK);
   assert.strictEqual(calls.length, 3, 'the next request goes straight to the way that worked');
-  assert.strictEqual(currencyOf(calls[2]), 'gbp');
+  assert.strictEqual(currencyOf(calls[2]), 'GBP');
 
   // ---------- 3. neither way is taken: the request goes without a currency, and that is remembered ----------
   reset();
@@ -66,14 +66,14 @@ const currencyOf = (call, domain = '.co.uk') => call.find((j) => j.domain === do
   assert.strictEqual(calls.length, 3);
   script = [ok()];
   await submitBulkDetail(UK);
-  assert.strictEqual(currencyOf(calls[3]), 'GBP', 'a batch that failed for another reason did not switch the currency off');
+  assert.strictEqual(currencyOf(calls[3]), 'gbp', 'a batch that failed for another reason did not switch the currency off');
 
   // ---------- 5. a 200 answer that says success:false is a refused request too ----------
   reset();
   script = [{ success: false, message: 'Bad request.' }, ok()];
   r = await submitBulkDetail(UK);
   assert.strictEqual(calls.length, 2);
-  assert.strictEqual(currencyOf(calls[1]), 'gbp');
+  assert.strictEqual(currencyOf(calls[1]), 'GBP');
   assert.strictEqual(r.accepted.length, 1);
 
   // ---------- 6. an error that is not about the request itself is not retried with other currencies ----------
@@ -93,7 +93,7 @@ const currencyOf = (call, domain = '.co.uk') => call.find((j) => j.domain === do
   reset();
   script = [{ success: true, data: { accepted: [] } }];
   await submitBulkDetail([{ domain: '.com', asins: ['A'] }, { domain: '.com.au', asins: ['B'] }, { domain: '.de', asins: ['C'] }, { domain: '.ca', asins: ['D'] }]);
-  assert.deepStrictEqual(calls[0].map((j) => j.payload.currency), ['USD', 'AUD', 'EUR', 'CAD']);
+  assert.deepStrictEqual(calls[0].map((j) => j.payload.currency), ['usd', 'aud', 'eur', 'cad']);
 
   // ---------- 7. every kind of rejected item comes back with its reason ----------
   reset();
@@ -122,13 +122,13 @@ const currencyOf = (call, domain = '.co.uk') => call.find((j) => j.domain === do
   // one invalid item says the currency is wrong: those items are tried again, the next way of writing it
   reset();
   script = [
-    { success: true, data: { accepted: [], invalid: [{ message: 'Invalid currency value "GBP"', instancePath: '/0/payload/currency', domain: '.co.uk' }] } },
+    { success: true, data: { accepted: [], invalid: [{ message: 'Invalid currency value "gbp"', instancePath: '/0/payload/currency', domain: '.co.uk' }] } },
     ok(),
   ];
   r = await submitBulkDetail([{ domain: '.co.uk', asins: ['B0UKPRODUC', 'B0UKSECOND'] }]);
   assert.deepStrictEqual(r.rejected.map((x) => [x.asin, x.retryable]), [['B0UKPRODUC', true], ['B0UKSECOND', true]]);
   await submitBulkDetail(UK);
-  assert.strictEqual(currencyOf(calls[1]), 'gbp', 'the next request uses the next way');
+  assert.strictEqual(currencyOf(calls[1]), 'GBP', 'the next request uses the next way');
 
   console.log('easyparser bulk request tests passed');
   process.exit(0);

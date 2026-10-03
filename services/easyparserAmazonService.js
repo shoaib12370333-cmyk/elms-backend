@@ -34,11 +34,13 @@ function apiKey() {
 /**
  * The way the price currency is written in the request. Easyparser documents it as an ISO code in capitals in the bulk
  * request ("GBP") and in small letters in the real-time one ("usd"), and a request it does not like is refused as a whole with
- * "Bad request." - so the capitals go first, then the small letters, and if neither is taken the request goes without a currency
- * (the price is then put right by the import itself, see routes/fetchProduct.alignPriceCurrency). The way that was last accepted is
- * remembered, so one refused try is all it costs after a restart.
+ * "Bad request.". In practice (Render log, 2026-10-03: five times in one day, once after every restart) the bulk endpoint refuses the capitals -
+ * `"GBP" must be equal to one of the allowed values` at /0/payload/currency - and takes the small letters, so those go first; then the capitals,
+ * and if neither is taken the request goes without a currency (the price is then put right by the import itself, see
+ * routes/fetchProduct.alignPriceCurrency). The way that was last accepted is remembered, so at most one refused try is paid for after a restart
+ * (none while the small letters are accepted).
  */
-const CURRENCY_MODES = ['upper', 'lower', 'none'];
+const CURRENCY_MODES = ['lower', 'upper', 'none'];
 let currencyModeIndex = 0;
 
 function currencyFor(domain, mode) {
@@ -322,7 +324,8 @@ function normalizeDetail(raw, sourceUrl) {
 
   const priceObj = raw.buybox_winner?.price || {};
   const price = numberFrom(priceObj.value ?? priceObj.amount ?? priceObj.current_price ?? priceObj.raw ?? priceObj);
-  const currency = priceObj.currency || null;
+  // ISO codes are capitals everywhere else in ELMS (the admin catalog and the drafts copy this value as it is); a request written in small letters may come back that way
+  const currency = priceObj.currency ? String(priceObj.currency).trim().toUpperCase() : null;
 
   const availObj = raw.buybox_winner?.availability;
   const availText = typeof availObj === 'string' ? availObj : (availObj?.raw || availObj?.message || availObj?.status || availObj?.type || null);
