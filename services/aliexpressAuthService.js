@@ -19,6 +19,8 @@ const axios = require('axios');
  * URL, read back when AliExpress redirects the browser to the callback - both first-party requests to ELMS's own domain).
  */
 
+const { parseJsonKeepingLongIds } = require('./jsonLongInts');
+
 const GATEWAY = 'https://api-sg.aliexpress.com';
 
 function appKey() { return process.env.ALIEXPRESS_APP_KEY; }
@@ -53,6 +55,12 @@ async function postSigned(url, signPath, params) {
     res = await axios.post(GATEWAY + url, body.toString(), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
       timeout: 20000, validateStatus: () => true,
+      // Ids are 16-17 digits: as plain JSON numbers they lose their last digits (12000027158136203 would read as ...204), which for an
+      // order number means paying or reading ANOTHER order. Long integers are turned into strings before parsing (services/jsonLongInts.js).
+      transformResponse: [(raw) => {
+        if (typeof raw !== 'string') return raw;
+        try { return parseJsonKeepingLongIds(raw); } catch (_) { return raw; } // not JSON: handed on as text, rejected just below
+      }],
     });
   } catch (err) {
     throw new Error('Could not reach AliExpress: ' + err.message);

@@ -169,7 +169,7 @@ async function upsertOrder(userId, orderLineItem, ebayAccountId) {
 const { buildLine: buildNetProfitLine, resolveNetProfit } = require('../services/netProfitService');
 const { applyMark } = require('../services/orderNoteMark');
 // What an order needs from its listing (title, picture, cost), that listing's import (the Amazon link and price) and its store; the rest stays in the database.
-const LISTING_FOR_ORDER = { path: 'listingId', select: 'title mainImage amazonPrice sku currency importId ebayListingId ebayAccountId', populate: { path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' } };
+const LISTING_FOR_ORDER = { path: 'listingId', select: 'title mainImage amazonPrice sku currency importId ebayListingId ebayAccountId sourcePlatform', populate: { path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' } };
 const ACCOUNT_FOR_ORDER = { path: 'ebayAccountId', select: 'displayName storeName ebayUserId storeNumber' };
 const positive = (v) => { const n = Number(v); return v !== null && v !== undefined && v !== '' && Number.isFinite(n) && n > 0 ? n : null; };
 
@@ -185,7 +185,7 @@ async function attachMissingListings(userId, docs) {
   const itemIds = [...new Set(loose.map((d) => d.legacyItemId).filter(Boolean))];
   if (!skus.length && !itemIds.length) return docs;
   const found = await Listing.find({ userId, $or: [...(skus.length ? [{ sku: { $in: skus } }] : []), ...(itemIds.length ? [{ ebayListingId: { $in: itemIds } }] : [])] })
-    .select('sku ebayListingId ebayAccountId title mainImage amazonPrice currency importId').populate({ path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' }).lean();
+    .select('sku ebayListingId ebayAccountId title mainImage amazonPrice currency importId sourcePlatform').populate({ path: 'importId', select: 'amazonUrl amazonPrice currency product.price product.currency' }).lean();
   const accountOf = (x) => String((x && (x._id || x)) || '');
   for (const d of loose) {
     const matches = found.filter((l) => (d.sku && l.sku === d.sku) || (d.legacyItemId && l.ebayListingId === d.legacyItemId));
@@ -241,6 +241,7 @@ function enrichOrder(serialized, doc) {
   serialized.buy_price_manual = positive(doc.buyPriceOverride) !== null;
 
   serialized.listing_title = listing?.title || serialized.item_title || null;
+  serialized.listing_source = listing?.sourcePlatform || null; // 'amazon' | 'cj' | 'aliexpress' - the Orders window offers "Order on AliExpress" only for an AliExpress listing
   // Fall back to eBay's own picture for the line item (item.image.imageUrl)
   // when the order has no linked ELMS listing - the common case for orders
   // synced straight from eBay that were never imported/published via ELMS.
@@ -452,6 +453,94 @@ async function markOrdered(userId, id, { ordered, date, deliveryDate, buyingPric
   return doc ? { order: serialize(doc) } : { error: 'not_found' };
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------
+// The AliExpress order of a line (Order.aliexpressOrder). Everything that decides whether an order may be placed goes through
+// claimAliexpressOrder, ONE atomic update, so two clicks (or two tabs) can never both place the same order.
+// ---------------------------------------------------------------------------------------------------------------------------
+const AE_ORDER_KEYS = ['state', 'aeOrderId', 'aeOrderIds', 'outOrderId', 'claimedAt', 'placedAt', 'payState', 'payingAt', 'paidAt', 'status', 'logisticsStatus', 'amount', 'currency', 'estimatedCost', 'shippingService', 'trackingNumber', 'carrier', 'etaAt', 'lastEvent', 'syncedAt', 'finished', 'error', 'errorCode'];
+
+/**
+ * Takes the right to place the AliExpress order of this line: succeeds (answers the order) only if none was started, or the last try
+ * FAILED (AliExpress refused it - nothing exists); an UNKNOWN last try (no clear answer, an order may exist) only when the seller
+ * confirmed (retryUnknown) that they checked AliExpress. A placed or in-flight order is never claimable. null = not claimable.
+ */
+async function claimAliexpressOrder(userId, id, { retryUnknown = false } = {}) {
+  const claimable = [null, 'failed', ...(retryUnknown ? ['unknown'] : [])];
+  const doc = await Order.findOneAndUpdate(
+    { _id: id, userId, 'aliexpressOrder.state': { $in: claimable } },
+    { $set: { 'aliexpressOrder.state': 'placing', 'aliexpressOrder.claimedAt': new Date(), 'aliexpressOrder.error': null, 'aliexpressOrder.errorCode': null } },
+    { new: true }
+  );
+  return doc ? serialize(doc) : null;
+}
+
+/**
+ * Takes the right to PAY the AliExpress order of this line: succeeds (answers the order) only for a placed order that is not paid and has
+ * no payment request in flight - or whose last request has been "in flight" for more than `staleMs` (the server stopped mid-request;
+ * the caller reads the order's real state before paying anyway). One atomic update, so two clicks can never both pay. null = not claimable.
+ */
+async function claimAliexpressPayment(userId, id, { staleMs = 15 * 60 * 1000, now = Date.now() } = {}) {
+  const doc = await Order.findOneAndUpdate(
+    {
+      _id: id, userId, 'aliexpressOrder.state': 'placed',
+      $or: [
+        { 'aliexpressOrder.payState': { $in: [null, 'unpaid'] } },
+        { 'aliexpressOrder.payState': 'paying', 'aliexpressOrder.payingAt': { $lt: new Date(now - staleMs) } },
+      ],
+    },
+    { $set: { 'aliexpressOrder.payState': 'paying', 'aliexpressOrder.payingAt': new Date(now) } },
+    { new: true }
+  );
+  return doc ? serialize(doc) : null;
+}
+
+/** Gives the payment claim back after AliExpress clearly did NOT take the payment (only a claim that is still 'paying' - a paid order stays paid). */
+async function releaseAliexpressPayment(userId, id) {
+  const doc = await Order.findOneAndUpdate(
+    { _id: id, userId, 'aliexpressOrder.payState': 'paying' },
+    { $set: { 'aliexpressOrder.payState': 'unpaid' } },
+    { new: true }
+  );
+  return doc ? serialize(doc) : null;
+}
+
+/**
+ * Saves some keys of the AliExpress order of a line (only the keys in AE_ORDER_KEYS that are given).
+ * `guard` makes the write CONDITIONAL, so a slow reader can never overwrite what happened in between (a refresh that read order A1 as
+ * closed must not reset the line after the seller has already placed A2): { state, aeOrderId, payStateNotIn } - each one given must still
+ * hold. null = nothing written (no such order, or the guard no longer holds).
+ */
+async function updateAliexpressOrder(userId, id, patch, guard = null) {
+  const set = {};
+  for (const key of AE_ORDER_KEYS) if (patch && patch[key] !== undefined) set['aliexpressOrder.' + key] = patch[key];
+  if (!Object.keys(set).length) return null;
+  const filter = { _id: id, userId };
+  if (guard && guard.state !== undefined) filter['aliexpressOrder.state'] = guard.state;
+  if (guard && guard.aeOrderId !== undefined) filter['aliexpressOrder.aeOrderId'] = String(guard.aeOrderId);
+  if (guard && Array.isArray(guard.payStateNotIn)) filter['aliexpressOrder.payState'] = { $nin: guard.payStateNotIn };
+  const doc = await Order.findOneAndUpdate(filter, { $set: set }, { new: true });
+  return doc ? serialize(doc) : null;
+}
+
+/** Placed AliExpress orders not finished yet and not asked about for `staleMs` (newest placed first, at most `limit`) - the sync job's work list. */
+async function listAliexpressOrdersToSync({ limit = 200, staleMs = 25 * 60 * 1000, maxAgeMs = 150 * 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+  return Order.find({
+    'aliexpressOrder.state': 'placed',
+    'aliexpressOrder.finished': { $ne: true },
+    'aliexpressOrder.placedAt': { $gt: new Date(now - maxAgeMs) },
+    $or: [{ 'aliexpressOrder.syncedAt': null }, { 'aliexpressOrder.syncedAt': { $lt: new Date(now - staleMs) } }],
+  }).sort({ 'aliexpressOrder.placedAt': -1 }).limit(limit).select('_id userId aliexpressOrder').lean();
+}
+
+/** A claim ('placing') that has been in flight for far too long (the server stopped mid-request) is really UNKNOWN: an order may exist. Returns how many were changed. */
+async function expireStalePlacingAliexpressOrders({ olderThanMs = 15 * 60 * 1000, now = Date.now() } = {}) {
+  const result = await Order.updateMany(
+    { 'aliexpressOrder.state': 'placing', 'aliexpressOrder.claimedAt': { $lt: new Date(now - olderThanMs) } },
+    { $set: { 'aliexpressOrder.state': 'unknown', 'aliexpressOrder.error': 'The request to AliExpress did not finish. Check your AliExpress orders before trying again.' } }
+  );
+  return result.modifiedCount || 0;
+}
+
 /** What happened to the "ordered" mark in the eBay note of an order: written (true), removed (false), or nothing changed (null); `error` says why it did not work (null = fine). */
 async function setEbayNoteState(userId, id, { written = null, error = null } = {}) {
   const set = { ebayNoteError: error ? String(error).slice(0, 300) : null };
@@ -464,6 +553,34 @@ async function setEbayNoteState(userId, id, { written = null, error = null } = {
 async function setSellerNote(userId, id, note) {
   const doc = await Order.findOneAndUpdate({ _id: id, userId }, { sellerNote: String(note || '').slice(0, 2000) }, { new: true });
   return doc ? serialize(doc) : null;
+}
+
+/** The AliExpress order of an order line as the app shows it (snake_case), or null when none was started. */
+function aliexpressOrderView(o) {
+  if (!o || !o.state) return null;
+  return {
+    state: o.state,
+    ae_order_id: o.aeOrderId || null,
+    ae_order_ids: Array.isArray(o.aeOrderIds) ? o.aeOrderIds : [],
+    placed_at: o.placedAt || null,
+    pay_state: o.payState || null,
+    paying_at: o.payingAt || null,
+    paid_at: o.paidAt || null,
+    status: o.status || null,
+    logistics_status: o.logisticsStatus || null,
+    amount: Number.isFinite(Number(o.amount)) && o.amount !== null ? Number(o.amount) : null,
+    currency: o.currency || null,
+    estimated_cost: Number.isFinite(Number(o.estimatedCost)) && o.estimatedCost !== null ? Number(o.estimatedCost) : null,
+    shipping_service: o.shippingService || null,
+    tracking_number: o.trackingNumber || null,
+    carrier: o.carrier || null,
+    eta_at: o.etaAt || null,
+    last_event: o.lastEvent || null,
+    synced_at: o.syncedAt || null,
+    finished: !!o.finished,
+    error: o.error || null,
+    error_code: o.errorCode || null,
+  };
 }
 
 function serialize(doc) {
@@ -483,6 +600,7 @@ function serialize(doc) {
     sale_price: obj.salePrice,
     quantity: obj.quantity,
     variant_details: obj.variantDetails,
+    aliexpress_order: aliexpressOrderView(obj.aliexpressOrder),
     shipping_address: obj.shippingAddress || null,
     tracking_number: obj.trackingNumber,
     shipping_carrier: obj.shippingCarrier,
@@ -753,4 +871,4 @@ async function markAdFeeChecked(ids) {
   return result.modifiedCount || 0;
 }
 
-module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, autoMarkDelivered, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, listOrdersNeedingEarnings, setOrderEarningsBulk, listOrdersNeedingAdFee, setOrderAdFeesBulk, markAdFeeChecked, hasOrderLineItemsNeedingTracking, importTrackingFromEbay, _summaryCache: summaryCache };
+module.exports = { listOrders, getOrderById, updateFulfillmentStatus, upsertOrder, setTracking, markShippedNoTracking, autoMarkDelivered, linkAmazonOrder, setSellerNote, setEbayNoteState, markOrdered, setBuyPrice, linkOrderToListing, deriveOrderStatus, netProfitQuery, countNetProfitLines, listNetProfitLines, getNetProfitLine, setSheetInputs, netProfitSummary, ordersSummary, claimAliexpressOrder, claimAliexpressPayment, releaseAliexpressPayment, updateAliexpressOrder, listAliexpressOrdersToSync, expireStalePlacingAliexpressOrders, listOrdersNeedingEarnings, setOrderEarningsBulk, listOrdersNeedingAdFee, setOrderAdFeesBulk, markAdFeeChecked, hasOrderLineItemsNeedingTracking, importTrackingFromEbay, _summaryCache: summaryCache };

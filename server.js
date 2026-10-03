@@ -39,6 +39,7 @@ const { startScheduledPublisher } = require('./jobs/scheduledPublisher');
 const { startImageCleanup } = require('./jobs/imageCleanup');
 const { startOrderSync } = require('./jobs/orderSync');
 const { startOrderEarningsSync } = require('./jobs/orderEarningsSync');
+const { startAliexpressOrderSync } = require('./jobs/aliexpressOrderSync');
 const { startOrderAutoDeliver } = require('./jobs/orderAutoDeliver');
 const { startConversationSync } = require('./jobs/conversationSync');
 const { startStatsSync } = require('./jobs/statsSync');
@@ -187,6 +188,8 @@ app.use('/api/cj', require('./routes/cj'));
 // AliExpress - a third, separate product source next to Amazon and CJ (services/aliexpressAdapter.js)
 app.use('/api/aliexpress-connect', require('./routes/aliexpressConnect'));
 app.use('/api/aliexpress', require('./routes/aliexpress'));
+// Buying an eBay order's item from AliExpress: preview -> place (unpaid) -> pay, each a separate confirmed step (services/aliexpressOrderService.js)
+app.use('/api/aliexpress-orders', require('./routes/aliexpressOrders'));
 
 // Orders
 app.use('/api/orders', ordersRoute);
@@ -288,6 +291,7 @@ app.listen(PORT, () => {
     startImageCleanup();
     startOrderSync();
     startOrderEarningsSync();
+    startAliexpressOrderSync();
     startOrderAutoDeliver();
     startConversationSync();
     startStatsSync();

@@ -527,24 +527,8 @@ async function syncCjPriceIfChanged(user, listing, variant, blockState) {
 // that user's AliExpress listings are left for the next run instead of each being charged, failed and refunded.
 const ALIEXPRESS_MAX_CONSECUTIVE_FAILURES = 3;
 
-/** The sku's available stock as a number, or null when AliExpress did not give a usable one - "unknown" must never read as "0", which would end a good listing. Only a real number or a numeric string counts (Number(false), Number(' ') and Number([]) are all 0). */
-function aliexpressSkuStock(sku) {
-  const raw = sku.sku_available_stock;
-  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
-  if (typeof raw === 'string' && raw.trim() !== '') {
-    const n = Number(raw.trim());
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-/** The sku's current price: the sale price when there is one, else the list price (the same preference services/aliexpressImportService.js normalizeAliexpressProduct imported it with). */
-function aliexpressSkuPrice(sku) {
-  const sale = Number(sku.offer_sale_price);
-  if (Number.isFinite(sale) && sale > 0) return sale;
-  const list = Number(sku.sku_price);
-  return Number.isFinite(list) && list > 0 ? list : null;
-}
+// How one sku's stock and price are read is shared with the order service (services/aliexpressSkuHelpers.js).
+const { skuStock: aliexpressSkuStock, skuPrice: aliexpressSkuPrice } = require('../services/aliexpressSkuHelpers');
 
 /**
  * Withdraws a published listing's eBay offer because its supplier has run out, then marks it ended here. The listing is never
