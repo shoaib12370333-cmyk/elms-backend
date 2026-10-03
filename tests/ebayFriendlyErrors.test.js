@@ -84,6 +84,30 @@ const ebayError = (errorId, message, parameterValues) => ({
   assert.strictEqual(isAccountBlockedError({ ebayErrors: [] }), false);
   assert.strictEqual(isAccountBlockedError({ ebayErrors: [{ parameters: [] }] }), false);
 
+  // ---------- a bulk call (bulk_update_price_quantity) refuses with { responses: [{ sku, statusCode, errors }] } and no top-level errors: the reason must not be lost ----------
+  // (2026-10-03: the log only said "Request failed with status code 400" for two sold-out books)
+  const bulkRefusal = (responses) => ({ response: { status: 400, data: { responses } } });
+  responder = async () => { throw bulkRefusal([{ sku: 'B0X', statusCode: 400, errors: [{ errorId: 25709, message: 'Invalid value for weight.value.', parameters: [{ name: 'weight.value', value: '0' }] }] }]); };
+  await assert.rejects(() => ebayRequest('rt', 'POST', '/x', {}), (err) => {
+    assert.match(err.message, /Invalid value for weight\.value\. \(eBay error 25709\)/);
+    assert.strictEqual(err.ebayErrors.length, 1); assert.strictEqual(err.ebayErrors[0].errorId, 25709);
+    assert.strictEqual(err.statusCode, 400);
+    return true;
+  });
+  // several entries: every error is kept; entries without errors add nothing
+  responder = async () => { throw bulkRefusal([{ sku: 'A', statusCode: 200 }, { sku: 'B', statusCode: 400, errors: [{ errorId: 1, message: 'First.' }] }, { sku: 'C', statusCode: 400, errors: [{ errorId: 2, message: 'Second.' }] }]); };
+  await assert.rejects(() => ebayRequest('rt', 'POST', '/x', {}), (err) => { assert.match(err.message, /First\. \(eBay error 1\); Second\. \(eBay error 2\)/); assert.strictEqual(err.ebayErrors.length, 2); return true; });
+  // a normal top-level error list still wins over a responses list
+  responder = async () => { throw { response: { status: 400, data: { errors: [{ errorId: 7, message: 'Top level.' }], responses: [{ sku: 'B', errors: [{ errorId: 8, message: 'Inner.' }] }] } } }; };
+  await assert.rejects(() => ebayRequest('rt', 'POST', '/x', {}), (err) => { assert.match(err.message, /Top level\./); assert.ok(!/Inner/.test(err.message)); return true; });
+  // nothing readable at all: the plain message, and the raw answer is kept for the log
+  responder = async () => { throw { message: 'Request failed with status code 400', response: { status: 400, data: { responses: [{ sku: 'B', statusCode: 400 }] } } }; };
+  await assert.rejects(() => ebayRequest('rt', 'POST', '/x', {}), (err) => {
+    assert.strictEqual(err.message, 'Request failed with status code 400'); assert.strictEqual(err.ebayErrors, undefined);
+    assert.deepStrictEqual(err.responseBody, { responses: [{ sku: 'B', statusCode: 400 }] });
+    return true;
+  });
+
   console.log('eBay friendly error messages: all good');
   process.exit(0);
 })().catch((err) => { console.error(err); process.exit(1); });
