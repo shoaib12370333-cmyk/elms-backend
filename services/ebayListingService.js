@@ -804,6 +804,24 @@ async function verifyAfterWrite(refreshToken, offerId, sku, isDone, { attempts =
 }
 
 /**
+ * Did eBay really take this price on this offer? One GET of the offer (the price lives on the offer, so the inventory item is not read), retried a few
+ * times for eBay's read-after-write lag. True only when the offer is PUBLISHED (a price on an unpublished offer never reaches the live listing) and shows
+ * the price. Used to check the answers of the bulk price call (services/liveBulkPriceService.js): they are not believed on eBay's word alone, the same
+ * rule updateOfferPrice follows. A failing GET throws; the caller treats that as "not verified".
+ */
+async function verifyOfferPrice(refreshToken, offerId, price, { marketplaceId = null, attempts = VERIFY_RETRY.attempts, delayMs = VERIFY_RETRY.delayMs } = {}) {
+  if (!offerId) return false;
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) await sleep(delayMs);
+    const offer = await ebayRequest(refreshToken, 'GET', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, undefined, { marketplaceId });
+    if (offer?.status && offer.status !== 'PUBLISHED') return false; // waiting does not publish it
+    const seen = Number(offer?.pricingSummary?.price?.value);
+    if (Number.isFinite(seen) && Math.abs(seen - Number(price)) <= 0.005) return true;
+  }
+  return false;
+}
+
+/**
  * Revises an active Inventory-API listing. The Inventory API requires full replacement payloads for
  * inventory items/offers, so the current eBay objects are read first and only the fields that were sent are changed:
  *  - item specifics are MERGED with the ones eBay already holds (the editor only shows the category's own, and sending
@@ -1527,5 +1545,6 @@ module.exports = {
   createOrGetCustomLocation,
   fulfillmentPolicyUsesCalculatedShipping,
   VERIFY_RETRY,
+  verifyOfferPrice,
   _policyCostTypeCache: policyCostTypeCache,
 };
