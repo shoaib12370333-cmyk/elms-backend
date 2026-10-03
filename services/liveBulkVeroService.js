@@ -17,7 +17,10 @@ const { hasCredits, spendCredit, refundCredit } = require('../models/usersModel'
 const { ACTION_COSTS } = require('../config/actionCosts');
 const AiUsage = require('../models/schemas/AiUsage');
 
-const PARALLEL = 3; // one AI call + one eBay revise (two eBay round trips) per listing - modest, like liveBulkRestockService
+// One AI call + one eBay revise (two eBay round trips) per listing. Measured live 2026-10-03 with 3 at a time: 50 listings in 156 s (about 10 s each,
+// 3.1 s per listing overall), so cleaning the ~1,200 flagged listings took an hour; 8 at a time is about 2.5x faster. A busy AI API (429) is asked again
+// by askClaude, so a higher number does not turn into failed listings. (The request still holds at most 20 listings: MAX_BULK_VERO in routes/listings.js.)
+const PARALLEL = 8;
 const LIVE_STATUSES = ['published', 'sold']; // still live on eBay; a sold-out listing is "live in principle" (models/schemas/Listing.js)
 
 // Replaceable for tests.
@@ -62,7 +65,7 @@ async function bulkVeroCleanLive({ userId, ids }, d) {
   };
 
   const results = new Array(ids.length);
-  await mapPool(ids, PARALLEL, async (id, index) => {
+  const cleanOne = async (id, index) => {
     const l = found.get(String(id));
     const title = l ? (l.title || l.sku || id) : null;
     const mark = (status, reason) => { results[index] = { id, title, status, reason }; };
@@ -111,8 +114,26 @@ async function bulkVeroCleanLive({ userId, ids }, d) {
       await refundCredit(userId, cost);
       return mark('failed', err.message || 'eBay did not accept the cleaned listing.');
     }
-    await d.updateListing(userId, id, { title: data.title, description: data.description, bulletPoints: data.bulletPoints, specifications: data.specifications, ebayAspects: { ...(l.ebay_aspects || {}), ...aspects } });
+    // eBay already has the cleaned listing: a failure to save ELMS's own copy must not turn this into a "failed" one (the next sync brings the copy up to date)
+    try {
+      await d.updateListing(userId, id, { title: data.title, description: data.description, bulletPoints: data.bulletPoints, specifications: data.specifications, ebayAspects: { ...(l.ebay_aspects || {}), ...aspects } });
+    } catch (err) {
+      console.warn('[bulk-vero] eBay has the cleaned listing ' + id + ' but ELMS could not save its copy: ' + err.message);
+    }
     results[index] = { id, title: data.title, status: 'changed', removed: data.removed || [] };
+  };
+  // mapPool rejects as soon as one worker throws and the other workers carry on unseen (spending credits, revising on eBay): with 8 of them an unexpected
+  // error (a database hiccup) is caught per listing instead and reported as that listing's failure.
+  await mapPool(ids, PARALLEL, async (id, index) => {
+    try {
+      await cleanOne(id, index);
+    } catch (err) {
+      console.warn('[bulk-vero] ' + id + ': ' + (err && err.message));
+      if (!results[index]) {
+        const l = found.get(String(id));
+        results[index] = { id, title: l ? (l.title || l.sku || id) : null, status: 'failed', reason: 'Something went wrong with this listing (' + ((err && err.message) || 'unknown error') + '). Please try it again.' };
+      }
+    }
   });
 
   const count = (s) => results.filter((r) => r.status === s).length;

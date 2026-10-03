@@ -5,9 +5,11 @@ const assert = require('assert');
 const aiPath = require.resolve('../services/aiService');
 require(aiPath);
 let answer = '';
+let queue = []; // answers handed out first, one per call, before `answer`
+let discards = 0;
 let prompts = [];
 let tokenBudgets = [];
-require.cache[aiPath].exports.askClaude = async ({ prompt, maxTokens }) => { prompts.push(prompt); tokenBudgets.push(maxTokens); return { text: answer, model: 't', inputTokens: 1, outputTokens: 1 }; };
+require.cache[aiPath].exports.askClaude = async ({ prompt, maxTokens }) => { prompts.push(prompt); tokenBudgets.push(maxTokens); return { text: queue.length ? queue.shift() : answer, model: 't', inputTokens: 1, outputTokens: 1, discard: () => { discards += 1; } }; };
 const { cleanVeroTerms, splitForRewrite, usableRewrite, MAX_SNIPPETS, MAX_SNIPPET_CHARS, MAX_SNIPPET_TOTAL_CHARS } = require('../services/veroCleanerService');
 const { createMatcher } = require('../services/veroService');
 
@@ -58,9 +60,21 @@ const empty = { bulletPoints: [], specifications: [], aspects: {}, brand: '' };
   out = await cleanVeroTerms(input, words);
   assert.ok(out.data.title.length <= 80);
 
-  // unreadable answer -> error (the route refunds the credit)
-  answer = 'no json here';
+  // unreadable answer -> error (the route refunds the credit); it is forgotten (discard) and the AI is asked ONCE more before giving up
+  console.warn = () => {}; // the unreadable answers are logged; not needed here
+  answer = 'no json here'; discards = 0; reset();
   await assert.rejects(() => cleanVeroTerms(input, words), /could not be read/);
+  assert.strictEqual(prompts.length, 2, 'asked twice'); assert.strictEqual(discards, 2, 'both unreadable answers were forgotten, so a later try asks the AI again');
+
+  // the first answer is unreadable (cut off), the second is fine: the listing is cleaned, and the tokens of BOTH are counted
+  reset(); discards = 0;
+  queue = ['{"title":"Running sho'];
+  answer = JSON.stringify({ title: 'Running shoes for men', bullets: [{ i: 0, t: 'Great quality' }], snippets: [{ id: 0, t: 'Soft shoes.' }, { id: 1, t: 'Fans love them.' }] });
+  out = await cleanVeroTerms(input, words);
+  assert.strictEqual(prompts.length, 2); assert.strictEqual(discards, 1, 'only the unreadable one is forgotten');
+  assert.strictEqual(out.data.title, 'Running shoes for men'); assert.deepStrictEqual(remaining(out.data), []);
+  assert.deepStrictEqual([out.usage.inputTokens, out.usage.outputTokens, out.usage.model], [2, 2, 't'], 'usage adds up every try');
+  reset(); queue = []; discards = 0;
 
   // nothing in the running text: no AI call at all, the rule-based part still runs
   reset();

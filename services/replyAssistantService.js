@@ -34,7 +34,10 @@ async function writeReply({ messages, subject, storeName, listingTitle }) {
   ].filter(Boolean).join('\n');
   const out = await askClaude({ prompt, maxTokens: 350 });
   const text = out.text.replace(/^["'\s]+|["'\s]+$/g, '').trim();
-  if (text.length < 5) throw Object.assign(new Error('The AI returned an empty reply.'), { statusCode: 502 });
+  if (text.length < 5) {
+    if (typeof out.discard === 'function') out.discard(); // do not replay it from the cache on the next try
+    throw Object.assign(new Error('The AI returned an empty reply.'), { statusCode: 502 });
+  }
   return { text, usage: out };
 }
 
@@ -122,4 +125,4 @@ async function draftForConversation({ userId, conversationId, messages, account 
   }
 }
 
-module.exports = { handleNewBuyerMessage, draftForConversation, SENSITIVE };
+module.exports = { handleNewBuyerMessage, draftForConversation, writeReply, SENSITIVE };

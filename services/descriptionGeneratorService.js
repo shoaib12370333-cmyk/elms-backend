@@ -39,6 +39,7 @@ async function generateEbayDescription({ title, description, bulletPoints, speci
   const result = await askClaude({ prompt, maxTokens: len.tokens });
   const text = result.text.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   if (text.length < 20) {
+    if (typeof result.discard === 'function') result.discard(); // do not replay it from the cache on the next try
     const err = new Error('The AI service returned an empty description.');
     err.statusCode = 502;
     throw err;

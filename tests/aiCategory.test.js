@@ -24,7 +24,8 @@ let aiOn = true;
 let switchOn = true;
 const asked = [];
 let answer = async () => ({ text: '{"id":"20345"}' });
-stub('services/aiService', { aiConfigured: () => aiOn, askClaude: async (o) => { asked.push(o); const r = await answer(o, asked.length); return { text: r.text, model: 'claude-test', inputTokens: 900, outputTokens: 12 }; } });
+let discards = 0; // answers the category service said it could not use
+stub('services/aiService', { aiConfigured: () => aiOn, askClaude: async (o) => { asked.push(o); const r = await answer(o, asked.length); return { text: r.text, model: 'claude-test', inputTokens: 900, outputTokens: 12, discard: () => { discards += 1; } }; } });
 stub('models/settingsModel', { getAiSettings: async () => ({ aiCategoryEnabled: switchOn }) });
 let balance = 10;
 const spends = [];
@@ -141,6 +142,7 @@ const REAL = [
   assert.ok(asked[0].prompt.includes('Product title: ' + title) && asked[0].prompt.includes('20345 | Home & Garden > Kitchen, Dining & Bar > Small Kitchen Appliances > Tea Kettles') && asked[0].prompt.includes('ebay.co.uk'), 'the title and real categories with their IDs');
   assert.ok(/JSON only/.test(asked[0].system) && /Never make up an ID/.test(asked[0].system));
   assert.deepStrictEqual(usageRows, [{ userId: 'u1', kind: 'category', ok: true, credits: 2, model: 'claude-test', inputTokens: 900, outputTokens: 12 }]);
+  assert.strictEqual(discards, 0, 'a usable answer is never forgotten');
   // the same product words again: not asked again, nothing charged
   r = await suggestCategoriesWithBackup('u2', title.toUpperCase(), 'EBAY_GB');
   assert.deepStrictEqual([r.topSuggestion.categoryId, r.creditsUsed, asked.length, spends.length], ['20345', 0, 1, 1], 'a repeat is free');
@@ -152,6 +154,7 @@ const REAL = [
   reset(); answer = async () => ({ text: '{"id":"999999"}' });
   await assert.rejects(() => suggestCategoriesWithBackup('u1', title, 'EBAY_GB'), (e) => e.limitReached === true && e.aiBackup === 'failed' && e.message.startsWith(limitMessage) && /could not help: no category in the list fits/.test(e.message));
   assert.deepStrictEqual([balance, usageRows.length, usageRows[0].ok, usageRows[0].credits], [10, 1, false, 0], 'nothing found: nothing charged');
+  assert.strictEqual(discards, 1, 'the answer that led nowhere is forgotten, so asking again asks the AI again (not the 24 h cache)');
   // "none fits" with words to search: a second look with those words
   reset();
   answer = async (o, n) => (n === 1 ? { text: '{"id":null,"search":"computer mice trackballs"}' } : { text: '{"id":"23160"}' });

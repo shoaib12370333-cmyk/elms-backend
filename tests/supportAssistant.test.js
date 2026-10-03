@@ -15,7 +15,8 @@ let aiFails = false;
 let lastPrompt = '';
 
 const cacheSet = (rel, exports) => { const p = require.resolve(rel); require(p); Object.assign(require.cache[p].exports, exports); };
-cacheSet('../services/aiService', { askClaude: async ({ prompt }) => { aiCalls += 1; lastPrompt = prompt; if (aiFails) throw new Error('AI down'); return { text: aiAnswer, model: 'claude-test', inputTokens: 40, outputTokens: 15 }; } });
+let discards = 0; // answers the assistant said it could not read
+cacheSet('../services/aiService', { askClaude: async ({ prompt }) => { aiCalls += 1; lastPrompt = prompt; if (aiFails) throw new Error('AI down'); return { text: aiAnswer, model: 'claude-test', inputTokens: 40, outputTokens: 15, discard: () => { discards += 1; } }; } });
 const usageRows = [];
 const aiUsagePath = require.resolve('../models/schemas/AiUsage');
 require.cache[aiUsagePath] = { id: aiUsagePath, filename: aiUsagePath, loaded: true, exports: { create: (row) => { usageRows.push(row); return Promise.resolve(); } } };
@@ -119,9 +120,13 @@ const fromList = (id) => tickets[id].thread.map((t) => t.from);
   assert.strictEqual(tickets.t4.aiStatus, 'error');
   assert.strictEqual(adminAlerts.length, 1);
   assert.deepStrictEqual(usageRows[0], { userId: 'u1', kind: 'support', ok: false, credits: 0 }, 'a failed call is logged too (ok: false), so it is visible how often the assistant fails');
-  reset(); aiAnswer = 'I cannot help';
+  reset(); aiAnswer = 'I cannot help'; discards = 0;
   out = await handleCustomerMessage(newTicket('t4b'));
   assert.strictEqual(out.action, 'escalated');
+  assert.strictEqual(discards, 1, 'an answer that could not be read is forgotten (not replayed from the 24 h cache on the next message)');
+  reset(); aiAnswer = '{"action":"answer","urgent":false,"reason":"","reply":"Press Retry."}'; discards = 0;
+  await handleCustomerMessage(newTicket('t4c'));
+  assert.strictEqual(discards, 0, 'a readable answer is kept');
 
   // 5. a customer who keeps writing after four AI answers gets a person
   reset(); aiAnswer = '{"action":"answer","urgent":false,"reason":"","reply":"Try again."}';

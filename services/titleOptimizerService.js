@@ -26,6 +26,7 @@ async function optimizeEbayTitle({ title, categoryName, description }) {
   const result = await askClaude({ prompt, maxTokens: 120 });
   let optimized = result.text.replace(/^["'\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ');
   if (!optimized) {
+    if (typeof result.discard === 'function') result.discard(); // do not replay it from the cache on the next try
     const err = new Error('The AI service returned an empty title.');
     err.statusCode = 502;
     throw err;
