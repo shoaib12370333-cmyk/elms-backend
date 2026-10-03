@@ -1081,8 +1081,9 @@ function isInvalidWeightError(err) {
  *    nothing else of the item is sent back. Used only when eBay's answer for the SKU is positively a success.
  * 2. Otherwise the whole item is read and written back with the new quantity (the way this always worked). 2026-10-03: that write made eBay refuse six
  *    sold-out listings with "Invalid value for weight.value" (25709) - the package weight eBay itself had returned. If that is exactly the refusal, and
- *    the listing's shipping policy is known NOT to be calculated (a flat-rate policy normally does not need package data), the write is repeated once
- *    without the package weight/size; for a calculated or unknown policy the refusal is thrown as it is.
+ *    the weight is impossible (0 or less: the two sold-out books of the same day carried exactly that) or the listing's shipping policy is known NOT to be
+ *    calculated (a flat-rate policy normally does not need package data), the write is repeated once without the package weight/size; for a weight that
+ *    looks real on a calculated, unknown or missing policy the refusal is thrown as it is.
  */
 async function setInventoryQuantity(refreshToken, offer, quantity) {
   const sku = offer.sku;
@@ -1124,13 +1125,17 @@ async function setInventoryQuantity(refreshToken, offer, quantity) {
   } catch (err) {
     if (!isInvalidWeightError(err)) throw err;
     const pkg = inventoryUpdate.packageWeightAndSize;
+    // A package cannot weigh 0 (or less, or nothing): that value is garbage that eBay refuses on every write of the item - the two sold-out books of
+    // 2026-10-03 carried { weight: { value: 0, unit: POUND } } - so it goes whatever the shipping policy is. A weight that looks real is kept unless
+    // the policy is known NOT to be calculated (then the package data is not needed for the postage).
+    const impossibleWeight = !!(pkg && pkg.weight && !(Number(pkg.weight.value) > 0));
     const policyId = offer.listingPolicies?.fulfillmentPolicyId;
-    const calculated = pkg && policyId ? await fulfillmentPolicyUsesCalculatedShipping(refreshToken, policyId, marketplaceId) : undefined;
-    if (calculated !== false) { // no package data, no policy, a calculated one or an unknown one: the weight may be needed, so it is kept
+    const calculated = !impossibleWeight && pkg && policyId ? await fulfillmentPolicyUsesCalculatedShipping(refreshToken, policyId, marketplaceId) : undefined;
+    if (!impossibleWeight && calculated !== false) { // no package data, no policy, a calculated one or an unknown one: the weight may be needed, so it is kept
       console.warn(`[restock] eBay refused the package weight of ${sku} and it is kept: package=${pkg ? JSON.stringify(pkg).slice(0, 200) : 'none'}, policy=${policyId || 'none'}, calculated shipping=${calculated === undefined ? 'not looked up' : calculated === null ? 'unknown' : calculated}`);
       throw err;
     }
-    console.warn(`[restock] eBay refused the package weight of ${sku} (${err.message}); the shipping policy is not calculated, so it is written without it`);
+    console.warn(`[restock] eBay refused the package weight of ${sku} (${err.message}); ${impossibleWeight ? 'it is ' + JSON.stringify(pkg.weight).slice(0, 80) + ', which no package can weigh' : 'the shipping policy is not calculated'}, so it is written without the package data`);
     const { packageWeightAndSize: _dropped, ...withoutPackage } = inventoryUpdate;
     await put(withoutPackage);
   }

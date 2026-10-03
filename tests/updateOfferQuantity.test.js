@@ -124,7 +124,8 @@ const reset = () => {
 const kind = (c) => c.url.includes('/publish') ? 'publish' : c.url.includes('/bulk_update_price_quantity') ? 'bulk' : c.url.includes('/fulfillment_policy/') ? 'policy' : c.url.includes('/offer/') ? 'offer' : 'inventory';
 const seq = () => calls.map((c) => c.method + ' ' + kind(c));
 const inventoryPuts = () => calls.filter((c) => c.method === 'PUT' && kind(c) === 'inventory');
-const weighted = { weight: { value: 0, unit: 'POUND' } }; // what eBay handed back for the six sold-out listings
+const weighted = { weight: { value: 1.5, unit: 'POUND' } }; // a weight that looks real: dropped only when the shipping policy is known not to be calculated
+const zeroWeighted = { weight: { value: 0, unit: 'POUND' }, shippingIrregular: false }; // what two sold-out books carried on eBay (2026-10-03): no package weighs 0
 
 (async () => {
   // ==================== updateOfferQuantity ====================
@@ -249,7 +250,7 @@ const weighted = { weight: { value: 0, unit: 'POUND' } }; // what eBay handed ba
 
   // ---------- ...and when the weight is kept, the log says what was known (package, policy, calculated or not) ----------
   for (const [label, setup, expected] of [
-    ['calculated', () => { offerState.listingPolicies = { fulfillmentPolicyId: 'FP-CALC-L' }; policyCost['FP-CALC-L'] = 'CALCULATED'; }, /package=\{"weight":\{"value":0,"unit":"POUND"\}\}, policy=FP-CALC-L, calculated shipping=true/],
+    ['calculated', () => { offerState.listingPolicies = { fulfillmentPolicyId: 'FP-CALC-L' }; policyCost['FP-CALC-L'] = 'CALCULATED'; }, /package=\{"weight":\{"value":1\.5,"unit":"POUND"\}\}, policy=FP-CALC-L, calculated shipping=true/],
     ['unknown', () => { offerState.listingPolicies = { fulfillmentPolicyId: 'FP-ERR-L' }; policyCost['FP-ERR-L'] = 'THROW'; }, /policy=FP-ERR-L, calculated shipping=unknown/],
     ['no policy', () => { offerState.listingPolicies = { paymentPolicyId: 'p1' }; }, /policy=none, calculated shipping=not looked up/],
   ]) {
@@ -258,6 +259,33 @@ const weighted = { weight: { value: 0, unit: 'POUND' } }; // what eBay handed ba
     try { await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 6), /Invalid value for weight\.value/, label); } finally { console.warn = realWarn; }
     assert.ok(seen.some((w) => expected.test(w)), `${label}: ` + seen.join(' | '));
   }
+
+  // ---------- an IMPOSSIBLE weight (0, negative, not a number) is garbage that eBay refuses on every write: it goes whatever the policy (the two sold-out books of 2026-10-03) ----------
+  for (const [label, pkg, setup] of [
+    ['production shape, no policy on the offer', zeroWeighted, () => { offerState.listingPolicies = { paymentPolicyId: 'p1' }; }],
+    ['zero weight, calculated policy', zeroWeighted, () => { offerState.listingPolicies = { fulfillmentPolicyId: 'FP-CALC-Z' }; policyCost['FP-CALC-Z'] = 'CALCULATED'; }],
+    ['zero weight, unknown policy', zeroWeighted, () => { offerState.listingPolicies = { fulfillmentPolicyId: 'FP-ERR-Z' }; policyCost['FP-ERR-Z'] = 'THROW'; }],
+    ['negative weight', { weight: { value: -1, unit: 'POUND' } }, () => { offerState.listingPolicies = { paymentPolicyId: 'p1' }; }],
+    ['text weight', { weight: { value: 'abc', unit: 'POUND' } }, () => { offerState.listingPolicies = { paymentPolicyId: 'p1' }; }],
+    ['weight without a value', { weight: { unit: 'POUND' } }, () => { offerState.listingPolicies = { paymentPolicyId: 'p1' }; }],
+  ]) {
+    reset(); bulkMode = 'throw-unreadable'; weightRefused = 'when-present'; inventoryState.packageWeightAndSize = pkg; setup();
+    const dropLog = []; console.warn = (...a) => dropLog.push(a.join(' '));
+    try { out = await updateOfferQuantity('rt1', 'O123', 1); } finally { console.warn = realWarn; }
+    assert.strictEqual(out.quantity, 1, label);
+    const written = inventoryPuts();
+    assert.strictEqual(written.length, 2, `${label}: the refused write, then the repeat without the package data`);
+    assert.ok(!('packageWeightAndSize' in written[1].data), `${label}: the repeat has no package data`);
+    assert.strictEqual(written[1].data.availability.shipToLocationAvailability.quantity, 1);
+    assert.strictEqual(written[1].data.condition, 'NEW'); assert.deepStrictEqual(written[1].data.product.imageUrls, ['https://i/1.jpg']);
+    assert.ok(dropLog.some((w) => /which no package can weigh/.test(w)), `${label}: the log says why: ` + dropLog.join(' | '));
+    assert.ok(!calls.some((c) => kind(c) === 'policy'), `${label}: no policy lookup is needed for an impossible weight`);
+  }
+  // ...but a package with NO weight in it (only a size) is not an impossible weight: the policy decides, as before
+  reset(); bulkMode = 'unconfirmed'; weightRefused = 'when-present'; inventoryState.packageWeightAndSize = { dimensions: { length: 1, width: 1, height: 1, unit: 'INCH' } };
+  offerState.listingPolicies = { paymentPolicyId: 'p1' };
+  await assert.rejects(() => updateOfferQuantity('rt1', 'O123', 1), /Invalid value for weight\.value/);
+  assert.strictEqual(inventoryPuts().length, 1);
 
   // ---------- only a refusal OF THE WEIGHT is repeated: another invalid value is thrown; and the repeat is a single one, not a loop ----------
   reset(); bulkMode = 'unconfirmed'; otherInvalidValue = true; inventoryState.packageWeightAndSize = weighted;
