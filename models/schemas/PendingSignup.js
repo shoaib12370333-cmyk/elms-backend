@@ -10,6 +10,9 @@ const pendingSignupSchema = new mongoose.Schema({
   email: { type: String, required: true, index: true },
   username: { type: String, required: true },
   passwordHash: { type: String, required: true },
+  phone: { type: String, default: null },        // the number typed in step 1 (services/phoneService.js): kept here until the code is entered
+  phoneCountry: { type: String, default: null },
+  phoneDisplay: { type: String, default: null },
   tokenHash: { type: String, required: true, unique: true },
   codeHash: { type: String, required: true },
   codeExpiresAt: { type: Date, required: true },

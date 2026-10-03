@@ -8,6 +8,7 @@ const {
   getUserById,
   markWelcomePopupSeen,
   markPlanExpiredNoticeSeen,
+  setPhone,
   setOrderSyncSettings,
   getOrCreateExtensionKey,
   regenerateExtensionKey,
@@ -21,6 +22,7 @@ const PasswordResetOtp = require('../models/schemas/PasswordResetOtp');
 const { sendPasswordResetOtp, sendPasswordChangedEmail, sendPasswordResetRequestedEmail, sendNewLoginEmail } = require('../services/emailService');
 const crypto = require('crypto');
 const { hashPassword } = require('../services/passwordService');
+const { normalizePhone } = require('../services/phoneService');
 const accessGuard = require('../services/accessGuard');
 const UserModel = require('../models/schemas/User');
 
@@ -98,6 +100,16 @@ const registerLimiter = rateLimit({
 const confirmSignupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many attempts. Please try again in a few minutes.' },
+});
+const phoneLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  // per signed-in account, not per IP: many sellers share one address (mobile data, an office) and must not lock each other out of the
+  // screen that a new Google account cannot skip. The route is behind requireAuth, so req.userId is always set.
+  keyGenerator: (req) => 'user:' + req.userId,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many attempts. Please try again in a few minutes.' },
@@ -193,6 +205,16 @@ router.post('/register', registerLimiter, async (req, res) => {
   if (password.length < 8) {
     return res.status(400).json({ success: false, error: 'Password must be at least 8 characters.' });
   }
+  // A sign-up form from before phone numbers existed (an old tab) sends neither field: it is told to reload instead of being asked for a
+  // field it does not have.
+  if (req.body.phone === undefined && req.body.phoneCountry === undefined) {
+    return res.status(400).json({ success: false, error: 'The sign-up form was updated. Please reload this page (Ctrl+F5) and try again.', reload: true });
+  }
+  // The phone number is required and is checked for being a real number of the chosen country (no SMS / code - see services/phoneService.js).
+  const phone = normalizePhone({ phoneCountry: req.body.phoneCountry, phone: req.body.phone });
+  if (!phone.ok) {
+    return res.status(400).json({ success: false, error: phone.message, field: phone.field });
+  }
   // example / test / temporary addresses, typos of the big providers and domains that take no mail (never throws)
   const quality = await checkEmailQuality(email);
   if (!quality.ok) {
@@ -203,13 +225,28 @@ router.post('/register', registerLimiter, async (req, res) => {
     await assertNewAccountAllowed(req);
     // No account yet: a 6-digit code is mailed to the address and the account is made when it is entered (POST /register/confirm).
     const started = await signupConfirm.startSignup({
-      username: username.trim(), email: email.trim().toLowerCase(), password, referralCode, affiliateCode, ip: requestContext(req).ip,
+      username: username.trim(), email: email.trim().toLowerCase(), password, phone, referralCode, affiliateCode, ip: requestContext(req).ip,
     });
     res.json({ success: true, needsConfirmation: true, ...started });
   } catch (err) {
     console.error('register error:', err.message);
     sendSignupError(res, err);
   }
+});
+
+/**
+ * PUT /api/auth/phone
+ * Body: { phoneCountry: 'PK', phone: '0300 1234567' }
+ *
+ * Saves (or replaces) the signed-in person's own phone number. Used by the "add your phone number" screen that an account made without
+ * one (Google sign-in) or from before phone numbers existed is shown. Checked, not verified: no SMS, no code.
+ */
+router.put('/phone', requireAuth, phoneLimiter, async (req, res) => {
+  const phone = normalizePhone({ phoneCountry: req.body?.phoneCountry, phone: req.body?.phone });
+  if (!phone.ok) return res.status(400).json({ success: false, error: phone.message, field: phone.field });
+  const user = await setPhone(req.userId, phone);
+  if (!user) return res.status(404).json({ success: false, error: 'Account not found.' });
+  res.json({ success: true, user });
 });
 
 /**

@@ -82,7 +82,8 @@ async function findOrCreateUser({ googleId, email, name, picture }, { welcomeBon
     } else {
       // A genuinely brand-new account - apply the welcome bonus if enabled.
       const creditBalance = welcomeBonus ? await getWelcomeBonusAmount() : 0;
-      user = await User.create({ googleId, email, emailKey: emailKey(email), name, picture, creditBalance, ...welcomeFields(creditBalance) });
+      // phoneRequired: Google sign-in skips the sign-up form, so this account is asked for its phone number before it can use the app
+      user = await User.create({ googleId, email, emailKey: emailKey(email), name, picture, creditBalance, phoneRequired: true, ...welcomeFields(creditBalance) });
       notifyNewUser(email, 'Google');
       sendWelcome({ email, name }, creditBalance);
     }
@@ -118,7 +119,7 @@ async function getWelcomeBonusAmount() {
  * Throws (409) if the username or the email is already used.
  * `passwordHash` may be given instead of `password` (the sign-up kept it while waiting for the confirmation code).
  */
-async function registerWithPassword({ username, email, password, passwordHash: storedHash }, { welcomeBonus = true, confirmed = false } = {}) {
+async function registerWithPassword({ username, email, password, passwordHash: storedHash, phone }, { welcomeBonus = true, confirmed = false } = {}) {
   const existingUsername = await User.findOne({ username });
   if (existingUsername) {
     const err = new Error('That username is already taken.');
@@ -142,6 +143,8 @@ async function registerWithPassword({ username, email, password, passwordHash: s
     user = await User.create({
       username, email, emailKey: emailKey(email), passwordHash, unverifiedPassword: !confirmed, ...(confirmed ? { emailVerifiedAt: new Date() } : {}),
       name: username, creditBalance, ...welcomeFields(creditBalance),
+      // the number from the sign-up form (checked by services/phoneService.js); an account made without one must add it before using the app
+      ...(phone && phone.phone ? { phone: phone.phone, phoneCountry: phone.phoneCountry, phoneDisplay: phone.phoneDisplay } : { phoneRequired: true }),
     });
   } catch (err) {
     if (err && err.code === 11000) { // the same address or username was registered a moment ago
@@ -155,6 +158,15 @@ async function registerWithPassword({ username, email, password, passwordHash: s
   sendWelcome({ email, name: username }, creditBalance);
 
   return serialize(user);
+}
+
+/**
+ * Saves the phone number of an account (already checked by services/phoneService.js normalizePhone). Returns the user, or null if gone.
+ * Not verified - it only replaces what is stored.
+ */
+async function setPhone(userId, { phone, phoneCountry, phoneDisplay }) {
+  const user = await User.findOneAndUpdate({ _id: userId }, { $set: { phone, phoneCountry, phoneDisplay } }, { new: true });
+  return user ? serialize(user) : null;
 }
 
 /** The user closed the welcome popup: it is not shown again, on any device. The first close is kept. */
@@ -619,6 +631,14 @@ function serialize(doc) {
     cjConnected: !!(obj.cj && obj.cj.accessTokenEncrypted),
     // Whether AliExpress is connected - never a token, see getAliexpressCredentials (internal use only).
     aliexpressConnected: !!(obj.aliexpress && obj.aliexpress.accessTokenEncrypted),
+    // The phone number typed at sign-up (NOT verified). In /me and the sign-in answers it is the person's OWN number; in the Admin Panel
+    // it is the admin's view of the user. needsPhone = none saved yet; phoneRequired = none saved AND the account must add one (it cannot skip).
+    phone: obj.phone || null,
+    phoneCountry: obj.phoneCountry || null,
+    phoneDisplay: obj.phoneDisplay || null,
+    needsPhone: !obj.phone,
+    // an admin (and the super admin) is asked but may always skip, so the server never calls an admin "must add"
+    phoneRequired: !obj.phone && !!obj.phoneRequired && !isSuperAdminEmail(obj.email) && obj.role !== 'admin',
     createdAt: obj.createdAt,
   };
 }
@@ -626,6 +646,7 @@ function serialize(doc) {
 module.exports = {
   findOrCreateUser,
   registerWithPassword,
+  setPhone,
   markWelcomePopupSeen,
   markPlanExpiredNoticeSeen,
   loginWithPassword,

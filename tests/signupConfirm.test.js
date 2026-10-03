@@ -64,7 +64,7 @@ const route = require('../routes/auth');
 const handler = (method, p) => { const l = route.stack.find((x) => x.route && x.route.path === p && x.route.methods[method]); assert.ok(l, method + ' ' + p); return l.route.stack[l.route.stack.length - 1].handle; };
 const fakeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.statusCode = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
 const post = async (p, body) => { const res = fakeRes(); await handler('post', p)({ body, headers: {}, ip: '1.2.3.4', socket: {} }, res); return res; };
-const begin = (extra = {}) => post('/register', { username: 'newperson', email: 'New@Person.com', password: 'a-long-password-1', ...extra });
+const begin = (extra = {}) => post('/register', { username: 'newperson', email: 'New@Person.com', password: 'a-long-password-1', phoneCountry: 'PK', phone: '0300 1234567', ...extra });
 const wrongFor = (code) => (code === '000000' ? '111111' : '000000');
 const reset = () => { users.length = 0; pending = []; events.length = 0; codeMails.length = 0; welcomeMails.length = 0; attached.referral.length = 0; attached.affiliate.length = 0; decision = { allowed: true }; mailBroken = false; };
 
@@ -169,8 +169,8 @@ const reset = () => { users.length = 0; pending = []; events.length = 0; codeMai
 
   // ---------- nobody can finish somebody else's sign-up, and a mailbox owner cannot be tricked into finishing one ----------
   reset();
-  const attacker = await post('/register', { username: 'attacker', email: 'victim@gmail.com', password: 'attacker-password-1' });
-  const victim = await post('/register', { username: 'victim', email: 'victim@gmail.com', password: 'victim-password-1' });
+  const attacker = await post('/register', { username: 'attacker', email: 'victim@gmail.com', password: 'attacker-password-1', phoneCountry: 'PK', phone: '0300 1234567' });
+  const victim = await post('/register', { username: 'victim', email: 'victim@gmail.com', password: 'victim-password-1', phoneCountry: 'PK', phone: '0300 1234567' });
   assert.strictEqual(codeMails.length, 2, 'both codes went to the victim mailbox');
   const [codeA, codeV] = codeMails.map((m) => m.code);
   // the victim types the attacker's code into their own page: refused, nothing made
@@ -197,10 +197,10 @@ const reset = () => { users.length = 0; pending = []; events.length = 0; codeMai
   reset();
   users.push(new Doc({ _id: 'g1', email: 'google@x.com', googleId: 'g-1', username: undefined, creditBalance: 500 }));
   users.push(new Doc({ _id: 'p1', email: 'taken@x.com', username: 'takenname', passwordHash: 'h', creditBalance: 5 }));
-  res = await post('/register', { username: 'someone', email: 'google@x.com', password: 'a-long-password-1' });
+  res = await post('/register', { username: 'someone', email: 'google@x.com', password: 'a-long-password-1', phoneCountry: 'PK', phone: '0300 1234567' });
   assert.strictEqual(res.statusCode, 409);
   assert.ok(!users[0].passwordHash, 'the Google account is untouched');
-  res = await post('/register', { username: 'takenname', email: 'free@x.com', password: 'a-long-password-1' });
+  res = await post('/register', { username: 'takenname', email: 'free@x.com', password: 'a-long-password-1', phoneCountry: 'PK', phone: '0300 1234567' });
   assert.strictEqual(res.statusCode, 409);
   assert.strictEqual(codeMails.length, 0);
   assert.strictEqual(pending.length, 0);

@@ -325,11 +325,11 @@ const paid = (session, over = {}) => ({ id: session.id, status: 'completed', amo
   reset();
   // a password sign-up takes its code when the account is made, i.e. when the confirmation code is entered
   const signUp = async (body) => {
-    const started = await call(authRoutes, 'post', '/register', { body });
+    const started = await call(authRoutes, 'post', '/register', { body: { phoneCountry: 'PK', phone: '0300 1234567', ...body } });
     assert.strictEqual(started.body.needsConfirmation, true);
     return call(authRoutes, 'post', '/register/confirm', { body: { pendingToken: started.body.pendingToken, code: '123456' } });
   };
-  res = await call(authRoutes, 'post', '/register', { body: { username: 'newuser', email: 'New@X.com', password: 'longenough', referralCode: 'boss2024' } });
+  res = await call(authRoutes, 'post', '/register', { body: { username: 'newuser', email: 'New@X.com', password: 'longenough', phoneCountry: 'PK', phone: '0300 1234567', referralCode: 'boss2024' } });
   assert.strictEqual(res.body.needsConfirmation, true);
   assert.strictEqual(db.referrals.length, 0, 'nobody is referred before the address is confirmed');
   res = await call(authRoutes, 'post', '/register/confirm', { body: { pendingToken: res.body.pendingToken, code: '123456' } });

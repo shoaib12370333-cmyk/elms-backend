@@ -46,7 +46,7 @@ setResolver({
 const route = require('../routes/auth');
 const handler = (method, p) => { const l = route.stack.find((x) => x.route && x.route.path === p && x.route.methods[method]); assert.ok(l, method + ' ' + p); return l.route.stack[l.route.stack.length - 1].handle; };
 const fakeRes = () => { const r = { statusCode: 200 }; r.status = (c) => { r.statusCode = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
-const register = async (email, username = 'somebody') => { const res = fakeRes(); await handler('post', '/register')({ body: { username, email, password: 'a-long-password-1' }, headers: {}, ip: '1.2.3.4', socket: {} }, res); return res; };
+const register = async (email, username = 'somebody') => { const res = fakeRes(); await handler('post', '/register')({ body: { username, email, password: 'a-long-password-1', phoneCountry: 'PK', phone: '0300 1234567' }, headers: {}, ip: '1.2.3.4', socket: {} }, res); return res; };
 
 (async () => {
   // the junk that was found on the live site, and its cousins: refused, nothing created, nothing mailed

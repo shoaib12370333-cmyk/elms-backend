@@ -34,7 +34,7 @@ async function sendCode(email, code) {
 }
 
 /** Begins a sign-up. Returns what the browser needs to show the "enter the code" step. */
-async function startSignup({ username, email, password, referralCode, affiliateCode, ip }) {
+async function startSignup({ username, email, password, phone, referralCode, affiliateCode, ip }) {
   if (await User.findOne({ email })) {
     throw fail(409, 'An account with this email already exists. Please sign in. If you signed up with Google or forgot your password, use "Forgot password?" to choose one.');
   }
@@ -49,6 +49,8 @@ async function startSignup({ username, email, password, referralCode, affiliateC
   const now = Date.now();
   const record = await PendingSignup.create({
     email, username, passwordHash: await hashPassword(password),
+    // the checked number (services/phoneService.js normalizePhone result) waits here with the rest of the sign-up
+    ...(phone && phone.phone ? { phone: phone.phone, phoneCountry: phone.phoneCountry, phoneDisplay: phone.phoneDisplay } : {}),
     tokenHash: sha256(pendingToken), codeHash: codeHash(email, code), codeExpiresAt: new Date(now + CODE_MINUTES * 60 * 1000),
     lastSentAt: new Date(now), referralCode: referralCode || null, affiliateCode: affiliateCode || null, ip: ip || null,
     expiresAt: new Date(now + KEEP_HOURS * 60 * 60 * 1000),
@@ -90,7 +92,7 @@ async function confirmSignup({ pendingToken, code, ctx }) {
   let user;
   try {
     user = await registerWithPassword(
-      { username: record.username, email: record.email, passwordHash: record.passwordHash },
+      { username: record.username, email: record.email, passwordHash: record.passwordHash, phone: record.phone ? { phone: record.phone, phoneCountry: record.phoneCountry, phoneDisplay: record.phoneDisplay } : null },
       { welcomeBonus: bonus.allowed, confirmed: true },
     );
   } catch (err) {
