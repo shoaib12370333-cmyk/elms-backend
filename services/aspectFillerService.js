@@ -1,4 +1,5 @@
 const { askClaude } = require('./aiService');
+const { askForJsonObject } = require('./aiJson');
 
 const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
 // Every value eBay allows for an aspect (eBay's list can be longer than the 100 choices the editor receives).
@@ -51,15 +52,10 @@ async function fillItemSpecifics({ title, description, bulletPoints, specificati
     spec,
   ].join('\n');
 
-  const result = await askClaude({ prompt, maxTokens: 1400 });
-  const start = result.text.indexOf('{');
-  const end = result.text.lastIndexOf('}');
-  let parsed = {};
-  try { parsed = JSON.parse(result.text.slice(start, end + 1)); } catch (_) {
-    const err = new Error('The AI answer could not be read. Please try again.');
-    err.statusCode = 502;
-    throw err;
-  }
+  // An unreadable answer is forgotten (not replayed from the 24 h cache), logged, and asked for once more: see services/aiJson.js.
+  const asked = await askForJsonObject(askClaude, { prompt, maxTokens: 1400 }, { label: 'aspects' });
+  const result = asked.usage;
+  const parsed = asked.parsed;
 
   const byName = new Map(list.map((a) => [norm(a.name), a]));
   const values = {};

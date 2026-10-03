@@ -1,4 +1,5 @@
 const { askClaude } = require('./aiService');
+const { askForJsonObject } = require('./aiJson');
 const { createMatcher } = require('./veroService');
 const { stripInvisible } = require('./textCleanService');
 
@@ -115,16 +116,10 @@ async function cleanVeroTerms(input, words) {
     // max_tokens is only a ceiling - the model stops when it has answered, so a high one costs no time - and an answer cut short has no
     // closing "}" and fails. Many short pieces cost far more tokens in JSON overhead than in text, so no budget worked out from the
     // text length is safe; the pieces are limited instead (MAX_SNIPPETS / MAX_SNIPPET_TOTAL_CHARS) so a full answer fits in this.
-    const answer = await askClaude({ prompt, maxTokens: 3500 });
-    usage = answer;
-    const start = answer.text.indexOf('{');
-    const end = answer.text.lastIndexOf('}');
-    let parsed;
-    try { parsed = JSON.parse(answer.text.slice(start, end + 1)); } catch (_) {
-      const err = new Error('The AI answer could not be read. Please try again.');
-      err.statusCode = 502;
-      throw err;
-    }
+    // An unreadable answer is forgotten (not replayed from the 24 h cache), logged, and asked for once more: see services/aiJson.js.
+    const asked = await askForJsonObject(askClaude, { prompt, maxTokens: 3500 }, { label: 'vero' });
+    usage = asked.usage;
+    const parsed = asked.parsed;
     // Only if the title was sent: a model that copies the three-key example must not overwrite a title that had nothing to change.
     if (toRewrite.title !== undefined && typeof parsed.title === 'string' && parsed.title.trim()) result.title = parsed.title.trim();
     for (const item of Array.isArray(parsed.bullets) ? parsed.bullets : []) {

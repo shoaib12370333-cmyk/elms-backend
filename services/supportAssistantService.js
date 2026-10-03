@@ -168,7 +168,9 @@ async function handleCustomerMessage(ticketId, { followUp = false } = {}) {
     try {
       const history = thread.filter((t) => t.from !== 'system').slice(-8).map((t) => (t.from === 'customer' ? 'Customer' : t.from === 'ai' ? 'Assistant' : 'Admin') + ': ' + String(t.text || '').slice(0, 500)).join('\n');
       const answer = await askClaude({ prompt: buildPrompt({ ticket, customerText, history, user: owner }), maxTokens: 700 });
-      decision = parseDecision(answer.text) || { action: 'escalate', urgent: false, reason: 'The assistant\'s answer could not be read.', reply: HOLDING_REPLY };
+      decision = parseDecision(answer.text);
+      if (!decision && typeof answer.discard === 'function') answer.discard(); // do not replay it from the cache on the next message
+      decision = decision || { action: 'escalate', urgent: false, reason: 'The assistant\'s answer could not be read.', reply: HOLDING_REPLY };
       // Free for the customer (no credits), but still logged so the Admin Panel's AI usage/spend view shows this
       // feature's real token cost too - a ticket with no ELMS account (a guest email) has nothing to log it against.
       if (ticket.userId) require('../models/schemas/AiUsage').create({ userId: ticket.userId, kind: 'support', ok: true, credits: 0, model: answer.model, inputTokens: answer.inputTokens, outputTokens: answer.outputTokens }).catch(() => {});

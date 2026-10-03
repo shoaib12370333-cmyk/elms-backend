@@ -14,7 +14,7 @@ const { planDraft, mapPool } = require('./bulkEditService');
 const { reviseActiveListing, createOrGetCustomLocation } = require('./ebayListingService');
 
 const LIVE_STATUSES = ['published', 'sold']; // still live on eBay; a sold-out listing is "live in principle" (models/schemas/Listing.js), same definition liveBulkVeroService.js uses
-const PARALLEL = 3; // each changed listing is a full revise (read+write the offer, read+write the inventory item, a verify read) - modest, same as liveBulkVeroService
+const PARALLEL = 3; // each changed listing is a full revise (read+write the offer, read+write the inventory item, a verify read) - modest (liveBulkVeroService does 8 at a time: its listings are one AI call plus one revise, not a verify read as well)
 // Of everything planDraft can produce, these are the fields eBay itself needs to be told about; everything else
 // (tags, note, stockMonitoring, priceMonitoring) is ELMS-only and is simply saved, no eBay call required for it.
 const EBAY_FIELD_KEYS = ['title', 'quantity', 'ebayAspects', 'countryLocation', 'locationCity', 'postalCode', 'useDynamicPolicies', 'paymentPolicyId', 'fulfillmentPolicyId', 'returnPolicyId'];

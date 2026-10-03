@@ -24,9 +24,10 @@ let aiOn = true;
 stub('models/settingsModel', { getAiSettings: async () => ({ aiTitleEnabled: aiOn }) });
 
 let balance = 100;
+let hasCreditsCalls = 0; let hasCreditsThrowAt = 0; // throw on the Nth credit check (0 = never)
 const spends = []; const refunds = [];
 stub('models/usersModel', {
-  hasCredits: async (u, cost) => balance >= cost,
+  hasCredits: async (u, cost) => { hasCreditsCalls += 1; if (hasCreditsThrowAt && hasCreditsCalls === hasCreditsThrowAt) throw new Error('the database is down'); return balance >= cost; },
   spendCredit: async (u, cost) => { if (balance < cost) return false; balance -= cost; spends.push(cost); return true; },
   refundCredit: async (u, cost) => { balance += cost; refunds.push(cost); },
 });
@@ -106,6 +107,35 @@ const run = async (ids) => S.bulkVeroCleanLive({ userId: 'u1', ids }, deps);
   reset(1); rows.L1.status = 'sold';
   out = await run(['L1']);
   assert.deepStrictEqual(out.summary, { changed: 1, clean: 0, skipped: 0, failed: 0, no_credits: 0 });
+
+  // ---------- many at once: 8 listings are worked on at the same time (it was 3: 50 listings took 156 s on the live site), never more ----------
+  reset(20);
+  let inFlight = 0; let maxInFlight = 0;
+  const realRevise = S.deps.revise;
+  S.deps.revise = async (token, args) => { inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight); await new Promise((r) => setTimeout(r, 15)); inFlight -= 1; return realRevise(token, args); };
+  out = await run(Array.from({ length: 20 }, (_, i) => 'L' + (i + 1)));
+  S.deps.revise = realRevise;
+  assert.deepStrictEqual(out.summary, { changed: 20, clean: 0, skipped: 0, failed: 0, no_credits: 0 });
+  assert.strictEqual(maxInFlight, 8, 'eight at a time');
+  assert.deepStrictEqual(out.results.map((r) => r.id), Array.from({ length: 20 }, (_, i) => 'L' + (i + 1)), 'the answers stay in the order of the request');
+  assert.strictEqual(spends.length, 20); assert.strictEqual(new Set(revises.map((x) => x.args.offerId)).size, 20, 'every listing was revised exactly once');
+
+  // ---------- one listing hits an unexpected error (a database hiccup): only THAT listing fails; the others finish (nobody is left running unseen) ----------
+  console.warn = () => {};
+  reset(10);
+  const realUpdate = deps.updateListing;
+  deps.updateListing = async (u, id, f) => { if (id === 'L3') throw new Error('database is down'); return realUpdate(u, id, f); };
+  out = await run(Array.from({ length: 10 }, (_, i) => 'L' + (i + 1)));
+  deps.updateListing = realUpdate;
+  assert.deepStrictEqual(out.summary, { changed: 10, clean: 0, skipped: 0, failed: 0, no_credits: 0 }, 'eBay already has the cleaned listing: a failure to save ELMS\'s copy does not make it a failed one');
+  assert.strictEqual(revises.length, 10);
+  reset(10); hasCreditsCalls = 0; hasCreditsThrowAt = 4; // the credit check of exactly one listing throws (outside the AI / eBay try blocks)
+  out = await run(Array.from({ length: 10 }, (_, i) => 'L' + (i + 1)));
+  hasCreditsThrowAt = 0;
+  assert.strictEqual(out.results.length, 10); assert.ok(out.results.every(Boolean), 'every listing has an answer, none is missing');
+  assert.strictEqual(out.summary.failed, 1, 'only the one that hit the error failed'); assert.strictEqual(out.summary.changed, 9);
+  const bad = out.results.find((r) => r.status === 'failed');
+  assert.match(bad.reason, /^Something went wrong with this listing \(the database is down\)\. Please try it again\.$/);
 
   // ---------- not enough credits: skipped before any AI call or eBay call, nothing charged ----------
   reset(2); balance = 1; // less than the cost (2)

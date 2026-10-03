@@ -5,7 +5,9 @@ const Module = require('module');
 const aiPath = require.resolve('../services/aiService');
 require(aiPath);
 let nextAnswer = '';
-require.cache[aiPath].exports.askClaude = async () => ({ text: nextAnswer, model: 'test', inputTokens: 1, outputTokens: 1 });
+let queue = []; // answers handed out first, one per call, before nextAnswer
+let asks = 0;
+require.cache[aiPath].exports.askClaude = async () => { asks += 1; return { text: queue.length ? queue.shift() : nextAnswer, model: 'test', inputTokens: 1, outputTokens: 1 }; };
 
 (async () => {
   const { fillItemSpecifics } = require('../services/aspectFillerService');
@@ -23,7 +25,14 @@ require.cache[aiPath].exports.askClaude = async () => ({ text: nextAnswer, model
   const kept = await fillItemSpecifics({ title: 'Acme bag', aspects, existing: { Brand: ['Mine'] } });
   assert.deepStrictEqual(kept.data.values, { Colour: ['Blue'] }); // never overwrites what the seller typed
 
-  nextAnswer = 'not json';
+  console.warn = () => {}; // the unreadable answers are logged; not needed here
+  // the first answer is cut off, the second is fine: the specifics are filled (asked once more, not failed)
+  asks = 0; queue = ['{"Brand":"Ac'];
+  nextAnswer = '{"Brand":"Acme","Colour":"black"}';
+  const retried = await fillItemSpecifics({ title: 'Acme bag', aspects, existing: {} });
+  assert.strictEqual(asks, 2); assert.deepStrictEqual(retried.data.values, { Brand: ['Acme'], Colour: ['Black'] });
+  assert.deepStrictEqual([retried.usage.inputTokens, retried.usage.outputTokens], [2, 2], 'usage adds up both tries');
+  nextAnswer = 'not json'; asks = 0;
   await assert.rejects(() => fillItemSpecifics({ title: 'x', aspects }), /could not be read/);
 
   const { SENSITIVE } = require('../services/replyAssistantService');

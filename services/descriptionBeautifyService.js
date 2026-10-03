@@ -231,6 +231,7 @@ async function beautifyEbayDescription({ title, description, bulletPoints, speci
   const result = await askClaude({ prompt, maxTokens: 1800 });
   let html = result.text.replace(/^```(?:html)?\s*/i, '').replace(/```\s*$/i, '').trim();
   if (html.length < 40) {
+    if (typeof result.discard === 'function') result.discard(); // do not replay it from the cache on the next try
     const err = new Error('The AI service returned an empty description.');
     err.statusCode = 502;
     throw err;

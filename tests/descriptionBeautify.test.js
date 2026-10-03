@@ -36,7 +36,8 @@ stub('models/usersModel', {
 });
 stub('models/schemas/AiUsage', { create: async () => ({}) });
 stub('models/settingsModel', { getAiSettings: async () => ({ aiBeautifyDescriptionEnabled: aiEnabled, aiCustomInstructions: '' }) });
-stub('services/aiService', { askClaude: async () => { aiCalls += 1; if (aiFails) throw new Error('AI is down'); return { text: aiAnswer, model: 'test', inputTokens: 1, outputTokens: 1 }; } });
+let discards = 0; // answers the beautifier said it could not use
+stub('services/aiService', { askClaude: async () => { aiCalls += 1; if (aiFails) throw new Error('AI is down'); return { text: aiAnswer, model: 'test', inputTokens: 1, outputTokens: 1, discard: () => { discards += 1; } }; } });
 
 const { ACTION_COSTS } = require('../config/actionCosts');
 const { normalizeTemplate, TEMPLATE_STYLES, AVAILABLE_BLOCKS } = require('../services/descriptionTemplateLibrary');
@@ -119,8 +120,9 @@ const reset = () => { for (const k of Object.keys(saved)) delete saved[k]; spent
   assert.ok(!out.text.includes('https://a.com/1.jpg'), 'with no placeholder to splice into, the real image is correctly never appended blindly');
 
   // an empty/too-short AI answer is a hard failure, never saved as a real description
-  aiAnswer = 'hi';
+  aiAnswer = 'hi'; discards = 0;
   await assert.rejects(() => beautifyEbayDescription({ title: 'X', template: {} }), /empty description/);
+  assert.strictEqual(discards, 1, 'the empty answer is forgotten, not replayed from the 24 h cache on the next try');
 
   // silent-failure guard 3: a bare, common word from another block's heading (shipping, returns) showing up by
   // coincidence in a DIFFERENT section's own prose - here, the FAQ answers - must never be mistaken for that

@@ -49,8 +49,10 @@ async function chooseFromList(index, domain, title) {
   const { askClaude } = require('./aiService');
   const usage = { inputTokens: 0, outputTokens: 0, model: null };
   let candidates = lists.shortlist(index, title, MAX_CANDIDATES);
+  const asked = [];
   for (let round = 0; round < 2; round += 1) {
     const ai = await askClaude({ system: SYSTEM, prompt: promptFor(domain, title, candidates), maxTokens: 80 });
+    asked.push(ai);
     usage.inputTokens += ai.inputTokens || 0;
     usage.outputTokens += ai.outputTokens || 0;
     usage.model = ai.model || usage.model;
@@ -66,6 +68,7 @@ async function chooseFromList(index, domain, title) {
     }
     break;
   }
+  for (const ai of asked) if (typeof ai.discard === 'function') ai.discard(); // an answer that found nothing fitting is not replayed for 24 hours
   const err = new Error('no category in the list fits this product.');
   err.usage = usage;
   throw err;

@@ -25,6 +25,7 @@ function makeCache({ ttlMs, max }) {
       store.set(key, { value, at: Date.now() });
       if (store.size > max) store.delete(store.keys().next().value);
     },
+    delete(key) { return store.delete(key); },
     get size() { return store.size; },
     _store: store,
   };
