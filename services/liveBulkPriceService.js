@@ -1,11 +1,13 @@
 /**
  * Changes the price of many LIVE listings at once, on eBay and in ELMS.
  *
- * Speed: one listing the ordinary way is two eBay calls (read the offer, write it back). eBay's Inventory API changes the price of up to
- * 25 offers in ONE call (bulk_update_price_quantity), and several of those calls run at the same time, so 1000 listings are about 40 calls.
+ * Speed: one listing the ordinary way is four eBay calls (read the offer, write it back, read both again to check). eBay's Inventory API changes the
+ * price of up to 25 offers in ONE call (bulk_update_price_quantity), several of those calls run at the same time, and each price is checked with one read
+ * of its offer, so 1000 listings are about 40 calls + 1000 reads instead of 4000 calls.
  * Safety: the price of each listing is worked out from its own Amazon price by the pricing rule (services/bulkEditService planPrice, the same
- * as for drafts). Anything unusual in eBay's answer (the whole call fails, an offer is missing from the answer, an offer is refused) sends
- * THAT listing the ordinary way (updateOfferPrice), which either sets the price or fails with eBay's own words. ELMS keeps its copy in step
+ * as for drafts). A price counts as taken only when eBay's answer (a FLAT list, see takenBy) says so for that very offer AND the offer, read back,
+ * shows it. Anything else (the whole call fails, an offer is missing from the answer, an offer is refused, the price does not show) sends THAT
+ * listing the ordinary way (updateOfferPrice), which either sets the price and checks it or fails with eBay's own words. ELMS keeps its copy in step
  * only for a price eBay took. A listing that cannot be changed is skipped with the reason; nothing is half-done.
  */
 const listing = require('./ebayListingService');
@@ -17,6 +19,7 @@ const { convertAmount } = require('./currencyService');
 const CHUNK = 25; // eBay's limit per bulk call
 const CALLS_AT_ONCE = 4; // bulk calls running at the same time
 const PLAN_PARALLEL = 20; // listings prepared / saved at the same time
+const VERIFY_PARALLEL = 5; // offers read back at the same time, per group
 const CALL_TIMEOUT_MS = 60 * 1000;
 const LIVE_STATUSES = ['published', 'active'];
 
@@ -27,33 +30,74 @@ const cents = (v) => Math.round(Number(v) * 100 + 1e-9);
 const deps = {
   request: (...args) => listing.ebayRequest(...args),
   single: (refreshToken, offerId, price) => listing.updateOfferPrice(refreshToken, offerId, price),
+  verify: (refreshToken, offerId, price, marketplaceId) => listing.verifyOfferPrice(refreshToken, offerId, price, { marketplaceId }),
   convert: (amount, from, to) => convertAmount(amount, from, to),
 };
 
 /**
+ * Is this offer's price taken, according to eBay's answer to the bulk call? eBay answers with a FLAT list, one entry per offer updated:
+ * { responses: [{ sku, offerId, statusCode, errors?, warnings? }] } (its API reference, PriceQuantityResponse). The first version of this service
+ * looked for answer.offers[] inside each entry, which eBay never sends, so no price was ever believed and every one went the ordinary way (production
+ * log, 2026-10-03: "0 in bulk" on every run). Believed only when there is an entry for this very offer, and every entry of its SKU is a 2xx without errors.
+ */
+function takenBy(res, item) {
+  const entries = (res && Array.isArray(res.responses) ? res.responses : []).filter((r) => r && String(r.sku) === String(item.sku));
+  const mine = entries.filter((r) => String(r.offerId) === String(item.offerId));
+  return mine.length > 0 && entries.every((r) => ok(r.statusCode) && !(Array.isArray(r.errors) && r.errors.length));
+}
+
+/**
+ * Asks eBay for the new prices of listings of ONE store and marketplace with the bulk call (up to 25 offers). Returns the items eBay's answer says it took.
+ * If the call as a whole fails (eBay's reference says both "up to 25" and "only one SKU per call"), each listing is tried in a call of its own before it is
+ * given up to the ordinary way. A reason eBay gave, or an answer that cannot be read, is logged once per group.
+ */
+async function askBulk(refreshToken, marketplaceId, currency, items) {
+  const send = (list) => deps.request(refreshToken, 'POST', '/sell/inventory/v1/bulk_update_price_quantity', {
+    requests: list.map((i) => ({ sku: i.sku, offers: [{ offerId: i.offerId, price: { value: i.price.toFixed(2), currency } }] })),
+  }, { marketplaceId, deadlineAt: Date.now() + CALL_TIMEOUT_MS, maxTimeoutMs: CALL_TIMEOUT_MS, timeoutMessage: 'eBay timed out while changing a group of prices.' });
+  const answered = []; // [list of items, eBay's answer]
+  try {
+    answered.push([items, await send(items)]);
+  } catch (err) {
+    // One listing per call only when the refusal could be about the GROUP (a 400 "only one SKU per call", a 5xx, a timeout). A refused login (401/403) or
+    // eBay saying slow down (429) is not helped by smaller calls. And three failures in a row end the tries (a dead endpoint or token costs a few calls, not
+    // one per listing); the rest go the ordinary way.
+    const worthTrying = items.length > 1 && ![401, 403, 429].includes(Number(err.statusCode));
+    console.warn(`[bulk-price] the call for ${items.length} listing(s) failed (${err.message})${worthTrying ? '; trying one listing per call' : ''}`);
+    if (worthTrying) {
+      let inARow = 0;
+      await mapPool(items, 3, async (item) => {
+        if (inARow >= 3) return;
+        try { answered.push([[item], await send([item])]); inARow = 0; } catch (e) { inARow += 1; /* this one goes the ordinary way */ }
+      });
+    }
+  }
+  const taken = [];
+  for (const [list, res] of answered) {
+    const before = taken.length;
+    for (const item of list) if (takenBy(res, item)) taken.push(item);
+    if (taken.length === before) console.warn(`[bulk-price] eBay took none of ${list.length} price(s) in its answer: ${JSON.stringify(res).slice(0, 300)}`);
+  }
+  return taken;
+}
+
+/**
  * Puts the new prices on eBay for listings of ONE store and marketplace. Returns a Map: listing id -> { ok: true } | { ok: false, error }.
+ * A price is "in bulk" only when eBay's answer says it took it AND the offer, read back, shows it (verifyOfferPrice); everything else, and anything
+ * unusual, goes the ordinary way (updateOfferPrice), which sets the price and checks it or fails with eBay's own words.
  */
 async function pushChunk(refreshToken, marketplaceId, items, stats) {
   const out = new Map();
   const currency = (getMarketplaceConfig(marketplaceId) || {}).currency;
   const toSingle = [];
-  let answers = null;
-  if (currency) {
-    try {
-      const res = await deps.request(refreshToken, 'POST', '/sell/inventory/v1/bulk_update_price_quantity', {
-        requests: items.map((i) => ({ sku: i.sku, offers: [{ offerId: i.offerId, price: { value: i.price.toFixed(2), currency } }] })),
-      }, { marketplaceId, deadlineAt: Date.now() + CALL_TIMEOUT_MS, maxTimeoutMs: CALL_TIMEOUT_MS, timeoutMessage: 'eBay timed out while changing a group of prices.' });
-      answers = new Map();
-      for (const r of (res && Array.isArray(res.responses) ? res.responses : [])) if (r && r.sku) answers.set(String(r.sku), r);
-    } catch (err) {
-      answers = null; // the whole call failed: every listing of it goes the ordinary way
-    }
-  }
-  for (const item of items) {
-    const answer = answers && answers.get(String(item.sku));
-    const offer = answer && Array.isArray(answer.offers) ? answer.offers.find((o) => String(o.offerId) === String(item.offerId)) : null;
-    if (offer && ok(offer.statusCode)) { out.set(item.id, { ok: true }); stats.bulk += 1; } else toSingle.push(item);
-  }
+  const taken = currency ? await askBulk(refreshToken, marketplaceId, currency, items) : [];
+  const takenIds = new Set(taken.map((i) => i.id));
+  for (const item of items) if (!takenIds.has(item.id)) toSingle.push(item);
+  await mapPool(taken, VERIFY_PARALLEL, async (item) => {
+    let seen = false;
+    try { seen = await deps.verify(refreshToken, item.offerId, item.price, marketplaceId); } catch (err) { seen = false; }
+    if (seen) { out.set(item.id, { ok: true }); stats.bulk += 1; } else { toSingle.push(item); stats.unverified += 1; }
+  });
   await mapPool(toSingle, 3, async (item) => {
     try { await deps.single(refreshToken, item.offerId, item.price); out.set(item.id, { ok: true }); stats.single += 1; } catch (err) { out.set(item.id, { ok: false, error: err.message || 'eBay did not accept the price.' }); stats.failed += 1; }
   });
@@ -111,7 +155,7 @@ async function bulkLivePrice({ userId, ids, changes }, d) {
   });
 
   // ---- 2. eBay: 25 prices per call, several calls at once ----
-  const stats = { bulk: 0, single: 0, failed: 0 };
+  const stats = { bulk: 0, single: 0, failed: 0, unverified: 0 };
   const groups = new Map();
   for (const item of push) {
     const key = item.refreshToken + '|' + item.marketplaceId;
@@ -140,7 +184,7 @@ async function bulkLivePrice({ userId, ids, changes }, d) {
 
   const count = (s) => results.filter((r) => r.status === s).length;
   if (process.env.NODE_ENV !== 'test' && push.length) {
-    console.log('[bulk-price] ' + push.length + ' prices for eBay in ' + chunks.length + ' group(s): ' + stats.bulk + ' in bulk, ' + stats.single + ' one by one, ' + stats.failed + ' refused.');
+    console.log('[bulk-price] ' + push.length + ' prices for eBay in ' + chunks.length + ' group(s): ' + stats.bulk + ' in bulk, ' + stats.single + ' one by one, ' + stats.failed + ' refused (' + stats.unverified + ' that eBay said it took could not be read back and went one by one).');
   }
   return { results, summary: { changed: count('changed'), unchanged: count('unchanged'), skipped: count('skipped') } };
 }
