@@ -82,6 +82,8 @@ const svc = require('../services/easyparserAmazonService');
   assert.deepStrictEqual(product.images, ['https://img/main.jpg', 'https://img/1.jpg', 'https://img/2.jpg'], 'main image first, no duplicates');
   assert.strictEqual(product.price, 19.99);
   assert.strictEqual(product.currency, 'USD');
+  assert.strictEqual(svc.normalizeDetail({ ...raw, buybox_winner: { price: { value: 8, currency: 'gbp' } } }, 'https://www.amazon.co.uk/dp/B0000001').currency, 'GBP', 'a currency echoed in small letters is stored as the ISO code');
+  assert.strictEqual(svc.normalizeDetail({ ...raw, buybox_winner: { price: { value: 8 } } }, 'https://www.amazon.co.uk/dp/B0000001').currency, 'GBP', 'no currency in the answer: the site\'s own');
   assert.strictEqual(product.availability, 'In Stock');
   assert.strictEqual(product.rating, 4.5);
   assert.strictEqual(product.ratingsTotal, 120);

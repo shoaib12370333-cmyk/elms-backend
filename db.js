@@ -16,10 +16,47 @@ async function connectDB() {
   await migrateListingIndex();
   await migrateOrderIndex();
   await migrateProductCacheTtl();
+  await migrateUserStringUniqueIndexes();
   await migrateUserExtensionKeyIndex();
   await migrateSourcePlatformDefault();
   await migrateSourceCountryBackfill();
   await require('./services/signupBonusGuard').backfillEmailKeys().then((n) => n && console.log(`Filled emailKey on ${n} user(s).`)).catch((err) => console.warn('emailKey backfill skipped:', err.message));
+}
+
+/**
+ * users.googleId and users.username are `default: null`, so every account without one stores an explicit null - and a sparse unique index
+ * still indexes (and so collides on) a null. The index could therefore never be built on a database with two such accounts: every start logged
+ * `E11000 duplicate key ... index: googleId_1 dup key: { googleId: null }`, and the database enforced neither uniqueness (only the findOne checks
+ * of models/usersModel.js did, with a race between two sign-ups at once). They are now partial unique indexes that cover only real strings,
+ * which also lets the nulls stay exactly as they are: NO user document is changed here, only indexes. An old index of the same name that is not
+ * partial is dropped first (it would clash with the new options). One field failing (say a username that really exists twice) is logged and
+ * does not stop the other, or the start. Idempotent: an index that is already partial is left alone.
+ */
+const USER_STRING_UNIQUE_FIELDS = ['googleId', 'username'];
+async function migrateUserStringUniqueIndexes() {
+  let User;
+  try {
+    User = require('./models/schemas/User');
+  } catch (err) {
+    console.warn('Users unique-index migration skipped:', err.message);
+    return;
+  }
+  for (const field of USER_STRING_UNIQUE_FIELDS) {
+    const name = field + '_1';
+    try {
+      const indexes = await User.collection.indexes().catch(() => []);
+      const existing = indexes.find((i) => i.name === name);
+      if (existing && existing.partialFilterExpression) continue;
+      if (existing) {
+        await User.collection.dropIndex(name);
+        console.log(`Dropped old users index ${name} (not partial).`);
+      }
+      await User.collection.createIndex({ [field]: 1 }, { name, unique: true, background: true, partialFilterExpression: { [field]: { $type: 'string' } } }); // the same options Mongoose declares (User.js), so the next createIndexes() sees an identical index
+      console.log(`Created users index ${name} (unique among accounts that have a ${field}).`);
+    } catch (err) {
+      console.warn(`Users index ${name} not built:`, err.message);
+    }
+  }
 }
 
 /**
@@ -157,4 +194,4 @@ async function migrateSourceCountryBackfill() {
   }
 }
 
-module.exports = { connectDB, _migrateSourceCountryBackfill: migrateSourceCountryBackfill };
+module.exports = { connectDB, _migrateSourceCountryBackfill: migrateSourceCountryBackfill, _migrateUserStringUniqueIndexes: migrateUserStringUniqueIndexes };

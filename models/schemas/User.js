@@ -10,12 +10,15 @@ const userSchema = new mongoose.Schema(
 
     // Present only for users who signed up with Google. Optional because a
     // user may register with just email/password and never use Google.
-    googleId: { type: String, default: null, unique: true, sparse: true },
+    // Unique among accounts that HAVE one: the index is declared at the bottom as a partial index. NOT `unique + sparse` here - a sparse index
+    // still indexes an explicit null, and every email/password account stores one (default: null), so that index could never be built
+    // (E11000 ... googleId_1 dup key: { googleId: null }, logged at every start until 2026-10-03).
+    googleId: { type: String, default: null },
 
     // Present only for users who registered with email/password (hashed
     // with bcrypt - see services/passwordService.js - never stored in plain
     // text). Optional because a user may have only ever used Google.
-    username: { type: String, default: null, unique: true, sparse: true },
+    username: { type: String, default: null }, // unique among accounts that have one: partial index at the bottom, like googleId
     passwordHash: { type: String, default: null },
     // true while the password was set at sign-up (/register) and the person never proved they own the mailbox. A Google sign-in
     // (which proves it) or a password reset with the code mailed to them clears it; until then a Google sign-in on the same
@@ -179,6 +182,9 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Unique only among users that actually have a Google id / a username (db.js migrateUserStringUniqueIndexes builds them on an existing database).
+userSchema.index({ googleId: 1 }, { unique: true, partialFilterExpression: { googleId: { $type: 'string' } } });
+userSchema.index({ username: 1 }, { unique: true, partialFilterExpression: { username: { $type: 'string' } } });
 // Unique only among users that actually have a key.
 userSchema.index({ extensionKeyHash: 1 }, { unique: true, partialFilterExpression: { extensionKeyHash: { $type: 'string' } } });
 userSchema.index({ referralCode: 1 }, { unique: true, partialFilterExpression: { referralCode: { $type: 'string' } } });
