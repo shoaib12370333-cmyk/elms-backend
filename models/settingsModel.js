@@ -32,6 +32,12 @@ async function updateWelcomeBonusSettings({ welcomeBonusEnabled, welcomeBonusCre
   return serialize(doc);
 }
 
+/** Admin-only: saves the eBay rules (already cleaned by services/prohibitedItemsService normalizeSettings): areas off, extra terms, allowed phrases. */
+async function saveEbayPolicySettings(clean) {
+  const doc = await Settings.findOneAndUpdate({ key: 'global' }, { ebayPolicy: { disabledAreas: clean.disabledAreas, extraTerms: clean.extraTerms, allowPhrases: clean.allowPhrases } }, { new: true, upsert: true });
+  return doc.toObject().ebayPolicy;
+}
+
 /** Admin-only: may a person import products before any eBay store is connected? */
 async function updateImportPolicy({ importWithoutEbayAccount }) {
   const doc = await Settings.findOneAndUpdate({ key: 'global' }, { importWithoutEbayAccount: !!importWithoutEbayAccount }, { new: true, upsert: true });
@@ -327,6 +333,7 @@ module.exports = {
   getSettings,
   updateWelcomeBonusSettings,
   updateImportPolicy,
+  saveEbayPolicySettings,
   updateChromeExtensionId,
   updateExtensionRegistrationUrl,
   updateExtensionBackendUrl,

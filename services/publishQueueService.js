@@ -10,6 +10,7 @@ const {
 const { ensureDraftCategory } = require('./draftCategoryService');
 const bulkPublisher = require('./ebayBulkPublisher');
 const { missingIdentifiers } = require('./productIdentifiers');
+const { checkListing: checkEbayPolicy, refreshSettings: refreshEbayPolicySettings } = require('./prohibitedItemsService');
 
 const { getImportById } = require('../models/importsModel');
 const { getMarketplaceConfig } = require('../config/ebayMarketplaces');
@@ -164,15 +165,6 @@ async function processOneQueuedListing(listing) {
     }
 
 
-    if (!listing.category_id) {
-      // No category saved (the Drafts page only suggests one for the cards it shows): take eBay's suggestion for the title, save it on
-      // the draft and go on, instead of failing every draft that never got one.
-      const found = await ensureDraftCategory(userId, listing, { save: updateListing });
-      listing.category_id = found.categoryId;
-      debug('CATEGORY SUGGESTED', { listingId: id, categoryId: found.categoryId, name: found.categoryName, source: found.source, creditsUsed: found.creditsUsed });
-    }
-
-
     if (!listing.sell_price) {
       throw new Error(
         'No sell price is set.'
@@ -216,6 +208,37 @@ async function processOneQueuedListing(listing) {
           ? importRecord.product.images.length
           : 0,
     });
+
+
+    // =========================================================
+    // EBAY POLICY (a product eBay does not allow is never listed)
+    // =========================================================
+    // Before the eBay account is read, before the credit is charged, before anything is sent to eBay. The same text the publish would send
+    // (the draft's own where the person edited it, the imported product's otherwise) is checked against eBay's list of what it does not allow
+    // (services/prohibitedItemsService.js; the admin's changes are loaded first). The person sees the reason in Needs attention, nothing is charged,
+    // and a retry stops here again until the product or the rules change.
+
+    publishStage = 'POLICY_CHECK';
+
+    await refreshEbayPolicySettings();
+    const policy = checkEbayPolicy(listing, importRecord.product);
+    if (policy.blocked) {
+      debug('BLOCKED BY EBAY POLICY', { listingId: id, hits: policy.hits.map((h) => ({ area: h.areaId, term: h.term, field: h.field })) });
+      const blocked = new Error(policy.message);
+      blocked.code = 'EBAY_POLICY_BLOCKED';
+      blocked.policyHits = policy.hits;
+      throw blocked;
+    }
+
+
+    if (!listing.category_id) {
+      // No category saved (the Drafts page only suggests one for the cards it shows): take eBay's suggestion for the title, save it on
+      // the draft and go on, instead of failing every draft that never got one. After the policy check on purpose: suggesting a category can cost a credit,
+      // and a product eBay does not allow must not cost anything.
+      const found = await ensureDraftCategory(userId, listing, { save: updateListing });
+      listing.category_id = found.categoryId;
+      debug('CATEGORY SUGGESTED', { listingId: id, categoryId: found.categoryId, name: found.categoryName, source: found.source, creditsUsed: found.creditsUsed });
+    }
 
 
     // =========================================================

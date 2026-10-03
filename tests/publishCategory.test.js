@@ -56,19 +56,20 @@ const draft = (over = {}) => ({ id: 'L1', title: 'Blue Kettle 1.7L Stainless Ste
     markError: async (u, id, message) => { errors.push(message); return { id, status: 'error', error_message: message }; },
     updateListing: async (u, id, fields) => { workerSaves.push({ id, fields }); },
   });
-  stub('models/importsModel', { getImportById: async () => null }); // stops the publish right after the category step, with its own message
+  stub('models/importsModel', { getImportById: async () => ({ product: { asin: 'B0TEST', title: 'Steel Water Bottle 1L', images: [] } }) }); // the product is read (and checked against eBay's rules) BEFORE the category is asked for
   stub('models/usersModel', { hasCredits: async () => true, spendCredit: async () => true, refundCredit: async () => {} });
   stub('models/systemNotificationsModel', { createSystemNotification: async () => ({}) });
   stub('services/ebayListingService', { publishListing: async () => ({}), createOrGetCustomLocation: async () => ({}), fulfillmentPolicyUsesCalculatedShipping: async () => false });
   stub('services/publishPreflightService', { prepareAspects: async () => ({}), assertUsableCategory: async () => {} });
   const { processOneQueuedListing } = require('../services/publishQueueService');
-  const base = () => ({ id: 'L9', userId: 'u1', status: 'publishing', title: 'Steel Water Bottle 1L', ebay_account_id: 'A1', import_id: 'I1', sell_price: 20, category_id: null, publish_credit_charged: false });
+  const base = () => ({ id: 'L9', userId: 'u1', status: 'publishing', title: 'Steel Water Bottle 1L', ebay_account_id: 'A1', import_id: 'I1', sell_price: 20, category_id: null, marketplace_id: 'EBAY_US', publish_credit_charged: false });
+  const PAST_CATEGORY = /^Saved marketplace EBAY_US does not match the connected eBay account marketplace EBAY_GB/; // the first thing that stops these stand-ins AFTER the category step
 
   suggest = async () => ({ topSuggestion: { categoryId: '36021', categoryName: 'Bottles' } });
   listingRow = base();
   await processOneQueuedListing(listingRow);
   assert.deepStrictEqual(workerSaves, [{ id: 'L9', fields: { categoryId: '36021' } }], 'the suggested category is saved on the draft');
-  assert.deepStrictEqual(errors, ['The linked Amazon product data could not be found.'], 'the publish went PAST the category step (it stops later, at the product)');
+  assert.strictEqual(errors.length, 1); assert.match(errors[0], PAST_CATEGORY, 'the publish went PAST the category step (it stops later, at the marketplace check)');
 
   errors.length = 0; workerSaves.length = 0;
   suggest = async () => ({ topSuggestion: null });
@@ -83,7 +84,7 @@ const draft = (over = {}) => ({ id: 'L1', title: 'Blue Kettle 1.7L Stainless Ste
   listingRow = { ...base(), category_id: '177' };
   await processOneQueuedListing(listingRow);
   assert.strictEqual(suggestCalls.length, 0);
-  assert.deepStrictEqual(errors, ['The linked Amazon product data could not be found.']);
+  assert.strictEqual(errors.length, 1); assert.match(errors[0], PAST_CATEGORY);
 
   console.log('publish category tests passed');
 })().catch((err) => { console.error(err); process.exit(1); });

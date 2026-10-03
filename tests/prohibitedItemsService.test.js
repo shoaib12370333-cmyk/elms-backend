@@ -16,11 +16,13 @@ const { scanListing } = require('../services/prohibitedItemsService');
   assert.deepStrictEqual(words, [...new Set(words)].sort(), 'deduped and sorted');
 
   // ---------- the exact real-world listing that was taken down (the longest match wins at each position - "water
-  // bongs" is matched as one term, not "bongs" again separately within it) ----------
+  // bongs" is matched as one term, not "bongs" again separately within it). "oil rigs" is also a toy / model, an "ash catcher" an incense
+  // holder and an "herb grinder" a kitchen tool: now that a match STOPS a product they are no longer matched (config/ebayPolicyRules.js) ----------
   assert.deepStrictEqual(
     scanListing({ title: 'RORA Glass Oil Burner Pipe Thick Clear Glass for Oil Rigs Glass Water Bongs 2 Se' }).sort(),
-    ['oil burner pipe', 'oil rigs', 'water bongs'].sort()
+    ['oil burner pipe', 'water bongs'].sort()
   );
+  assert.deepStrictEqual(scanListing({ title: 'LEGO Oil Rig Playset', description: 'Herb Grinder for the kitchen. Glass Ash Catcher for incense.' }), []);
 
   // ---------- a clean, ordinary product: nothing flagged ----------
   assert.deepStrictEqual(scanListing({ title: 'Stainless Steel Kitchen Knife Set, 6 Pieces', description: 'Sharp, dishwasher safe, wooden block included.' }), []);
@@ -36,7 +38,7 @@ const { scanListing } = require('../services/prohibitedItemsService');
   // ---------- case-insensitive, and checks description/bulletPoints/specifications too, not just the title ----------
   assert.deepStrictEqual(scanListing({ title: 'Glass Accessory', description: 'Great DAB RIG for home use' }), ['dab rig']);
   assert.deepStrictEqual(scanListing({ title: 'Accessory', bulletPoints: ['Durable', 'Works as a Bubbler Pipe'] }), ['bubbler pipe']);
-  assert.deepStrictEqual(scanListing({ title: 'Accessory', specifications: [{ name: 'Type', value: 'Ash Catcher' }] }), ['ash catcher']);
+  assert.deepStrictEqual(scanListing({ title: 'Accessory', specifications: [{ name: 'Type', value: 'Quartz Banger' }] }), ['quartz banger']);
 
   // ---------- nothing at all / empty listing: no throw, empty result ----------
   assert.deepStrictEqual(scanListing({}), []);

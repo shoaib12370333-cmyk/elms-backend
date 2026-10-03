@@ -18,6 +18,14 @@ const settingsSchema = new mongoose.Schema(
     // and one is chosen when it is published. Off = the person is asked to connect a store first.
     importWithoutEbayAccount: { type: Boolean, default: true },
 
+    // What ELMS refuses to list because eBay does not allow it (config/ebayPolicyRules.js is the built-in list, services/prohibitedItemsService.js the
+    // matcher). The admin can switch an area off, add terms of their own and list phrases that are always fine (Admin -> eBay rules).
+    ebayPolicy: {
+      disabledAreas: { type: [String], default: [] },
+      extraTerms: { type: [{ _id: false, area: { type: String, trim: true }, term: { type: String, trim: true, maxlength: 60 } }], default: [] },
+      allowPhrases: { type: [String], default: [] },
+    },
+
     // Published Chrome Web Store extension ID used for production CORS.
     // Admin-configurable so no redeploy is required when the extension is published.
     chromeExtensionId: { type: String, default: null, trim: true },
