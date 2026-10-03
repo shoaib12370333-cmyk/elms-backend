@@ -14,6 +14,9 @@ function normalizeLive(offer, item) {
   const p = (item && item.product) || {};
   const price = Number(offer?.pricingSummary?.price?.value);
   const qty = offer?.availableQuantity ?? item?.availability?.shipToLocationAvailability?.quantity;
+  // the SKU's own stock figure: what a listing really shows is min(offer.availableQuantity, this)
+  const rawItemQty = item?.availability?.shipToLocationAvailability?.quantity;
+  const itemQty = rawItemQty === null || rawItemQty === undefined || rawItemQty === '' ? NaN : Number(rawItemQty);
   return {
     title: String(p.title || ''),
     description: String(offer?.listingDescription || p.description || ''),
@@ -25,6 +28,7 @@ function normalizeLive(offer, item) {
     price: Number.isFinite(price) ? price : null,
     currency: offer?.pricingSummary?.price?.currency || null,
     quantity: Number.isFinite(Number(qty)) ? Number(qty) : null,
+    itemQuantity: Number.isFinite(itemQty) ? itemQty : null,
     categoryId: offer?.categoryId ? String(offer.categoryId) : null,
     policies: {
       paymentPolicyId: offer?.listingPolicies?.paymentPolicyId || null,

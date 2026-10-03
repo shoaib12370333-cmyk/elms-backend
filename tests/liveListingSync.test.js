@@ -19,6 +19,12 @@ assert.strictEqual(live.price, 19.99); assert.strictEqual(live.currency, 'GBP');
 assert.strictEqual(live.categoryId, '15052'); assert.strictEqual(live.policies.returnPolicyId, 'R1'); assert.strictEqual(live.merchantLocationKey, 'LOC1');
 assert.deepStrictEqual(live.aspects.Brand, ['Nike']); assert.strictEqual(live.hasBrandField, true); assert.strictEqual(live.epid, null);
 assert.deepStrictEqual(sync.normalizeLive(null, null).imageUrls, [], 'nothing to read: no crash');
+// the SKU's own stock figure is read separately from the offer's (a listing shows the lower of the two); a missing figure is null, never 0
+assert.strictEqual(live.itemQuantity, 3);
+assert.strictEqual(sync.normalizeLive({ ...offer, availableQuantity: 9 }, { ...item, availability: { shipToLocationAvailability: { quantity: 0 } } }).itemQuantity, 0, 'a real 0 stays 0');
+assert.strictEqual(sync.normalizeLive(offer, { ...item, availability: {} }).itemQuantity, null);
+assert.strictEqual(sync.normalizeLive(offer, { ...item, availability: { shipToLocationAvailability: { quantity: null } } }).itemQuantity, null, 'null is not 0');
+assert.strictEqual(sync.normalizeLive(offer, null).itemQuantity, null);
 
 // item specifics: the ones eBay holds stay, the sent ones replace theirs (any capitalisation), cleared ones go
 assert.deepStrictEqual(sync.mergeAspects({ Brand: ['Nike'], Color: ['Black'], Material: ['Cotton'] }, { brand: ['Adidas'] }), { Color: ['Black'], Material: ['Cotton'], brand: ['Adidas'] });
