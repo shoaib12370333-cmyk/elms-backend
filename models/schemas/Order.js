@@ -84,6 +84,33 @@ const orderSchema = new mongoose.Schema(
     sheetAmazonPrice: { type: Number, default: null }, // Net Profit sheet: what the order cost on Amazon, typed by the seller (the whole order line); null = not typed
     orderEarning: { type: Number, default: null },   // Net Profit sheet: what eBay pays out for the order ("Order earnings" in Seller Hub), typed by the seller; null = not typed
     adFee: { type: Number, default: null },          // Net Profit sheet: the Promoted Listings ad fee (eBay Finances feeType AD_FEE) eBay took off this order line; read from the same Finances transaction as orderEarning. null = not fetched yet, 0 = fetched and there was none. Already INSIDE the earning (eBay deducts it before payout), shown for information only - never subtracted again
+    // The AliExpress order ELMS placed for this line (services/aliexpressOrderService.js). Absent = none placed. A nested object (not a
+    // sub-schema) so single keys can be $set and the claim below is one atomic update.
+    aliexpressOrder: {
+      state: { type: String, enum: ['placing', 'placed', 'failed', 'unknown', null] }, // placing = claimed, request in flight; placed = AliExpress gave an order number; failed = AliExpress REFUSED (nothing was placed, may be retried); unknown = no clear answer (an order MAY exist - the seller must check AliExpress before trying again)
+      aeOrderId: String,           // AliExpress's order number (the first one when it split the order)
+      aeOrderIds: [String],
+      outOrderId: String,          // ELMS's own number sent as out_order_id
+      claimedAt: Date,
+      placedAt: Date,
+      payState: { type: String, enum: ['unpaid', 'paying', 'paid', null] }, // only ever 'paid' after the seller confirmed paying (or AliExpress reports a payment time); 'paying' = a payment request is in flight (an atomic claim, so two clicks never pay twice)
+      payingAt: Date,
+      paidAt: Date,
+      status: String,              // AliExpress's own order_status, as it sent it
+      logisticsStatus: String,
+      amount: Number,              // AliExpress's total for the order, in currency (what the seller is asked to pay)
+      currency: String,
+      estimatedCost: Number,       // what the preview said (items + shipping) when the order was placed, in the listing's currency
+      shippingService: String,     // the delivery method ordered (logistics_service_name)
+      trackingNumber: String,
+      carrier: String,
+      etaAt: Date,
+      lastEvent: String,
+      syncedAt: Date,
+      finished: Boolean,           // no need to ask AliExpress about it any more
+      error: String,
+      errorCode: String,
+    },
     adFeeCheckedAt: { type: Date, default: null },   // when the one-time backfill of adFee for an order that already had its earning last looked at eBay (jobs/orderEarningsSync.js) - an order eBay has no transaction for is tried once, not on every run forever
   },
   { timestamps: true }
@@ -99,5 +126,6 @@ orderSchema.index({ userId: 1, ebayAccountId: 1, adFee: 1, adFeeCheckedAt: 1, cr
 orderSchema.index({ userId: 1, ebayCreatedAt: -1 });
 orderSchema.index({ userId: 1, listingId: 1 }); // units sold per listing (the Live listings page)
 orderSchema.index({ userId: 1, ebayLineItemId: 1 }); // a message thread finds its order by line item id
+orderSchema.index({ 'aliexpressOrder.state': 1, 'aliexpressOrder.placedAt': -1 }, { partialFilterExpression: { 'aliexpressOrder.state': { $exists: true } } }); // the AliExpress order sync job's work list: only the few lines that have an AliExpress order are in this index
 
 module.exports = mongoose.model('Order', orderSchema);

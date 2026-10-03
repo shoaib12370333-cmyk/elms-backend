@@ -200,6 +200,7 @@ async function upsertAliexpressDraft(userId, { importId, ebayAccountId, marketpl
     sourcePlatform: 'aliexpress',
     aliexpressProductId,
     aliexpressSkuId,
+    aliexpressIdsExact: true, // this import read the ids exactly (see Listing.aliexpressIdsExact)
     sku: normalizedSku,
     ...(sellerEdited ? {} : {
       title: title || null,
@@ -1220,6 +1221,7 @@ function serialize(doc) {
     cj_shipping_cost: Number.isFinite(Number(obj.cjShippingCost)) ? Number(obj.cjShippingCost) : null,
     aliexpress_product_id: obj.aliexpressProductId || null,
     aliexpress_sku_id: obj.aliexpressSkuId || null,
+    aliexpress_ids_exact: !!obj.aliexpressIdsExact,
     aliexpress_shipping_cost: numOrNull(obj.aliexpressShippingCost),
     aliexpress_delivery: obj.aliexpressDelivery && typeof obj.aliexpressDelivery === 'object' ? {
       carrier: obj.aliexpressDelivery.carrier || null,
