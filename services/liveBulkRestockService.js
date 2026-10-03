@@ -1,7 +1,7 @@
 /**
  * Restocks many SOLD-OUT live listings at once: puts a fresh available quantity on eBay (services/ebayListingService.js
- * updateOfferQuantity - one GET + one PUT per listing; there is no bulk quantity-only endpoint the way there is for
- * price, see liveBulkPriceService.js, so this runs a modest number of listings at the same time instead), then moves
+ * updateOfferQuantity - a few eBay calls per listing, see its comment; the offer write is per offer, so this runs a
+ * modest number of listings at the same time), then moves
  * the listing back to 'published' in ELMS with that quantity and a soldQuantity of 0, so the next sale is counted
  * fresh against it (models/ordersModel.js markSoldIfOut).
  */
@@ -50,6 +50,7 @@ async function bulkRestock({ userId, ids, quantity }, d) {
       await d.restockListing(userId, id, qty);
       results[index] = { id, title, status: 'changed' };
     } catch (err) {
+      console.warn(`[bulk-restock] ${(l && (l.sku || l.title)) || id}: ${err.message}`); // the page shows these, but the toast is gone in seconds
       skip(err.message || 'eBay did not accept the new quantity.');
     }
   });

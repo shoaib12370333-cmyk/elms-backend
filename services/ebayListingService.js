@@ -1058,6 +1058,71 @@ async function updateOfferPrice(
 }
 
 
+const is2xx = (code) => Number(code) >= 200 && Number(code) < 300;
+
+// eBay's error 25709 "Invalid value for <field>." - here for the package weight (weight.value) it keeps on the inventory item.
+function isInvalidWeightError(err) {
+  const errors = Array.isArray(err?.ebayErrors) ? err.ebayErrors : [];
+  return errors.some((e) => Number(e?.errorId) === 25709
+    && /weight/i.test([e.message, e.longMessage, ...(Array.isArray(e.parameters) ? e.parameters.map((p) => `${p?.name} ${p?.value}`) : [])].join(' ')));
+}
+
+/**
+ * Puts a new total ship-to-home quantity on an inventory item (the SKU's own stock figure; the offer's availableQuantity is written separately).
+ *
+ * 1. eBay's own quantity update (bulk_update_price_quantity with only shipToLocationAvailability): it changes that one number and nothing else, so
+ *    nothing else of the item is sent back. Used only when eBay's answer for the SKU is positively a success.
+ * 2. Otherwise the whole item is read and written back with the new quantity (the way this always worked). 2026-10-03: that write made eBay refuse six
+ *    sold-out listings with "Invalid value for weight.value" (25709) - the package weight eBay itself had returned. If that is exactly the refusal, and
+ *    the listing's shipping policy is known NOT to be calculated (a flat-rate policy normally does not need package data), the write is repeated once
+ *    without the package weight/size; for a calculated or unknown policy the refusal is thrown as it is.
+ */
+async function setInventoryQuantity(refreshToken, offer, quantity) {
+  const sku = offer.sku;
+  const marketplaceId = offer.marketplaceId || null;
+  try {
+    const res = await ebayRequest(
+      refreshToken,
+      'POST',
+      '/sell/inventory/v1/bulk_update_price_quantity',
+      { requests: [{ sku, shipToLocationAvailability: { quantity } }] },
+      { marketplaceId }
+    );
+    const answers = (Array.isArray(res?.responses) ? res.responses : []).filter((r) => r && String(r.sku) === String(sku));
+    if (answers.length && answers.every((r) => is2xx(r.statusCode) && !(Array.isArray(r.errors) && r.errors.length))) return;
+    console.warn(`[restock] eBay did not confirm the quantity-only update of ${sku} (${JSON.stringify(res).slice(0, 300)}); writing the whole inventory item instead`);
+  } catch (err) {
+    console.warn(`[restock] the quantity-only update of ${sku} failed (${err.message}); writing the whole inventory item instead`);
+  }
+
+  const currentInventory = await ebayRequest(
+    refreshToken,
+    'GET',
+    `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`
+  );
+  const inventoryUpdate = {
+    ...(currentInventory || {}),
+    availability: {
+      ...(currentInventory?.availability || {}),
+      shipToLocationAvailability: {
+        ...(currentInventory?.availability?.shipToLocationAvailability || {}),
+        quantity,
+      },
+    },
+  };
+  const put = (body) => ebayRequest(refreshToken, 'PUT', `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, body);
+  try {
+    await put(inventoryUpdate);
+  } catch (err) {
+    const policyId = offer.listingPolicies?.fulfillmentPolicyId;
+    if (!isInvalidWeightError(err) || !inventoryUpdate.packageWeightAndSize || !policyId) throw err;
+    if ((await fulfillmentPolicyUsesCalculatedShipping(refreshToken, policyId, marketplaceId)) !== false) throw err; // calculated or unknown: the weight may be needed
+    console.warn(`[restock] eBay refused the package weight of ${sku} (${err.message}); the shipping policy is not calculated, so it is written without it`);
+    const { packageWeightAndSize: _dropped, ...withoutPackage } = inventoryUpdate;
+    await put(withoutPackage);
+  }
+}
+
 /**
  * Phase 3: safely synchronizes the available quantity on an active offer.
  *
@@ -1106,27 +1171,7 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
   };
 
   if (offer?.sku) {
-    const currentInventory = await ebayRequest(
-      refreshToken,
-      'GET',
-      `/sell/inventory/v1/inventory_item/${encodeURIComponent(offer.sku)}`
-    );
-    const inventoryUpdate = {
-      ...(currentInventory || {}),
-      availability: {
-        ...(currentInventory?.availability || {}),
-        shipToLocationAvailability: {
-          ...(currentInventory?.availability?.shipToLocationAvailability || {}),
-          quantity,
-        },
-      },
-    };
-    await ebayRequest(
-      refreshToken,
-      'PUT',
-      `/sell/inventory/v1/inventory_item/${encodeURIComponent(offer.sku)}`,
-      inventoryUpdate
-    );
+    await setInventoryQuantity(refreshToken, offer, quantity);
   }
 
   await ebayRequest(
@@ -1137,7 +1182,7 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
     { marketplaceId: offer?.marketplaceId || null }
   );
 
-  // Neither PUT above proves the live listing actually changed - eBay answers 200 even when the write did not really
+  // Neither write above proves the live listing actually changed - eBay answers 200 even when the write did not really
   // take (confirmed against real listings that "changed" in ELMS but stayed sold out on eBay). Two things can cause
   // that: the offer sitting outside PUBLISHED (a quantity change on an unpublished offer never reaches the live
   // listing - republish it first), or eBay simply keeping its own value. Re-reading afterwards is the only way to
@@ -1152,9 +1197,15 @@ async function updateOfferQuantity(refreshToken, offerId, newQuantity) {
         throw new Error(`eBay accepted the new quantity, but this offer is ${offer.status.toLowerCase()} and could not be republished: ${err.message}`);
       }
     }
-    const live = await verifyAfterWrite(refreshToken, offerId, offer.sku, (l) => l.quantity === quantity);
+    // The listing shows min(offer quantity, the SKU's own stock), so the SKU's stock is checked too: the quantity-only call above is believed only on
+    // eBay's word, and a stock figure that did not move must not be reported as a restock. At least `quantity`, not exactly: a sale may already have lowered it.
+    const itemTaken = (l) => l.itemQuantity === null || l.itemQuantity >= quantity;
+    const live = await verifyAfterWrite(refreshToken, offerId, offer.sku, (l) => l.quantity === quantity && itemTaken(l));
     if (live.quantity !== quantity) {
       throw new Error(`eBay accepted the request, but the listing still shows ${live.quantity ?? 'no'} available (offer status: ${live.offerStatus || 'unknown'}). Try again, or check the listing directly on eBay.`);
+    }
+    if (!itemTaken(live)) {
+      throw new Error(`eBay accepted the request, but the stock of this item still shows ${live.itemQuantity} (the listing shows the lower of that and the offer's ${live.quantity}). Try again, or check the listing directly on eBay.`);
     }
     return { offerId, quantity, live };
   }
